@@ -80,6 +80,8 @@ pub enum Error {
     InvalidPrivateKey,
     #[error("unknown point encoding prefix 0x{0:02x}")]
     UnknownPrefix(u8),
+    #[error("invalid public key length")]
+    InvalidPublicKeyLength,
     #[error("invalid signature length")]
     InvalidSignatureLength,
     #[error("invalid ASN.1 encoded signature: {0}")]
@@ -135,7 +137,18 @@ impl P256r1PublicKey {
     }
 
     pub fn from_bytes(public_key: &[u8]) -> Result<Self, Error> {
-        let prefix = public_key[0];
+        // Validate length against the encoding before indexing, so
+        // truncated/empty input yields an error rather than a panic.
+        let prefix = *public_key.first().ok_or(Error::InvalidPublicKeyLength)?;
+        let expected = match prefix {
+            0x04 => 65,
+            0x02 | 0x03 => 33,
+            other => return Err(Error::UnknownPrefix(other)),
+        };
+        if public_key.len() < expected {
+            return Err(Error::InvalidPublicKeyLength);
+        }
+
         let x = FieldElement::from_slice(&public_key[1..33]).ok_or(Error::InvalidFieldElement)?;
 
         let pa = match prefix {
@@ -146,7 +159,7 @@ impl P256r1PublicKey {
             }
             0x02 => PointAffine::decompress(&x, Sign::Positive).ok_or(Error::InvalidPoint)?,
             0x03 => PointAffine::decompress(&x, Sign::Negative).ok_or(Error::InvalidPoint)?,
-            other => return Err(Error::UnknownPrefix(other)),
+            _ => unreachable!("prefix already validated above"),
         };
 
         let point = Point::from(pa);
@@ -432,6 +445,39 @@ mod tests {
         bytes[0] = 0x05; // invalid prefix (not 0x02, 0x03, or 0x04)
         let err = P256r1PublicKey::from_bytes(&bytes).unwrap_err();
         assert!(matches!(err, Error::UnknownPrefix(0x05)));
+    }
+
+    #[test]
+    fn pk_from_bytes_empty_is_rejected() {
+        // Previously panicked indexing public_key[0].
+        let err = P256r1PublicKey::from_bytes(&[]).unwrap_err();
+        assert!(matches!(err, Error::InvalidPublicKeyLength));
+    }
+
+    #[test]
+    fn pk_from_bytes_prefix_only_is_rejected() {
+        // A lone prefix byte — previously panicked slicing [1..33].
+        let err = P256r1PublicKey::from_bytes(&[0x04]).unwrap_err();
+        assert!(matches!(err, Error::InvalidPublicKeyLength));
+    }
+
+    #[test]
+    fn pk_from_bytes_truncated_uncompressed_is_rejected() {
+        // 0x04 prefix with only 64 bytes (needs 65) — previously
+        // panicked slicing [33..65].
+        let mut bytes = [0u8; 64];
+        bytes[0] = 0x04;
+        let err = P256r1PublicKey::from_bytes(&bytes).unwrap_err();
+        assert!(matches!(err, Error::InvalidPublicKeyLength));
+    }
+
+    #[test]
+    fn pk_from_bytes_truncated_compressed_is_rejected() {
+        // 0x02 prefix with only 32 bytes (needs 33).
+        let mut bytes = [0u8; 32];
+        bytes[0] = 0x02;
+        let err = P256r1PublicKey::from_bytes(&bytes).unwrap_err();
+        assert!(matches!(err, Error::InvalidPublicKeyLength));
     }
 
     #[test]
