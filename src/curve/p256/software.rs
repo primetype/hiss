@@ -4,6 +4,13 @@
 //! sourced from the operating system's CSPRNG by default, but
 //! callers can supply their own via [`P256r1PrivateKey::generate_with`]
 //! and [`P256r1PrivateKey::sign_with`].
+//!
+//! The 32 bytes held by [`P256r1PrivateKey`] are the canonical
+//! big-endian encoding of the secp256r1 private scalar `d`, which is
+//! always in the valid range `[1, n-1]` (`n` is the curve order).
+//! [`from_bytes`](P256r1PrivateKey::from_bytes) validates this, and
+//! [`to_bytes`](P256r1PrivateKey::to_bytes) round-trips it — so keys
+//! interoperate with any standard SEC1 / RFC-conformant P-256 tooling.
 
 use super::{Error, P256, P256Signature, P256r1PublicKey, input_to_scalar};
 use crate::curve::{CryptoProvider, SharedSecret};
@@ -18,11 +25,27 @@ pub struct P256r1PrivateKey([u8; Self::SIZE]);
 impl P256r1PrivateKey {
     pub const SIZE: usize = 32;
 
+    /// Upper bound on rejection-sampling iterations when generating a
+    /// scalar. A valid 256-bit value lands outside `[1, n-1]` with
+    /// probability `< 2^-32`, so this is never reached with a sound
+    /// CSPRNG; exceeding it indicates a broken RNG.
+    const MAX_SCALAR_RETRIES: usize = 128;
+
+    /// Wrap 32 bytes into a private key, validating that they encode a
+    /// canonical secp256r1 scalar in `[1, n-1]`.
+    ///
+    /// Returns [`Error::InvalidPrivateKey`] if the value is zero or
+    /// greater than or equal to the curve order `n`.
     #[inline]
-    pub fn from_bytes(bytes: [u8; Self::SIZE]) -> Self {
-        Self(bytes)
+    pub fn from_bytes(bytes: [u8; Self::SIZE]) -> Result<Self, Error> {
+        if Self::scalar_of(&bytes).is_some() {
+            Ok(Self(bytes))
+        } else {
+            Err(Error::InvalidPrivateKey)
+        }
     }
 
+    /// The canonical big-endian encoding of the private scalar `d`.
     #[inline]
     pub fn to_bytes(&self) -> &[u8; Self::SIZE] {
         &self.0
@@ -36,8 +59,13 @@ impl P256r1PrivateKey {
     #[inline]
     pub fn generate() -> Result<Self, Error> {
         let mut bytes = [0; Self::SIZE];
-        getrandom::fill(&mut bytes).map_err(|e| Error::Rng(e.to_string()))?;
-        Ok(Self(bytes))
+        for _ in 0..Self::MAX_SCALAR_RETRIES {
+            getrandom::fill(&mut bytes).map_err(|e| Error::Rng(e.to_string()))?;
+            if Self::scalar_of(&bytes).is_some() {
+                return Ok(Self(bytes));
+            }
+        }
+        Err(Error::Rng("failed to sample a valid scalar".into()))
     }
 
     pub fn generate_with<RNG>(mut rng: RNG) -> Result<Self, Error>
@@ -45,13 +73,37 @@ impl P256r1PrivateKey {
         RNG: RngCore + CryptoRng,
     {
         let mut bytes = [0; Self::SIZE];
-        rng.fill_bytes(&mut bytes);
-        Ok(Self(bytes))
+        for _ in 0..Self::MAX_SCALAR_RETRIES {
+            rng.fill_bytes(&mut bytes);
+            if Self::scalar_of(&bytes).is_some() {
+                return Ok(Self(bytes));
+            }
+        }
+        Err(Error::Rng("failed to sample a valid scalar".into()))
+    }
+
+    /// Parse `bytes` as a canonical scalar in `[1, n-1]`.
+    ///
+    /// Returns `None` if the value is zero or `>= n`. `from_slice`
+    /// already rejects out-of-range encodings; the explicit zero check
+    /// rejects the remaining invalid value.
+    #[inline]
+    fn scalar_of(bytes: &[u8; Self::SIZE]) -> Option<Scalar> {
+        match Scalar::from_slice(bytes) {
+            Some(s) if s != Scalar::zero() => Some(s),
+            _ => None,
+        }
+    }
+
+    /// The private scalar `d`. Infallible: every constructor validates
+    /// the stored bytes, so the encoding is always canonical.
+    #[inline]
+    fn scalar(&self) -> Scalar {
+        Self::scalar_of(&self.0).expect("private key validated on construction")
     }
 
     pub fn public(&self) -> P256r1PublicKey {
-        let s = input_to_scalar(self.0);
-        let point = &s * &Point::generator();
+        let point = &self.scalar() * &Point::generator();
         P256r1PublicKey::from_point(point)
     }
 
@@ -85,7 +137,7 @@ impl P256r1PrivateKey {
         data: impl AsRef<[u8]>,
     ) -> Result<P256Signature, Error> {
         let k = input_to_scalar(nonce);
-        let d = input_to_scalar(self.0);
+        let d = self.scalar();
         let e = input_to_scalar(data);
 
         let x = &k * &Point::generator();
@@ -102,7 +154,7 @@ impl P256r1PrivateKey {
     }
 
     pub fn dh(&self, other: &P256r1PublicKey) -> SharedSecret {
-        let scalar = input_to_scalar(self.0);
+        let scalar = self.scalar();
         let point = other.to_point().unwrap();
         let shared_point = &scalar * &point;
         let shared_point = shared_point.to_affine().unwrap();
@@ -181,12 +233,50 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
 
-    prop_compose! {
-        fn arbitrary_secret_key()(
-            bytes in any::<[u8; P256r1PrivateKey::SIZE]>()
-        ) -> P256r1PrivateKey {
-            P256r1PrivateKey(bytes)
-        }
+    fn arbitrary_secret_key() -> impl Strategy<Value = P256r1PrivateKey> {
+        // Arbitrary bytes are validated as a canonical scalar; the
+        // vanishingly rare out-of-range value (< 2^-32) is filtered out.
+        any::<[u8; P256r1PrivateKey::SIZE]>()
+            .prop_filter_map("not a canonical scalar", |b| P256r1PrivateKey::from_bytes(b).ok())
+    }
+
+    #[test]
+    fn from_bytes_rejects_zero() {
+        let err = P256r1PrivateKey::from_bytes([0u8; 32]).unwrap_err();
+        assert!(matches!(err, Error::InvalidPrivateKey));
+    }
+
+    #[test]
+    fn from_bytes_rejects_value_at_or_above_order() {
+        // All-0xFF exceeds the curve order n, so it is not a canonical
+        // scalar and must be rejected.
+        let err = P256r1PrivateKey::from_bytes([0xFF; 32]).unwrap_err();
+        assert!(matches!(err, Error::InvalidPrivateKey));
+    }
+
+    #[test]
+    fn from_bytes_accepts_canonical_scalar_and_round_trips() {
+        let bytes = [0x11u8; 32]; // < n, non-zero
+        let key = P256r1PrivateKey::from_bytes(bytes).expect("valid scalar");
+        // The stored bytes are the scalar itself — exact round-trip.
+        assert_eq!(key.to_bytes(), &bytes);
+    }
+
+    #[test]
+    fn stored_bytes_are_the_scalar_not_a_seed() {
+        // Public key derivation must use the stored scalar directly:
+        // the same bytes always yield the same public key, and equal
+        // scalars yield equal keys (no hashing of the seed in between).
+        let bytes = [0x11u8; 32];
+        let k1 = P256r1PrivateKey::from_bytes(bytes).unwrap();
+        let k2 = P256r1PrivateKey::from_bytes(bytes).unwrap();
+        assert_eq!(k1.public(), k2.public());
+
+        // A one-bit change in the scalar changes the public key.
+        let mut other = bytes;
+        other[31] ^= 0x01;
+        let k3 = P256r1PrivateKey::from_bytes(other).unwrap();
+        assert_ne!(k1.public(), k3.public());
     }
 
     proptest! {

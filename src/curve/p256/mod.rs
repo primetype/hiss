@@ -76,6 +76,8 @@ pub enum Error {
     InvalidFieldElement,
     #[error("invalid curve point")]
     InvalidPoint,
+    #[error("invalid private key: must be a non-zero scalar less than the P-256 curve order")]
+    InvalidPrivateKey,
     #[error("unknown point encoding prefix 0x{0:02x}")]
     UnknownPrefix(u8),
     #[error("invalid signature length")]
@@ -337,7 +339,33 @@ pub(crate) fn input_to_scalar(message: impl AsRef<[u8]>) -> Scalar {
     let mut context = Sha256::new();
     context.input(message.as_ref());
     context.result(&mut hash);
-    Scalar::from_slice(&hash).unwrap()
+    reduce_be_mod_order(&hash)
+}
+
+/// Reduce a 32-byte big-endian integer modulo the curve order `n`,
+/// producing a scalar. Never fails.
+///
+/// `Scalar::from_slice` returns `None` for values `>= n` (it requires a
+/// canonical encoding), so calling it on an arbitrary digest panics for
+/// the ~2^-32 of values that land in `[n, 2^256)`. Standard ECDSA
+/// reduces the digest modulo `n` instead. We do that by splitting the
+/// input into two 128-bit halves — each is `< 2^128 < n`, so each parses
+/// without rejection — and recombining with scalar arithmetic, which is
+/// itself performed modulo `n`:  `value = hi * 2^128 + lo  (mod n)`.
+fn reduce_be_mod_order(bytes: &[u8; 32]) -> Scalar {
+    let mut hi_buf = [0u8; 32];
+    let mut lo_buf = [0u8; 32];
+    hi_buf[16..].copy_from_slice(&bytes[..16]);
+    lo_buf[16..].copy_from_slice(&bytes[16..]);
+    let hi = Scalar::from_slice(&hi_buf).expect("128-bit value is < n");
+    let lo = Scalar::from_slice(&lo_buf).expect("128-bit value is < n");
+
+    // 2^128 reduced into the scalar field (2^128 < n, so this is exact).
+    let mut two_pow_128 = [0u8; 32];
+    two_pow_128[15] = 0x01;
+    let two_pow_128 = Scalar::from_slice(&two_pow_128).expect("2^128 is < n");
+
+    (&hi * &two_pow_128) + &lo
 }
 
 #[cfg(any(target_os = "macos", target_os = "ios", test))]
@@ -535,5 +563,51 @@ mod tests {
         // But dh(sk1, pk1) != dh(sk1, pk2) — different peers.
         let ss_self = sk1.dh(&pk1);
         assert_ne!(ss_self, ss1);
+    }
+
+    // ── Modular reduction (H2) ────────────────────────────────────
+
+    /// The P-256 curve order `n`, big-endian.
+    const N_BYTES: [u8; 32] = [
+        0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0xFF, 0xBC, 0xE6, 0xFA, 0xAD, 0xA7, 0x17, 0x9E, 0x84, 0xF3, 0xB9, 0xCA, 0xC2, 0xFC, 0x63,
+        0x25, 0x51,
+    ];
+
+    fn scalar_bytes(bytes: [u8; 32]) -> [u8; 32] {
+        Scalar::from_slice(&bytes).expect("canonical scalar").to_bytes()
+    }
+
+    #[test]
+    fn reduce_is_identity_below_order() {
+        // A value < n is returned unchanged.
+        let mut v = [0u8; 32];
+        v[31] = 5;
+        assert_eq!(reduce_be_mod_order(&v).to_bytes(), scalar_bytes(v));
+    }
+
+    #[test]
+    fn reduce_order_maps_to_zero() {
+        // n mod n == 0. n is >= n, so the old `from_slice(..).unwrap()`
+        // would have panicked on this input.
+        assert_eq!(reduce_be_mod_order(&N_BYTES).to_bytes(), Scalar::zero().to_bytes());
+    }
+
+    #[test]
+    fn reduce_order_plus_one_maps_to_one() {
+        // (n + 1) mod n == 1 — another value that previously panicked.
+        let mut n_plus_1 = N_BYTES;
+        n_plus_1[31] = 0x52; // 0x51 + 1, no carry
+        let mut one = [0u8; 32];
+        one[31] = 1;
+        assert_eq!(reduce_be_mod_order(&n_plus_1).to_bytes(), scalar_bytes(one));
+    }
+
+    #[test]
+    fn reduce_max_value_does_not_panic() {
+        // 0xFF..FF (= 2^256 - 1) is >= n; it must reduce, not panic.
+        let reduced = reduce_be_mod_order(&[0xFF; 32]).to_bytes();
+        // 2^256 - 1 is in [n, 2n), so the result is non-zero and < n.
+        assert_ne!(reduced, Scalar::zero().to_bytes());
     }
 }

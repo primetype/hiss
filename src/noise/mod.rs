@@ -1452,7 +1452,8 @@ mod tests {
         let mut hashes = Vec::new();
 
         for _ in 0..2 {
-            let responder_static = P256r1PrivateKey::from_bytes(responder_bytes);
+            let responder_static =
+                P256r1PrivateKey::from_bytes(responder_bytes).expect("valid test scalar");
             let responder_pub = responder_static.public();
 
             let initiator_static = SoftwareCryptoProvider.generate_static_key().await.unwrap();
