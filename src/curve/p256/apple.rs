@@ -242,8 +242,14 @@ impl P256r1PrivateKey {
             ));
         }
 
-        let public_key: SecKey =
-            public_key.as_sec_key(&self.key.public_key().unwrap().attributes())?;
+        // Build a SecKey from the peer's public bytes, using this key's
+        // own public-key attributes as the template (both are P-256
+        // public keys, so the EC type/size/class match).
+        let self_public = self
+            .key
+            .public_key()
+            .ok_or_else(|| Error::Platform("failed to derive public key for DH".into()))?;
+        let public_key: SecKey = public_key.as_sec_key(&self_public.attributes())?;
 
         let shared_secret = self
             .key
