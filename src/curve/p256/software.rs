@@ -103,7 +103,12 @@ impl P256r1PrivateKey {
     }
 
     pub fn public(&self) -> P256r1PublicKey {
-        let point = &self.scalar() * &Point::generator();
+        // Public key is `d·G`. Use the fixed-base comb multiply of the
+        // generator: constant-time and ~4x faster than the general
+        // variable-base `*` path, because the generator's multiples are
+        // precomputed (requires eccoxide's `table` feature; without it
+        // `mul_base` falls back to the general multiply, still correct).
+        let point = Point::mul_base(&self.scalar());
         P256r1PublicKey::from_point(point)
     }
 
