@@ -37,7 +37,7 @@ fn bench_n_bubble(c: &mut Criterion) {
 
                 // Initiator seals
                 let sealer =
-                    NoiseSeal::initiate(SoftwareCryptoProvider, &[]).set_rs(responder_pub.clone());
+                    NoiseSeal::initiate(SoftwareCryptoProvider, &[]).set_rs(responder_pub);
                 let mut msg_buf = [0u8; 81];
                 let (msg, mut i_transport) =
                     sealer.e(&mut msg_buf).await.unwrap().es().await.unwrap();
@@ -46,7 +46,7 @@ fn bench_n_bubble(c: &mut Criterion) {
                 let opener = NoiseSeal::respond(SoftwareCryptoProvider, &[])
                     .set_s(responder_static)
                     .unwrap();
-                let (_, recv) = opener.read(&msg).unwrap().e().await.unwrap();
+                let (_, recv) = opener.read(msg).unwrap().e().await.unwrap();
                 let mut r_transport = recv.es().await.unwrap();
 
                 // Transport round-trip
@@ -121,7 +121,7 @@ fn bench_ikpsk1_bubble(c: &mut Criterion) {
                 type Proto = Noise<IKpsk1, P256, ChaChaPoly, Blake2b>;
 
                 // Message 1: -> e, es, s, ss, psk
-                let i_hs = Proto::initiate(SoftwareCryptoProvider, &[]).set_rs(r_pub.clone());
+                let i_hs = Proto::initiate(SoftwareCryptoProvider, &[]).set_rs(r_pub);
                 let mut msg1_buf = [0u8; 162];
                 let (msg1, i_hs) = i_hs
                     .e(&mut msg1_buf)
@@ -250,14 +250,14 @@ fn bench_transport_bubble(c: &mut Criterion) {
 
         type NoiseSeal = Noise<N, P256, ChaChaPoly, Blake2b>;
 
-        let sealer = NoiseSeal::initiate(SoftwareCryptoProvider, &[]).set_rs(r_pub.clone());
+        let sealer = NoiseSeal::initiate(SoftwareCryptoProvider, &[]).set_rs(r_pub);
         let mut msg_buf = [0u8; 81];
         let (msg, i_transport) = sealer.e(&mut msg_buf).await.unwrap().es().await.unwrap();
 
         let opener = NoiseSeal::respond(SoftwareCryptoProvider, &[])
             .set_s(r_static)
             .unwrap();
-        let (_, recv) = opener.read(&msg).unwrap().e().await.unwrap();
+        let (_, recv) = opener.read(msg).unwrap().e().await.unwrap();
         let r_transport = recv.es().await.unwrap();
 
         (i_transport, r_transport)
