@@ -190,7 +190,11 @@ impl P256r1PublicKey {
             None => false,
             Some(rpa) => {
                 let (xr, _) = rpa.to_coordinate();
-                xr.to_bytes() == r.to_bytes()
+                // Compare `r` to x(R) reduced mod n. The affine x is a field
+                // element in [0, p); since p > n for P-256, the reduction
+                // matters for the rare x in [n, p) and mirrors how signing
+                // derives `r`.
+                reduce_be_mod_order(&xr.to_bytes()) == r
             }
         }
     }
@@ -381,6 +385,116 @@ fn reduce_be_mod_order(bytes: &[u8; 32]) -> Scalar {
     (&hi * &two_pow_128) + &lo
 }
 
+// ── ECDSA signing (RFC 6979 deterministic nonces) ───────────────
+
+/// Half the curve order, ⌊n/2⌋ = (n − 1) / 2, big-endian. A signature
+/// component `s` greater than this is "high"; low-S normalization replaces
+/// it with `n − s`, giving every signature a single canonical encoding and
+/// removing ECDSA's `(r, s)` / `(r, n − s)` malleability.
+const HALF_ORDER: [u8; 32] = [
+    0x7f, 0xff, 0xff, 0xff, 0x80, 0x00, 0x00, 0x00, 0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0xde, 0x73, 0x7d, 0x56, 0xd3, 0x8b, 0xcf, 0x42, 0x79, 0xdc, 0xe5, 0x61, 0x7e, 0x31, 0x92, 0xa8,
+];
+
+/// HMAC-SHA256 over the concatenation of `parts`, keyed by `key`.
+fn hmac_sha256(key: &[u8; 32], parts: &[&[u8]]) -> [u8; 32] {
+    use cryptoxide::{hmac::Hmac, mac::Mac};
+    let mut mac = Hmac::new(Sha256::new(), key);
+    for part in parts {
+        mac.input(part);
+    }
+    let mut out = [0u8; 32];
+    mac.raw_result(&mut out);
+    out
+}
+
+/// Raw ECDSA signing with a supplied nonce `k` (no low-S normalization).
+///
+/// Returns `(r, s)`, or `None` if `r == 0` or `s == 0` — in which case the
+/// caller must derive a fresh nonce (the ECDSA / RFC 6979 retry rule).
+fn ecdsa_raw_sign(d: &Scalar, e: &Scalar, k: &Scalar) -> Option<(Scalar, Scalar)> {
+    // R = k·G ; r = x(R) mod n.
+    let r_point = Point::mul_base(k).to_affine()?;
+    let (x, _) = r_point.to_coordinate();
+    let r = reduce_be_mod_order(&x.to_bytes());
+    if r == Scalar::zero() {
+        return None;
+    }
+    // s = k⁻¹ · (e + r·d) mod n.
+    let kinv = k.inverse();
+    let s = &kinv * &((&r * d) + e);
+    if s == Scalar::zero() {
+        return None;
+    }
+    Some((r, s))
+}
+
+/// Deterministic ECDSA signing per RFC 6979 (HMAC-SHA256 DRBG).
+///
+/// The nonce is derived solely from the private key and the message — no
+/// RNG — so the same `(key, message)` always yields the same signature, and
+/// a leaked or repeated nonce (the usual way ECDSA keys are compromised) is
+/// impossible. With `low_s = true` the result is low-S normalized (the
+/// public path); `low_s = false` yields the raw `(r, s)` and exists only to
+/// check against the published RFC 6979 vectors. Returns the 64-byte
+/// `r ‖ s` encoding.
+pub(crate) fn ecdsa_sign_rfc6979_inner(
+    d_bytes: &[u8; 32],
+    message: &[u8],
+    low_s: bool,
+) -> [u8; 64] {
+    // Every private-key constructor validates the scalar, so this is canonical.
+    let d = Scalar::from_slice(d_bytes).expect("private key is a canonical scalar");
+
+    // h1 = SHA-256(message); e = bits2int(h1) reduced mod n. For P-256 with
+    // SHA-256, hlen == qlen == 256, so bits2int is the digest as an integer.
+    let mut h1 = [0u8; 32];
+    let mut hasher = Sha256::new();
+    hasher.input(message);
+    hasher.result(&mut h1);
+    let e = reduce_be_mod_order(&h1);
+    let bits2octets = e.to_bytes(); // int2octets(bits2int(h1) mod n)
+
+    // RFC 6979 §3.2 (b)–(g): seed the HMAC-DRBG with the key and message.
+    let mut v = [0x01u8; 32];
+    let mut k = [0x00u8; 32];
+    k = hmac_sha256(&k, &[&v[..], &[0x00u8][..], &d_bytes[..], &bits2octets[..]]);
+    v = hmac_sha256(&k, &[&v[..]]);
+    k = hmac_sha256(&k, &[&v[..], &[0x01u8][..], &d_bytes[..], &bits2octets[..]]);
+    v = hmac_sha256(&k, &[&v[..]]);
+
+    // RFC 6979 §3.2 (h): draw candidate nonces T = V (one block, since
+    // tlen == qlen == 256) until one yields a valid signature. For P-256 the
+    // first candidate succeeds with overwhelming probability; this loop is
+    // guaranteed to terminate.
+    loop {
+        v = hmac_sha256(&k, &[&v[..]]);
+        // bits2int(T): accept only T in [1, n−1]; from_slice rejects T ≥ n.
+        if let Some(nonce) = Scalar::from_slice(&v)
+            && nonce != Scalar::zero()
+            && let Some((r, s)) = ecdsa_raw_sign(&d, &e, &nonce)
+        {
+            let s = if low_s && s.to_bytes() > HALF_ORDER {
+                -&s
+            } else {
+                s
+            };
+            let mut out = [0u8; 64];
+            out[..32].copy_from_slice(&r.to_bytes());
+            out[32..].copy_from_slice(&s.to_bytes());
+            return out;
+        }
+        // Candidate rejected (T ∉ [1, n−1], or r/s == 0): reseed and retry.
+        k = hmac_sha256(&k, &[&v[..], &[0x00u8][..]]);
+        v = hmac_sha256(&k, &[&v[..]]);
+    }
+}
+
+/// Deterministic ECDSA signature (RFC 6979 nonce, low-S normalized).
+pub(crate) fn ecdsa_sign_rfc6979(d_bytes: &[u8; 32], message: &[u8]) -> P256Signature {
+    P256Signature(ecdsa_sign_rfc6979_inner(d_bytes, message, true))
+}
+
 #[cfg(any(target_os = "macos", target_os = "ios", test))]
 fn asn1_err(e: crate::asn1::Asn1Error) -> Error {
     Error::InvalidSignatureAsn1(e.to_string())
@@ -392,6 +506,64 @@ fn asn1_err(e: crate::asn1::Asn1Error) -> Error {
 mod tests {
     use super::*;
     use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+
+    fn hex32(s: &str) -> [u8; 32] {
+        hex::decode(s).unwrap().try_into().unwrap()
+    }
+
+    /// RFC 6979 Appendix A.2.5 — NIST P-256 with SHA-256. The raw (no
+    /// low-S) `(r, s)` must match the published vectors exactly, which pins
+    /// the HMAC-DRBG nonce derivation, the digest reduction, and the ECDSA
+    /// arithmetic against an authoritative source.
+    #[test]
+    fn rfc6979_p256_sha256_known_answer_vectors() {
+        let x = hex32("C9AFA9D845BA75166B5C215767B1D6934E50C3DB36E89B127B8A622B120F6721");
+        let cases: [(&[u8], &str, &str); 2] = [
+            (
+                b"sample",
+                "EFD48B2AACB6A8FD1140DD9CD45E81D69D2C877B56AAF991C34D0EA84EAF3716",
+                "F7CB1C942D657C41D436C7A1B6E29F65F3E900DBB9AFF4064DC4AB2F843ACDA8",
+            ),
+            (
+                b"test",
+                "F1ABB023518351CD71D881567B1EA663ED3EFCF6C5132B354F28D3B0B7D38367",
+                "019F4113742A2B14BD25926B49C649155F267E60D3814B4C0CC84250E46F0083",
+            ),
+        ];
+        for (msg, r_hex, s_hex) in cases {
+            let raw = ecdsa_sign_rfc6979_inner(&x, msg, false);
+            assert_eq!(hex::encode_upper(&raw[..32]), r_hex, "r mismatch for {msg:?}");
+            assert_eq!(hex::encode_upper(&raw[32..]), s_hex, "s mismatch for {msg:?}");
+        }
+    }
+
+    /// The public signing path: derives the RFC 6979 public key, signs,
+    /// verifies, is deterministic, and produces low-S signatures.
+    #[test]
+    fn rfc6979_public_path_verifies_and_is_low_s() {
+        let x = hex32("C9AFA9D845BA75166B5C215767B1D6934E50C3DB36E89B127B8A622B120F6721");
+        let sk = P256r1PrivateKey::from_bytes(x).unwrap();
+        let pk = sk.public();
+
+        // Public key matches RFC 6979 A.2.5 (uncompressed 0x04 ‖ X ‖ Y).
+        assert_eq!(
+            hex::encode_upper(&pk.as_ref()[1..33]),
+            "60FED4BA255A9D31C961EB74C6356D68C049B8923B61FA6CE669622E60F29FB6"
+        );
+        assert_eq!(
+            hex::encode_upper(&pk.as_ref()[33..65]),
+            "7903FE1008B8BC99A41AE9E95628BC64F2F1B20C2D7E9F5177A3C294D4462299"
+        );
+
+        for msg in [&b"sample"[..], &b"test"[..]] {
+            let sig = sk.sign(msg).unwrap();
+            assert!(pk.verify(sig, msg), "verify failed for {msg:?}");
+            // Deterministic: signing again yields the identical signature.
+            assert_eq!(sig, sk.sign(msg).unwrap(), "non-deterministic for {msg:?}");
+            // Low-S: s ≤ (n−1)/2.
+            assert!(sig.as_ref()[32..] <= HALF_ORDER[..], "high-S for {msg:?}");
+        }
+    }
 
     /// Public key and signature generated on iPhone 12 Pro, iOS 16,
     /// Secure Enclave using `.ecdsaSignatureMessageX962SHA256`.

@@ -1,9 +1,9 @@
 //! Pure-software P-256 private key implementation.
 //!
-//! Uses `eccoxide` for elliptic curve arithmetic. Randomness is
-//! sourced from the operating system's CSPRNG by default, but
-//! callers can supply their own via [`P256r1PrivateKey::generate_with`]
-//! and [`P256r1PrivateKey::sign_with`].
+//! Uses `eccoxide` for elliptic curve arithmetic. Key generation draws
+//! randomness from the operating system's CSPRNG by default, or from a
+//! caller-supplied RNG via [`P256r1PrivateKey::generate_with`]. Signing
+//! is deterministic (RFC 6979) and uses no randomness.
 //!
 //! The 32 bytes held by [`P256r1PrivateKey`] are the canonical
 //! big-endian encoding of the secp256r1 private scalar `d`, which is
@@ -12,7 +12,7 @@
 //! [`to_bytes`](P256r1PrivateKey::to_bytes) round-trips it — so keys
 //! interoperate with any standard SEC1 / RFC-conformant P-256 tooling.
 
-use super::{Error, P256, P256Signature, P256r1PublicKey, input_to_scalar};
+use super::{Error, P256, P256Signature, P256r1PublicKey};
 use crate::curve::{CryptoProvider, SharedSecret};
 
 use eccoxide::curve::sec2::p256r1::{Point, Scalar};
@@ -112,50 +112,18 @@ impl P256r1PrivateKey {
         P256r1PublicKey::from_point(point)
     }
 
-    pub fn sign(&self, data: impl AsRef<[u8]>) -> Result<P256Signature, Error> {
-        let mut nonce = [0u8; 32];
-        getrandom::fill(&mut nonce).map_err(|e| Error::Rng(e.to_string()))?;
-        self.sign_with_nonce(nonce, data)
-    }
-
-    pub fn sign_with<RNG>(
-        &self,
-        mut rng: RNG,
-        data: impl AsRef<[u8]>,
-    ) -> Result<P256Signature, Error>
-    where
-        RNG: CryptoRng + RngCore,
-    {
-        let mut nonce = [0u8; 32];
-        rng.fill_bytes(&mut nonce);
-        self.sign_with_nonce(nonce, data)
-    }
-
-    /// Produce an ECDSA signature from a caller-provided 32-byte nonce.
+    /// Produce a deterministic ECDSA signature over `data`.
     ///
-    /// The nonce **must** be unique and unpredictable for every
-    /// signature under a given key; reusing or leaking it allows
-    /// recovery of the private key.
-    fn sign_with_nonce(
-        &self,
-        nonce: [u8; 32],
-        data: impl AsRef<[u8]>,
-    ) -> Result<P256Signature, Error> {
-        let k = input_to_scalar(nonce);
-        let d = self.scalar();
-        let e = input_to_scalar(data);
-
-        let x = &k * &Point::generator();
-        let px = x.to_affine().ok_or(Error::InvalidPoint)?;
-        let (x1, _) = px.to_coordinate();
-        let r = Scalar::from_bytes(&x1.to_bytes()).unwrap();
-        let kinv = k.inverse();
-        let s = kinv * (e + &r * d);
-
-        let mut v = [0u8; 64];
-        v[..32].copy_from_slice(&r.to_bytes()[..32]);
-        v[32..].copy_from_slice(&s.to_bytes()[..32]);
-        P256Signature::try_from_bytes(v)
+    /// The per-signature nonce is generated with **RFC 6979** (an
+    /// HMAC-SHA256 DRBG keyed by the private key and the message), so
+    /// signing requires no randomness and the same `(key, message)` always
+    /// yields the same signature — eliminating the catastrophic
+    /// nonce-reuse / weak-RNG failure modes of randomized ECDSA. The `s`
+    /// value is low-S normalized, so each signature has one canonical
+    /// encoding. Returns `Result` only for parity with the
+    /// [`CryptoProvider`] trait; signing does not fail in practice.
+    pub fn sign(&self, data: impl AsRef<[u8]>) -> Result<P256Signature, Error> {
+        Ok(super::ecdsa_sign_rfc6979(&self.0, data.as_ref()))
     }
 
     pub fn dh(&self, other: &P256r1PublicKey) -> SharedSecret {
