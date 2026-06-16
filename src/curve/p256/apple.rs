@@ -378,7 +378,7 @@ mod tests {
         let pk2 = sk2.public();
 
         let apple_dh = sk1.dh(&pk2).unwrap();
-        let our_dh = sk2.dh(&pk1);
+        let our_dh = sk2.dh(&pk1).unwrap();
 
         assert_eq!(apple_dh, our_dh);
     }

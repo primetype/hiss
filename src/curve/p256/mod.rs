@@ -76,6 +76,8 @@ pub enum Error {
     InvalidFieldElement,
     #[error("invalid curve point")]
     InvalidPoint,
+    #[error("ECDH produced a degenerate shared secret (identity or low-order peer key)")]
+    InvalidSharedSecret,
     #[error("invalid private key: must be a non-zero scalar less than the P-256 curve order")]
     InvalidPrivateKey,
     #[error("unknown point encoding prefix 0x{0:02x}")]
@@ -341,7 +343,12 @@ impl fmt::Display for P256Signature {
 // ── Helpers ─────────────────────────────────────────────────────
 
 fn point_to_bytes(point: Point) -> [u8; 65] {
-    let point = point.to_affine().unwrap();
+    // Internal invariant: only ever called on points produced by `d·G`
+    // (d ∈ [1, n-1]) or by lifting an already-validated, on-curve affine
+    // peer key — never the identity, so `to_affine` always succeeds.
+    let point = point
+        .to_affine()
+        .expect("internal point is never the identity (d·G or validated on-curve parse)");
     let (x, y) = point.to_coordinate();
 
     let mut pk = [0; 65];
@@ -761,8 +768,8 @@ mod tests {
         let peer1 = software::P256r1PrivateKey::generate().unwrap().public();
         let peer2 = software::P256r1PrivateKey::generate().unwrap().public();
 
-        let ss1 = sk.dh(&peer1);
-        let ss2 = sk.dh(&peer2);
+        let ss1 = sk.dh(&peer1).unwrap();
+        let ss2 = sk.dh(&peer2).unwrap();
         assert_ne!(ss1, ss2);
     }
 
@@ -774,12 +781,12 @@ mod tests {
         let sk2 = software::P256r1PrivateKey::generate().unwrap();
         let pk2 = sk2.public();
 
-        let ss1 = sk1.dh(&pk2);
-        let ss2 = sk2.dh(&pk1);
+        let ss1 = sk1.dh(&pk2).unwrap();
+        let ss2 = sk2.dh(&pk1).unwrap();
         assert_eq!(ss1, ss2);
 
         // But dh(sk1, pk1) != dh(sk1, pk2) — different peers.
-        let ss_self = sk1.dh(&pk1);
+        let ss_self = sk1.dh(&pk1).unwrap();
         assert_ne!(ss_self, ss1);
     }
 

@@ -126,14 +126,37 @@ impl P256r1PrivateKey {
         Ok(super::ecdsa_sign_rfc6979(&self.0, data.as_ref()))
     }
 
-    pub fn dh(&self, other: &P256r1PublicKey) -> SharedSecret {
-        let scalar = self.scalar();
-        let point = other.to_point().unwrap();
-        let shared_point = &scalar * &point;
-        let shared_point = shared_point.to_affine().unwrap();
-        let (x, _) = shared_point.to_coordinate();
-        SharedSecret::new(x.to_bytes())
+    /// Diffie-Hellman key agreement: derive the shared secret from this
+    /// private key and a peer's public key.
+    ///
+    /// The returned [`SharedSecret`] is the big-endian x-coordinate of the
+    /// point `self · peer`, as the Noise specification requires.
+    ///
+    /// # Errors
+    ///
+    /// * [`Error::InvalidPoint`] / [`Error::InvalidFieldElement`] /
+    ///   [`Error::UnknownPrefix`] — the peer key does not decode to a valid
+    ///   on-curve point.
+    /// * [`Error::InvalidSharedSecret`] — the agreement produced the point
+    ///   at infinity (an identity or low-order peer key). A successfully
+    ///   decoded P-256 peer key cannot reach this, but the explicit check
+    ///   is the load-bearing contract for cofactor > 1 curves and ensures
+    ///   `dh` never panics on attacker-supplied input.
+    pub fn dh(&self, other: &P256r1PublicKey) -> Result<SharedSecret, Error> {
+        shared_secret_from(&self.scalar(), &other.to_point()?)
     }
+}
+
+/// Compute the ECDH shared secret `scalar · peer`, rejecting a degenerate
+/// (point-at-infinity) result with an error instead of panicking.
+///
+/// Factored out of [`P256r1PrivateKey::dh`] so the rejection branch can be
+/// exercised directly with an identity peer point — a state a parsed
+/// [`P256r1PublicKey`] can never represent.
+fn shared_secret_from(scalar: &Scalar, peer: &Point) -> Result<SharedSecret, Error> {
+    let shared = (scalar * peer).to_affine().ok_or(Error::InvalidSharedSecret)?;
+    let (x, _) = shared.to_coordinate();
+    Ok(SharedSecret::new(x.to_bytes()))
 }
 
 // ── CryptoProvider ──────────────────────────────────────────────
@@ -175,7 +198,7 @@ impl CryptoProvider<P256> for SoftwareCryptoProvider {
         key: &Self::PrivateKey,
         peer: &P256r1PublicKey,
     ) -> Result<SharedSecret, Self::Error> {
-        Ok(key.dh(peer))
+        key.dh(peer)
     }
 }
 
@@ -289,5 +312,35 @@ mod tests {
         let ss1 = provider.dh(&sk1, &pk2).await.unwrap();
         let ss2 = provider.dh(&sk2, &pk1).await.unwrap();
         assert_eq!(ss1, ss2);
+    }
+
+    #[test]
+    fn dh_rejects_degenerate_shared_secret() {
+        // A parsed `P256r1PublicKey` can never hold the identity, so drive
+        // the rejection branch directly: `scalar · O = O`, which has no
+        // affine x-coordinate and must surface as an error, not a panic.
+        let sk = P256r1PrivateKey::from_bytes([0x11; 32]).unwrap();
+        let err = shared_secret_from(&sk.scalar(), &Point::infinity()).unwrap_err();
+        assert!(matches!(err, Error::InvalidSharedSecret));
+    }
+
+    proptest! {
+        /// `from_bytes` must never panic on arbitrary attacker-supplied
+        /// bytes — it either decodes a valid on-curve key or returns an
+        /// error (the A3.3 no-panic-on-peer-data contract).
+        #[test]
+        fn from_bytes_never_panics(bytes in any::<Vec<u8>>()) {
+            let _ = P256r1PublicKey::from_bytes(&bytes);
+        }
+
+        /// `dh` must never panic and must succeed for any well-formed peer
+        /// key, across a wide range of private/peer scalar pairs.
+        #[test]
+        fn dh_succeeds_for_any_valid_peer(
+            sk in arbitrary_secret_key(),
+            peer_sk in arbitrary_secret_key(),
+        ) {
+            prop_assert!(sk.dh(&peer_sk.public()).is_ok());
+        }
     }
 }
