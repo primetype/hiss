@@ -1,5 +1,7 @@
 //! Noise handshake errors.
 
+use super::cipher_state::MAX_MESSAGE_LEN;
+
 /// Errors that can occur during a Noise handshake.
 #[derive(Debug, thiserror::Error)]
 pub enum HandshakeError {
@@ -50,6 +52,13 @@ pub enum HandshakeError {
         expected: usize,
         /// Actual byte count of the received message.
         actual: usize,
+    },
+
+    /// A message exceeds the Noise 65535-byte maximum length (spec §3).
+    #[error("message too long: {len} bytes exceeds the {MAX_MESSAGE_LEN}-byte Noise maximum")]
+    MessageTooLong {
+        /// Length of the offending message (on the wire, including any tag).
+        len: usize,
     },
 
     /// The output buffer is too small for the result.

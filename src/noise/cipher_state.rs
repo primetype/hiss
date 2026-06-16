@@ -9,6 +9,15 @@ use super::error::HandshakeError;
 use crate::zeroize::zeroize_array;
 use std::marker::PhantomData;
 
+/// Maximum length of a Noise message on the wire, in bytes (spec §3).
+///
+/// Every transport or handshake message — ciphertext including any AEAD
+/// tag — must be `<= MAX_MESSAGE_LEN`. The value is the largest 16-bit
+/// integer, matching the conventional 2-byte length framing and every
+/// conformant Noise implementation (e.g. snow's `MAXMSGLEN`). Payloads
+/// larger than this must be split across multiple messages by the caller.
+pub(crate) const MAX_MESSAGE_LEN: usize = 65535;
+
 /// A Noise CipherState holding a symmetric key and nonce counter.
 ///
 /// An "empty" CipherState (no key) passes data through in plaintext,
@@ -63,12 +72,21 @@ impl<Ci: Cipher> CipherState<Ci> {
         match self.k {
             None => {
                 let len = plaintext.len();
+                if len > MAX_MESSAGE_LEN {
+                    return Err(HandshakeError::MessageTooLong { len });
+                }
                 output[..len].copy_from_slice(plaintext);
                 Ok(len)
             }
             Some(key) => {
                 if self.n == u64::MAX {
                     return Err(HandshakeError::NonceOverflow);
+                }
+                // The on-wire message is the ciphertext plus the AEAD tag;
+                // it must fit the Noise length cap (spec §3).
+                let msg_len = plaintext.len() + Ci::TAG_SIZE;
+                if msg_len > MAX_MESSAGE_LEN {
+                    return Err(HandshakeError::MessageTooLong { len: msg_len });
                 }
                 let len = Ci::encrypt(&key, self.n, ad, plaintext, output)?;
                 self.n += 1;
@@ -120,6 +138,13 @@ impl<Ci: Cipher> CipherState<Ci> {
         ciphertext: &[u8],
         output: &mut [u8],
     ) -> Result<usize, HandshakeError> {
+        // Reject an over-cap incoming message (spec §3) before doing any
+        // work, so a peer cannot dictate unbounded buffers.
+        if ciphertext.len() > MAX_MESSAGE_LEN {
+            return Err(HandshakeError::MessageTooLong {
+                len: ciphertext.len(),
+            });
+        }
         match self.k {
             None => {
                 let len = ciphertext.len();

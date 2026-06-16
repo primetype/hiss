@@ -1798,7 +1798,7 @@ mod tests {
     // ── Large payload transport ───────────────────────────────────────
 
     #[tokio::test]
-    async fn transport_large_payload() {
+    async fn transport_enforces_max_message_length() {
         let provider = SoftwareCryptoProvider;
 
         let initiator_static = provider.generate_static_key().await.unwrap();
@@ -1856,15 +1856,36 @@ mod tests {
         let mut i_transport = i_transport;
         let mut r_transport = r_transport;
 
-        // Send a 64 KiB payload.
-        let large_payload: Vec<u8> = (0..65536).map(|i| (i % 256) as u8).collect();
-        let mut ct_buf = vec![0u8; large_payload.len() + 16];
-        let ct_len = i_transport.send(&large_payload, &mut ct_buf).unwrap();
-        assert_eq!(ct_len, large_payload.len() + 16);
+        // Largest payload whose on-wire message (ciphertext + 16-byte tag)
+        // still fits the 65535-byte Noise cap: 65535 - 16 = 65519.
+        let max_payload: Vec<u8> = (0..65519).map(|i| (i % 256) as u8).collect();
+        let mut ct_buf = vec![0u8; max_payload.len() + 16];
+        let ct_len = i_transport.send(&max_payload, &mut ct_buf).unwrap();
+        assert_eq!(ct_len, 65535); // exactly the cap
 
-        let mut pt_buf = vec![0u8; large_payload.len()];
+        let mut pt_buf = vec![0u8; max_payload.len()];
         let pt_len = r_transport.receive(&ct_buf[..ct_len], &mut pt_buf).unwrap();
-        assert_eq!(&pt_buf[..pt_len], &large_payload[..]);
+        assert_eq!(&pt_buf[..pt_len], &max_payload[..]);
+
+        // One byte more overflows the cap (message would be 65536) and must
+        // be rejected, not emitted as a non-conformant message.
+        let over_payload = vec![0u8; 65520];
+        let mut ct_buf = vec![0u8; over_payload.len() + 16];
+        let err = i_transport.send(&over_payload, &mut ct_buf).unwrap_err();
+        assert!(matches!(
+            err,
+            error::HandshakeError::MessageTooLong { len: 65536 }
+        ));
+
+        // The receive side likewise rejects an over-cap incoming message
+        // before attempting any decryption.
+        let oversize = vec![0u8; 65536];
+        let mut pt_buf = vec![0u8; oversize.len()];
+        let err = r_transport.receive(&oversize, &mut pt_buf).unwrap_err();
+        assert!(matches!(
+            err,
+            error::HandshakeError::MessageTooLong { len: 65536 }
+        ));
     }
 
     // ── Rekey tests ────────────────────────────────────────────────
