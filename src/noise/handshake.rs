@@ -167,9 +167,9 @@ where
     /// # Example
     ///
     /// ```ignore
-    /// type BubbleProtocol = Noise<IKpsk1, P256, ChaChaPoly, Blake2b>;
+    /// type Channel = Noise<IKpsk1, P256, ChaChaPoly, Blake2b>;
     ///
-    /// let hs = HandshakeState::<BubbleProtocol, Initiator, _, _, _>::new(provider, &[])
+    /// let hs = HandshakeState::<Channel, Initiator, _, _, _>::new(provider, &[])
     ///     .set_rs(responder_pub);
     /// ```
     pub fn new(provider: CP, prologue: &[u8]) -> Self {

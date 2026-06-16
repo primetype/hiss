@@ -5,9 +5,9 @@
 //! exercise the raw BLAKE2b, HMAC, ECDH, and ChaCha20-Poly1305
 //! implementations directly.
 
-use bubble_crypto::curve::p256::P256r1PublicKey;
-use bubble_crypto::noise::Blake2b;
-use bubble_crypto::noise::hash::Hash;
+use hiss::curve::p256::P256r1PublicKey;
+use hiss::noise::Blake2b;
+use hiss::noise::hash::Hash;
 
 /// Verify our HMAC-BLAKE2b matches a manual ipad/opad implementation
 /// (the same algorithm snow uses internally).
@@ -81,8 +81,8 @@ fn eccoxide_pubkey_matches_snow_p256() {
 /// prologue mix_hash) and verify the result matches snow.
 #[tokio::test]
 async fn manual_n_replay_matches_snow() {
-    use bubble_crypto::curve::CryptoProvider;
-    use bubble_crypto::curve::p256::SoftwareCryptoProvider;
+    use hiss::curve::CryptoProvider;
+    use hiss::curve::p256::SoftwareCryptoProvider;
 
     let provider = SoftwareCryptoProvider;
 

@@ -28,11 +28,11 @@
 //! A type alias pins the protocol for an entire application:
 //!
 //! ```
-//! use bubble_crypto::noise::*;
+//! use hiss::noise::*;
 //!
-//! type BubbleProtocol = Noise<IKpsk1, P256, ChaChaPoly, Blake2b>;
+//! type Channel = Noise<IKpsk1, P256, ChaChaPoly, Blake2b>;
 //!
-//! let proto = BubbleProtocol::new();
+//! let proto = Channel::new();
 //! assert_eq!(proto.to_string(), "Noise_IKpsk1_P256_ChaChaPoly_BLAKE2b");
 //! ```
 //!
@@ -40,12 +40,12 @@
 //! all sizes are available as `const` at compile time:
 //!
 //! ```
-//! # use bubble_crypto::noise::*;
-//! # type BubbleProtocol = Noise<IKpsk1, P256, ChaChaPoly, Blake2b>;
-//! assert_eq!(BubbleProtocol::PUBLIC_KEY_SIZE, 65);   // P-256 SEC1 uncompressed
-//! assert_eq!(BubbleProtocol::TAG_SIZE, 16);           // Poly1305
-//! assert_eq!(BubbleProtocol::HASH_LEN, 64);           // BLAKE2b
-//! assert_eq!(std::mem::size_of::<BubbleProtocol>(), 0);
+//! # use hiss::noise::*;
+//! # type Channel = Noise<IKpsk1, P256, ChaChaPoly, Blake2b>;
+//! assert_eq!(Channel::PUBLIC_KEY_SIZE, 65);   // P-256 SEC1 uncompressed
+//! assert_eq!(Channel::TAG_SIZE, 16);           // Poly1305
+//! assert_eq!(Channel::HASH_LEN, 64);           // BLAKE2b
+//! assert_eq!(std::mem::size_of::<Channel>(), 0);
 //! ```
 //!
 //! ## 2. Token Cons-lists — [`Cons`], [`Nil`], [`Message`]
@@ -167,12 +167,12 @@
 //! # Usage
 //!
 //! ```ignore
-//! use bubble_crypto::noise::*;
+//! use hiss::noise::*;
 //!
-//! type BubbleProtocol = Noise<IKpsk1, P256, ChaChaPoly, Blake2b>;
+//! type Channel = Noise<IKpsk1, P256, ChaChaPoly, Blake2b>;
 //!
 //! // ── Initiator ───────────────────────────────────────────
-//! let hs = BubbleProtocol::initiate(provider, &[])
+//! let hs = Channel::initiate(provider, &[])
 //!     .set_rs(responder_pub);                     // <- s pre-message
 //!
 //! let (msg1, hs) = hs
@@ -190,7 +190,7 @@
 //!     .se().await?;
 //!
 //! // ── Responder ───────────────────────────────────────────
-//! let hs = BubbleProtocol::respond(provider, &[])
+//! let hs = Channel::respond(provider, &[])
 //!     .set_s(responder_static)?;                  // <- s pre-message
 //!
 //! let (re, recv) = hs                             // -> e, es, s, ss, psk
@@ -333,9 +333,9 @@ impl<P: Pattern, Cu: Curve, Ci: Cipher, H: Hash> Noise<P, Cu, Ci, H> {
     /// # Example
     ///
     /// ```ignore
-    /// type BubbleProtocol = Noise<IKpsk1, P256, ChaChaPoly, Blake2b>;
+    /// type Channel = Noise<IKpsk1, P256, ChaChaPoly, Blake2b>;
     ///
-    /// let hs = BubbleProtocol::initiate(provider, &[])
+    /// let hs = Channel::initiate(provider, &[])
     ///     .set_rs(responder_pub);
     /// ```
     pub fn initiate<CP: crate::curve::CryptoProvider<Cu>>(
@@ -353,9 +353,9 @@ impl<P: Pattern, Cu: Curve, Ci: Cipher, H: Hash> Noise<P, Cu, Ci, H> {
     /// # Example
     ///
     /// ```ignore
-    /// type BubbleProtocol = Noise<IKpsk1, P256, ChaChaPoly, Blake2b>;
+    /// type Channel = Noise<IKpsk1, P256, ChaChaPoly, Blake2b>;
     ///
-    /// let hs = BubbleProtocol::respond(provider, &[])
+    /// let hs = Channel::respond(provider, &[])
     ///     .set_s(our_static)?;
     /// ```
     pub fn respond<CP: crate::curve::CryptoProvider<Cu>>(
@@ -373,14 +373,14 @@ mod tests {
     use crate::curve::p256::{P256r1PrivateKey, P256r1PublicKey, SoftwareCryptoProvider};
     use crate::noise_message_size;
     use crate::psk::Psk;
-    type BubbleProtocol = Noise<IKpsk1, P256, ChaChaPoly, Blake2b>;
+    type Channel = Noise<IKpsk1, P256, ChaChaPoly, Blake2b>;
     type NoiseSeal = Noise<N, P256, ChaChaPoly, Blake2b>;
     type NoiseK = Noise<K, P256, ChaChaPoly, Blake2b>;
     type NoiseKpsk0 = Noise<Kpsk0, P256, ChaChaPoly, Blake2b>;
 
     #[test]
     fn descriptor_string() {
-        let proto = BubbleProtocol::new();
+        let proto = Channel::new();
         assert_eq!(proto.to_string(), "Noise_IKpsk1_P256_ChaChaPoly_BLAKE2b");
     }
 
@@ -392,11 +392,11 @@ mod tests {
 
     #[test]
     fn sizes() {
-        assert_eq!(BubbleProtocol::DHLEN, 32);
-        assert_eq!(BubbleProtocol::PUBLIC_KEY_SIZE, 65);
-        assert_eq!(BubbleProtocol::TAG_SIZE, 16);
-        assert_eq!(BubbleProtocol::HASH_LEN, 64);
-        assert_eq!(BubbleProtocol::NUM_MESSAGES, 2);
+        assert_eq!(Channel::DHLEN, 32);
+        assert_eq!(Channel::PUBLIC_KEY_SIZE, 65);
+        assert_eq!(Channel::TAG_SIZE, 16);
+        assert_eq!(Channel::HASH_LEN, 64);
+        assert_eq!(Channel::NUM_MESSAGES, 2);
     }
 
     #[test]
@@ -407,7 +407,7 @@ mod tests {
 
     #[test]
     fn zero_sized() {
-        assert_eq!(size_of::<BubbleProtocol>(), 0);
+        assert_eq!(size_of::<Channel>(), 0);
     }
 
     // ── Noise N seal/open test ────────────────────────────────────
@@ -758,9 +758,9 @@ mod tests {
         let psk = Psk::from_bytes([0xAA; 32]);
 
         // ── Construction ────────────────────────────────────────
-        let i_hs = BubbleProtocol::initiate(SoftwareCryptoProvider, &[]).set_rs(responder_pub);
+        let i_hs = Channel::initiate(SoftwareCryptoProvider, &[]).set_rs(responder_pub);
 
-        let r_hs = BubbleProtocol::respond(SoftwareCryptoProvider, &[])
+        let r_hs = Channel::respond(SoftwareCryptoProvider, &[])
             .set_s(responder_static)
             .unwrap();
 
@@ -1026,7 +1026,7 @@ mod tests {
         let provider = SoftwareCryptoProvider;
         let responder_static = provider.generate_static_key().await.unwrap();
 
-        let r_hs = BubbleProtocol::respond(SoftwareCryptoProvider, &[])
+        let r_hs = Channel::respond(SoftwareCryptoProvider, &[])
             .set_s(responder_static)
             .unwrap();
 
@@ -1047,7 +1047,7 @@ mod tests {
         let provider = SoftwareCryptoProvider;
         let responder_static = provider.generate_static_key().await.unwrap();
 
-        let r_hs = BubbleProtocol::respond(SoftwareCryptoProvider, &[])
+        let r_hs = Channel::respond(SoftwareCryptoProvider, &[])
             .set_s(responder_static)
             .unwrap();
 
@@ -1066,7 +1066,7 @@ mod tests {
         let psk = Psk::from_bytes([0xBB; 32]);
 
         // Initiator constructs msg1 normally.
-        let i_hs = BubbleProtocol::initiate(SoftwareCryptoProvider, &[]).set_rs(responder_pub);
+        let i_hs = Channel::initiate(SoftwareCryptoProvider, &[]).set_rs(responder_pub);
 
         let mut msg1_buf = [0u8;
             noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: true, keyed: false, tokens: [E, Es, S, Ss, Psk],)];
@@ -1093,7 +1093,7 @@ mod tests {
 
         // Responder reads msg1 — corruption in the encrypted static key
         // area causes decryption failure at the `s` token.
-        let r_hs = BubbleProtocol::respond(SoftwareCryptoProvider, &[])
+        let r_hs = Channel::respond(SoftwareCryptoProvider, &[])
             .set_s(responder_static)
             .unwrap();
 
@@ -1115,7 +1115,7 @@ mod tests {
         let r_psk = Psk::from_bytes([0xBB; 32]); // different!
 
         // Initiator sends msg1 with i_psk.
-        let i_hs = BubbleProtocol::initiate(SoftwareCryptoProvider, &[]).set_rs(responder_pub);
+        let i_hs = Channel::initiate(SoftwareCryptoProvider, &[]).set_rs(responder_pub);
 
         let mut msg1_buf = [0u8;
             noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: true, keyed: false, tokens: [E, Es, S, Ss, Psk],)];
@@ -1138,7 +1138,7 @@ mod tests {
         let msg1 = msg1.to_vec();
 
         // Responder reads msg1 with r_psk — mismatch.
-        let r_hs = BubbleProtocol::respond(SoftwareCryptoProvider, &[])
+        let r_hs = Channel::respond(SoftwareCryptoProvider, &[])
             .set_s(responder_static)
             .unwrap();
 
@@ -1163,8 +1163,8 @@ mod tests {
         let psk = Psk::from_bytes([0xCC; 32]);
 
         // Complete handshake.
-        let i_hs = BubbleProtocol::initiate(SoftwareCryptoProvider, &[]).set_rs(responder_pub);
-        let r_hs = BubbleProtocol::respond(SoftwareCryptoProvider, &[])
+        let i_hs = Channel::initiate(SoftwareCryptoProvider, &[]).set_rs(responder_pub);
+        let r_hs = Channel::respond(SoftwareCryptoProvider, &[])
             .set_s(responder_static)
             .unwrap();
 
@@ -1234,8 +1234,8 @@ mod tests {
         let psk = Psk::from_bytes([0xDD; 32]);
 
         // Complete handshake.
-        let i_hs = BubbleProtocol::initiate(SoftwareCryptoProvider, &[]).set_rs(responder_pub);
-        let r_hs = BubbleProtocol::respond(SoftwareCryptoProvider, &[])
+        let i_hs = Channel::initiate(SoftwareCryptoProvider, &[]).set_rs(responder_pub);
+        let r_hs = Channel::respond(SoftwareCryptoProvider, &[])
             .set_s(responder_static)
             .unwrap();
 
@@ -1323,7 +1323,7 @@ mod tests {
         let psk = Psk::from_bytes([0xCC; 32]);
 
         // Initiator targets the wrong responder public key.
-        let i_hs = BubbleProtocol::initiate(SoftwareCryptoProvider, &[]).set_rs(wrong_pub);
+        let i_hs = Channel::initiate(SoftwareCryptoProvider, &[]).set_rs(wrong_pub);
 
         // Initiator sends msg1 with es DH against the wrong key.
         let mut msg1_buf = [0u8;
@@ -1347,7 +1347,7 @@ mod tests {
         let msg1 = msg1.to_vec();
 
         // Actual responder holds a different static key.
-        let r_hs = BubbleProtocol::respond(SoftwareCryptoProvider, &[])
+        let r_hs = Channel::respond(SoftwareCryptoProvider, &[])
             .set_s(responder_static)
             .unwrap();
 
@@ -1374,8 +1374,8 @@ mod tests {
         let psk = Psk::from_bytes([0xFF; 32]);
 
         // Complete handshake.
-        let i_hs = BubbleProtocol::initiate(SoftwareCryptoProvider, &[]).set_rs(responder_pub);
-        let r_hs = BubbleProtocol::respond(SoftwareCryptoProvider, &[])
+        let i_hs = Channel::initiate(SoftwareCryptoProvider, &[]).set_rs(responder_pub);
+        let r_hs = Channel::respond(SoftwareCryptoProvider, &[])
             .set_s(responder_static)
             .unwrap();
 
@@ -1458,7 +1458,7 @@ mod tests {
 
             let initiator_static = SoftwareCryptoProvider.generate_static_key().await.unwrap();
 
-            let i_hs = BubbleProtocol::initiate(SoftwareCryptoProvider, &[]).set_rs(responder_pub);
+            let i_hs = Channel::initiate(SoftwareCryptoProvider, &[]).set_rs(responder_pub);
 
             let mut msg1_buf = [0u8;
                 noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: true, keyed: false, tokens: [E, Es, S, Ss, Psk],)];
@@ -1480,7 +1480,7 @@ mod tests {
                 .unwrap();
             let msg1 = msg1.to_vec();
 
-            let r_hs = BubbleProtocol::respond(SoftwareCryptoProvider, &[])
+            let r_hs = Channel::respond(SoftwareCryptoProvider, &[])
                 .set_s(responder_static)
                 .unwrap();
 
@@ -1536,7 +1536,7 @@ mod tests {
         // revealed static key matches the expected peer.
         let wrong_static = provider.generate_static_key().await.unwrap();
 
-        let i_hs = BubbleProtocol::initiate(SoftwareCryptoProvider, &[]).set_rs(responder_pub);
+        let i_hs = Channel::initiate(SoftwareCryptoProvider, &[]).set_rs(responder_pub);
 
         let mut msg1_buf = [0u8;
             noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: true, keyed: false, tokens: [E, Es, S, Ss, Psk],)];
@@ -1558,7 +1558,7 @@ mod tests {
             .unwrap();
         let msg1 = msg1.to_vec();
 
-        let r_hs = BubbleProtocol::respond(SoftwareCryptoProvider, &[])
+        let r_hs = Channel::respond(SoftwareCryptoProvider, &[])
             .set_s(responder_static)
             .unwrap();
 
@@ -1610,7 +1610,7 @@ mod tests {
         let responder_pub = provider.public_key(&responder_static).unwrap();
         let psk = Psk::from_bytes([0xDD; 32]);
 
-        let i_hs = BubbleProtocol::initiate(SoftwareCryptoProvider, &[]).set_rs(responder_pub);
+        let i_hs = Channel::initiate(SoftwareCryptoProvider, &[]).set_rs(responder_pub);
 
         let mut msg1_buf = [0u8;
             noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: true, keyed: false, tokens: [E, Es, S, Ss, Psk],)];
@@ -1634,7 +1634,7 @@ mod tests {
         // Corrupt a byte in the ephemeral public key.
         corrupted[5] ^= 0xFF;
 
-        let r_hs = BubbleProtocol::respond(SoftwareCryptoProvider, &[])
+        let r_hs = Channel::respond(SoftwareCryptoProvider, &[])
             .set_s(responder_static)
             .unwrap();
 
@@ -1663,8 +1663,8 @@ mod tests {
         let responder_pub = provider.public_key(&responder_static).unwrap();
         let psk = Psk::from_bytes([0xDD; 32]);
 
-        let i_hs = BubbleProtocol::initiate(SoftwareCryptoProvider, &[]).set_rs(responder_pub);
-        let r_hs = BubbleProtocol::respond(SoftwareCryptoProvider, &[])
+        let i_hs = Channel::initiate(SoftwareCryptoProvider, &[]).set_rs(responder_pub);
+        let r_hs = Channel::respond(SoftwareCryptoProvider, &[])
             .set_s(responder_static)
             .unwrap();
 
@@ -1732,8 +1732,8 @@ mod tests {
         let psk = Psk::from_bytes([0xEE; 32]);
 
         // Complete handshake.
-        let i_hs = BubbleProtocol::initiate(SoftwareCryptoProvider, &[]).set_rs(responder_pub);
-        let r_hs = BubbleProtocol::respond(SoftwareCryptoProvider, &[])
+        let i_hs = Channel::initiate(SoftwareCryptoProvider, &[]).set_rs(responder_pub);
+        let r_hs = Channel::respond(SoftwareCryptoProvider, &[])
             .set_s(responder_static)
             .unwrap();
 
@@ -1807,8 +1807,8 @@ mod tests {
         let psk = Psk::from_bytes([0xFF; 32]);
 
         // Complete handshake.
-        let i_hs = BubbleProtocol::initiate(SoftwareCryptoProvider, &[]).set_rs(responder_pub);
-        let r_hs = BubbleProtocol::respond(SoftwareCryptoProvider, &[])
+        let i_hs = Channel::initiate(SoftwareCryptoProvider, &[]).set_rs(responder_pub);
+        let r_hs = Channel::respond(SoftwareCryptoProvider, &[])
             .set_s(responder_static)
             .unwrap();
 
@@ -1879,8 +1879,8 @@ mod tests {
         let psk = Psk::from_bytes([0x11; 32]);
 
         // Complete handshake.
-        let i_hs = BubbleProtocol::initiate(SoftwareCryptoProvider, &[]).set_rs(responder_pub);
-        let r_hs = BubbleProtocol::respond(SoftwareCryptoProvider, &[])
+        let i_hs = Channel::initiate(SoftwareCryptoProvider, &[]).set_rs(responder_pub);
+        let r_hs = Channel::respond(SoftwareCryptoProvider, &[])
             .set_s(responder_static)
             .unwrap();
 
@@ -1960,8 +1960,8 @@ mod tests {
         let psk = Psk::from_bytes([0x22; 32]);
 
         // Complete handshake.
-        let i_hs = BubbleProtocol::initiate(SoftwareCryptoProvider, &[]).set_rs(responder_pub);
-        let r_hs = BubbleProtocol::respond(SoftwareCryptoProvider, &[])
+        let i_hs = Channel::initiate(SoftwareCryptoProvider, &[]).set_rs(responder_pub);
+        let r_hs = Channel::respond(SoftwareCryptoProvider, &[])
             .set_s(responder_static)
             .unwrap();
 
@@ -2038,7 +2038,7 @@ mod tests {
         let responder_static = provider.generate_static_key().await.unwrap();
         let responder_pub = provider.public_key(&responder_static).unwrap();
 
-        let prologue = b"bubble/v1";
+        let prologue = b"hiss/v1";
 
         type NoiseSeal = Noise<N, P256, ChaChaPoly, Blake2b>;
 
@@ -2133,14 +2133,14 @@ mod tests {
             responder_static: P256r1PrivateKey,
             psk: Psk,
         ) -> (
-            transport::Transport<BubbleProtocol>,
-            transport::Transport<BubbleProtocol>,
+            transport::Transport<Channel>,
+            transport::Transport<Channel>,
         ) {
             let provider = SoftwareCryptoProvider;
             let responder_pub = provider.public_key(&responder_static).unwrap();
 
-            let i_hs = BubbleProtocol::initiate(SoftwareCryptoProvider, &[]).set_rs(responder_pub);
-            let r_hs = BubbleProtocol::respond(SoftwareCryptoProvider, &[])
+            let i_hs = Channel::initiate(SoftwareCryptoProvider, &[]).set_rs(responder_pub);
+            let r_hs = Channel::respond(SoftwareCryptoProvider, &[])
                 .set_s(responder_static)
                 .unwrap();
 
@@ -2265,7 +2265,7 @@ mod tests {
                     .unwrap();
                 rt.block_on(async {
                     let r_sk = SoftwareCryptoProvider.generate_static_key().await.unwrap();
-                    let r_hs = BubbleProtocol::respond(SoftwareCryptoProvider, &[])
+                    let r_hs = Channel::respond(SoftwareCryptoProvider, &[])
                         .set_s(r_sk)
                         .unwrap();
 

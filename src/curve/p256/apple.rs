@@ -20,7 +20,7 @@
 //!   `2026/05/12`, D-20-restored). Authorisation for the team-prefixed
 //!   `keychain-access-groups` entitlement comes from the embedded macOS
 //!   Development provisioning profile placed alongside the binary by
-//!   `bin/bubble-desktop/scripts/dev.sh` Step 3 (D-27.c). The Secure
+//!   the host application's build script (D-27.c). The Secure
 //!   Enclave binding is preserved via `Token::SecureEnclave` and
 //!   `kSecAttrTokenIDSecureEnclave` — D-23 invariant. iOS continues to
 //!   use its single (data-protection) keychain as before.
@@ -35,7 +35,7 @@ use security_framework::{
     passwords_options::AccessControlOptions,
 };
 
-const TAG: &str = "uk.co.primetype.bubble.key";
+const TAG: &str = "uk.co.primetype.hiss.p256";
 
 #[derive(Clone)]
 pub struct P256r1PrivateKey {
@@ -125,8 +125,8 @@ impl P256r1PrivateKey {
             // keychain"). Authorisation for the team-prefixed
             // `keychain-access-groups` entitlement is provided by the
             // embedded macOS Development provisioning profile bundled
-            // alongside the binary by `bin/bubble-desktop/scripts/dev.sh`
-            // Step 3 (D-27.c). The prior 2026/05/08 drop-the-selector
+            // alongside the binary by the host application's build
+            // script (D-27.c). The prior 2026/05/08 drop-the-selector
             // experiment and the 2026/05/10 file-based-seed direction
             // both failed empirically (see VERIFICATION.md F-2, F-4, F-5,
             // F-5.A); CONTEXT.md Amendment 2026/05/12 restores the
@@ -155,7 +155,7 @@ impl P256r1PrivateKey {
     /// is RESTORED (D-20-restored) per Apple TN3137 ("Keys stored in the
     /// Secure Enclave _must_ use this keychain"). The lookup targets DPK;
     /// authorisation lives in the embedded provisioning profile bundled
-    /// by `bin/bubble-desktop/scripts/dev.sh` Step 3 (Option B, CONTEXT.md
+    /// by the host application's build script (Option B, CONTEXT.md
     /// Amendment 2026/05/12).
     pub fn load_from_keychain() -> Result<Option<Self>, Error> {
         use core_foundation::base::TCFType as _;

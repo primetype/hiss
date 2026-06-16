@@ -1,8 +1,11 @@
 [package]
-name = "bubble-crypto"
+name = "hiss"
 edition = "2024"
 version = "0.1.0"
 license = "MIT OR Apache-2.0"
+description = "Static, type-level Noise Protocol Framework with pluggable hardware-backed crypto."
+keywords = ["noise", "cryptography", "handshake", "secure-enclave", "p256"]
+categories = ["cryptography", "network-programming"]
 
 
 [dependencies]

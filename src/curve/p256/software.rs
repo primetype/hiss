@@ -280,7 +280,7 @@ mod tests {
         let pk2 = provider.public_key(&sk2).unwrap();
 
         // Sign and verify
-        const MSG: &[u8] = b"hello bubble";
+        const MSG: &[u8] = b"hello hiss";
         let sig = provider.sign(&sk1, MSG).await.unwrap();
         assert!(pk1.verify(sig, MSG));
         assert!(!pk2.verify(sig, MSG));

@@ -1,8 +1,9 @@
-//! Ed25519 signing and key exchange for the Bubble DAG protocol.
+//! Ed25519 signing and key exchange.
 //!
-//! Ed25519 is used for signing DAG message headers (`message_id` =
-//! signature) and, via the birational equivalence between Edwards
-//! and Montgomery forms, for Diffie–Hellman key exchange.
+//! Ed25519 is used for signing message headers — where the signature
+//! can double as a `message_id` — and, via the birational equivalence
+//! between Edwards and Montgomery forms, for Diffie–Hellman key
+//! exchange.
 //!
 //! This module implements the [`Curve`] and [`CryptoProvider`] traits,
 //! following the same pattern as the [`p256`](super::p256) module.
@@ -129,9 +130,8 @@ impl fmt::Debug for Ed25519PublicKey {
 
 /// An Ed25519 signature (64 bytes).
 ///
-/// In the Bubble DAG protocol, the signature over a message header
-/// serves as the `message_id` — it is unforgeable, deterministic
-/// (RFC 8032), and self-verifying.
+/// When a signature doubles as a message identifier, it is
+/// unforgeable, deterministic (RFC 8032), and self-verifying.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Packed)]
 pub struct Ed25519Signature(#[packed(accessor = false)] [u8; 64]);
 
@@ -329,8 +329,7 @@ impl CryptoProvider<Ed25519> for SoftwareCryptoProvider {
 /// at-rest path.
 ///
 /// The `OnceLock<PathBuf>` is initialised exactly once per process
-/// start by the FFI bootstrap
-/// (`crates/bubble-ffi/src/callback.rs::build_rust_config`) BEFORE any
+/// start by the host application's FFI bootstrap BEFORE any
 /// `DeviceIdentity::create` / `::load` call. The macOS arm of
 /// [`apple`] consults it via [`get_data_dir`] to resolve
 /// `{data_dir}/identity/ed25519_seed.bin`.
@@ -424,8 +423,8 @@ pub mod data_dir {
 /// P-256 public key and written as the 129-byte sealed envelope to
 /// `{data_dir}/identity/ed25519_seed.bin`, where `data_dir` is
 /// supplied via the module-level [`data_dir`] sub-module's
-/// `OnceLock<PathBuf>` initialised once at FFI bootstrap
-/// (`crates/bubble-ffi/src/callback.rs::build_rust_config`). The
+/// `OnceLock<PathBuf>` initialised once at the host application's
+/// FFI bootstrap. The
 /// keychain is NOT used on macOS: a team-codesigned binary with no
 /// `keychain-access-groups` entitlement has zero access groups
 /// available, so `SecItemAdd` fails with `errSecMissingEntitlement`
@@ -440,8 +439,7 @@ pub mod data_dir {
 /// `.planning/phases/18.1-secure-enclave-codesigning/18.1-CONTEXT.md`
 /// § Amendment 2026/05/10 D-25. A parallel sync helper
 /// [`apple::delete_seed_blocking`] is provided for callers that must
-/// invoke from a non-async context (the wipe path in
-/// `crates/bubble/src/runtime.rs::delete_apple_keychain_idempotent`
+/// invoke from a non-async context (the host application's wipe path
 /// is a sync fn by design — non-`Send` CF types must not cross
 /// `.await` — and so consumes `delete_seed_blocking` to preserve the
 /// locked `crypto/mod.rs` + `runtime.rs` signatures).
@@ -593,8 +591,7 @@ pub mod apple {
 
         /// Synchronous Ed25519 seed-file delete.
         ///
-        /// Exposed for the wipe path in
-        /// `crates/bubble/src/runtime.rs::delete_apple_keychain_idempotent`
+        /// Exposed for the host application's wipe path,
         /// which is a sync `fn` by design — non-`Send` CF types must
         /// not cross `.await`. Calling this preserves the locked
         /// `crypto/mod.rs` + `runtime.rs` signatures
@@ -624,7 +621,7 @@ pub mod apple {
             },
         };
 
-        const ED25519_SEED_SERVICE: &str = "uk.co.primetype.bubble.ed25519";
+        const ED25519_SEED_SERVICE: &str = "uk.co.primetype.hiss.ed25519";
         const ED25519_SEED_ACCOUNT: &str = "device-identity";
 
         fn seed_options() -> Result<PasswordOptions, String> {
@@ -754,7 +751,7 @@ mod tests {
     fn generate_and_sign_verify() {
         let sk = SoftwareEd25519PrivateKey::generate(rand::rng()).unwrap();
         let pk = sk.public_key();
-        let msg = b"Hello Bubble";
+        let msg = b"Hello hiss";
 
         let sig = sk.sign(msg);
         assert!(pk.verify(sig, msg));
@@ -904,7 +901,7 @@ mod tests {
         let pk2 = provider.public_key(&sk2).unwrap();
 
         // Sign and verify
-        const MSG: &[u8] = b"hello bubble dag";
+        const MSG: &[u8] = b"hello hiss";
         let sig = provider.sign(&sk1, MSG).await.unwrap();
         assert!(pk1.verify(sig, MSG));
         assert!(!pk2.verify(sig, MSG));

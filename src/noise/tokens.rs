@@ -230,9 +230,9 @@ where
 /// # Example
 ///
 /// ```
-/// use bubble_crypto::noise::curve::P256;
-/// use bubble_crypto::noise::cipher::ChaChaPoly;
-/// use bubble_crypto::noise_message_size;
+/// use hiss::noise::curve::P256;
+/// use hiss::noise::cipher::ChaChaPoly;
+/// use hiss::noise_message_size;
 ///
 /// // IKpsk1 msg1: -> e, es, s, ss, psk
 /// const MSG1: usize = noise_message_size!(

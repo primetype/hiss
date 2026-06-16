@@ -1,10 +1,9 @@
 //! Noise-N one-way seal helpers for fixed-size 32-byte payloads.
 //!
 //! These helpers wrap the `Noise_N_P256_ChaChaPoly_BLAKE2b` pattern
-//! (the same pattern used by the PSK-at-rest path in
-//! [`bubble-ceremony`]) and expose two ergonomic async functions for
-//! sealing and opening a 32-byte payload to a recipient's P-256
-//! public key.
+//! (one-way sealing of a secret to a recipient's public key) and
+//! expose two ergonomic async functions for sealing and opening a
+//! 32-byte payload to a recipient's P-256 public key.
 //!
 //! Async by construction: matches the existing `CryptoProvider<P256>`
 //! async-trait pattern in [`crate::curve::p256`]. Callers `.await`
@@ -20,16 +19,15 @@
 //! [Transport ciphertext — 48 bytes: encrypted payload (32) + AEAD tag (16)]
 //! ```
 //!
-//! This layout is BYTE-IDENTICAL to the `SealedPsk` blob shipped by
-//! [`bubble-ceremony`]. Each seal operation uses a fresh ephemeral
-//! key, providing forward secrecy per write.
+//! The layout is stable and self-describing. Each seal operation uses
+//! a fresh ephemeral key, providing forward secrecy per write.
 //!
 //! # Cryptographic invariant
 //!
 //! The sealed envelope is opaque to anyone without the recipient's
 //! P-256 private key. On Apple platforms the recipient private key
 //! lives in the Secure Enclave (non-exportable hardware-resident
-//! material) — see `PROTOCOL.md` Decision 06.
+//! material).
 
 use crate::curve::CryptoProvider;
 use crate::curve::p256::{P256, P256r1PublicKey};
@@ -43,10 +41,8 @@ pub const NOISE_N_MSG1_SIZE: usize = 81;
 
 /// The Noise N protocol pinned for sealing.
 ///
-/// `Noise_N_P256_ChaChaPoly_BLAKE2b` — same descriptor as the
-/// `Seal` type alias exported by `bubble-protocol`, but defined here
-/// to keep this module self-contained (the helper sits below
-/// `bubble-protocol` in the dependency graph).
+/// `Noise_N_P256_ChaChaPoly_BLAKE2b` — the one-way sealing descriptor
+/// used by [`seal_32`] / [`open_32`].
 pub type NoiseSeal = Noise<N, P256, ChaChaPoly, Blake2b>;
 
 /// Size of the transport ciphertext (payload + AEAD tag).

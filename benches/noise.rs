@@ -6,10 +6,10 @@
 
 use criterion::{Criterion, criterion_group, criterion_main};
 
-use bubble_crypto::curve::CryptoProvider;
-use bubble_crypto::curve::p256::SoftwareCryptoProvider;
-use bubble_crypto::noise::*;
-use bubble_crypto::psk::Psk;
+use hiss::curve::CryptoProvider;
+use hiss::curve::p256::SoftwareCryptoProvider;
+use hiss::noise::*;
+use hiss::psk::Psk;
 
 // ── Helpers ─────────────────────────────────────────────────────
 
@@ -22,10 +22,10 @@ fn rt() -> tokio::runtime::Runtime {
 
 // ── N pattern ───────────────────────────────────────────────────
 
-fn bench_n_bubble(c: &mut Criterion) {
+fn bench_n_hiss(c: &mut Criterion) {
     let rt = rt();
 
-    c.bench_function("noise_N_bubble", |b| {
+    c.bench_function("noise_N_hiss", |b| {
         b.iter(|| {
             rt.block_on(async {
                 let provider = SoftwareCryptoProvider;
@@ -105,10 +105,10 @@ fn bench_n_snow(c: &mut Criterion) {
 
 // ── IKpsk1 pattern ──────────────────────────────────────────────
 
-fn bench_ikpsk1_bubble(c: &mut Criterion) {
+fn bench_ikpsk1_hiss(c: &mut Criterion) {
     let rt = rt();
 
-    c.bench_function("noise_IKpsk1_bubble", |b| {
+    c.bench_function("noise_IKpsk1_hiss", |b| {
         b.iter(|| {
             rt.block_on(async {
                 let provider = SoftwareCryptoProvider;
@@ -238,7 +238,7 @@ fn bench_ikpsk1_snow(c: &mut Criterion) {
 
 // ── Transport throughput ────────────────────────────────────────
 
-fn bench_transport_bubble(c: &mut Criterion) {
+fn bench_transport_hiss(c: &mut Criterion) {
     let rt = rt();
 
     // Set up a completed N handshake, then benchmark transport only.
@@ -267,7 +267,7 @@ fn bench_transport_bubble(c: &mut Criterion) {
     let mut ct = [0u8; 1056]; // 1024 + 16 tag + headroom
     let mut pt = [0u8; 1024];
 
-    c.bench_function("transport_1KiB_bubble", |b| {
+    c.bench_function("transport_1KiB_hiss", |b| {
         b.iter(|| {
             let ct_len = sender.send(&plaintext, &mut ct).unwrap();
             let pt_len = receiver.receive(&ct[..ct_len], &mut pt).unwrap();
@@ -317,10 +317,10 @@ fn bench_transport_snow(c: &mut Criterion) {
 
 // ── Groups ──────────────────────────────────────────────────────
 
-criterion_group!(handshake_n, bench_n_bubble, bench_n_snow,);
+criterion_group!(handshake_n, bench_n_hiss, bench_n_snow,);
 
-criterion_group!(handshake_ikpsk1, bench_ikpsk1_bubble, bench_ikpsk1_snow,);
+criterion_group!(handshake_ikpsk1, bench_ikpsk1_hiss, bench_ikpsk1_snow,);
 
-criterion_group!(transport, bench_transport_bubble, bench_transport_snow,);
+criterion_group!(transport, bench_transport_hiss, bench_transport_snow,);
 
 criterion_main!(handshake_n, handshake_ikpsk1, transport);

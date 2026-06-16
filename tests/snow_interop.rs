@@ -11,17 +11,17 @@
 //! 2. Both sides derive the same handshake hash
 //! 3. Transport messages can be exchanged bidirectionally
 
-use bubble_crypto::curve::CryptoProvider;
-use bubble_crypto::curve::p256::SoftwareCryptoProvider;
-use bubble_crypto::noise::*;
-use bubble_crypto::psk::Psk;
+use hiss::curve::CryptoProvider;
+use hiss::curve::p256::SoftwareCryptoProvider;
+use hiss::noise::*;
+use hiss::psk::Psk;
 
 const PROTOCOL: &str = "Noise_IKpsk1_P256_ChaChaPoly_BLAKE2b";
 
 // ── IKpsk1: our initiator ↔ snow responder ──────────────────────
 
 #[tokio::test]
-async fn ikpsk1_bubble_initiator_snow_responder() {
+async fn ikpsk1_hiss_initiator_snow_responder() {
     let provider = SoftwareCryptoProvider;
 
     // Generate keys for both sides.
@@ -47,9 +47,9 @@ async fn ikpsk1_bubble_initiator_snow_responder() {
         .unwrap();
 
     // ── Our initiator setup ──────────────────────────────────
-    type BubbleProtocol = Noise<IKpsk1, P256, ChaChaPoly, Blake2b>;
+    type Channel = Noise<IKpsk1, P256, ChaChaPoly, Blake2b>;
 
-    let i_hs = BubbleProtocol::initiate(SoftwareCryptoProvider, &[]).set_rs(responder_pub);
+    let i_hs = Channel::initiate(SoftwareCryptoProvider, &[]).set_rs(responder_pub);
 
     // ── Message 1: -> e, es, s, ss, psk (our initiator sends) ──
     let mut msg1_buf = [0u8; 162];
@@ -96,7 +96,7 @@ async fn ikpsk1_bubble_initiator_snow_responder() {
     let mut i_transport = i_transport;
 
     // Our initiator → snow responder.
-    let plaintext = b"hello from bubble initiator";
+    let plaintext = b"hello from hiss initiator";
     let mut ct = [0u8; 256];
     let ct_len = i_transport.send(plaintext, &mut ct).unwrap();
 
@@ -117,7 +117,7 @@ async fn ikpsk1_bubble_initiator_snow_responder() {
 // ── IKpsk1: snow initiator ↔ our responder ──────────────────────
 
 #[tokio::test]
-async fn ikpsk1_snow_initiator_bubble_responder() {
+async fn ikpsk1_snow_initiator_hiss_responder() {
     let provider = SoftwareCryptoProvider;
 
     // Generate keys for our responder.
@@ -141,9 +141,9 @@ async fn ikpsk1_snow_initiator_bubble_responder() {
         .unwrap();
 
     // ── Our responder setup ──────────────────────────────────
-    type BubbleProtocol = Noise<IKpsk1, P256, ChaChaPoly, Blake2b>;
+    type Channel = Noise<IKpsk1, P256, ChaChaPoly, Blake2b>;
 
-    let r_hs = BubbleProtocol::respond(SoftwareCryptoProvider, &[])
+    let r_hs = Channel::respond(SoftwareCryptoProvider, &[])
         .set_s(responder_static)
         .unwrap();
 
@@ -204,7 +204,7 @@ async fn ikpsk1_snow_initiator_bubble_responder() {
     assert_eq!(&pt[..pt_len], plaintext);
 
     // Our responder → snow initiator.
-    let reply = b"hello from bubble responder";
+    let reply = b"hello from hiss responder";
     let mut ct = [0u8; 256];
     let ct_len = r_transport.send(reply, &mut ct).unwrap();
 
@@ -216,7 +216,7 @@ async fn ikpsk1_snow_initiator_bubble_responder() {
 // ── N pattern: our initiator ↔ snow responder ───────────────────
 
 #[tokio::test]
-async fn n_bubble_initiator_snow_responder() {
+async fn n_hiss_initiator_snow_responder() {
     let psk_to_seal = Psk::from_bytes([0x42; 32]);
 
     // Snow generates the responder's static key.
@@ -263,7 +263,7 @@ async fn n_bubble_initiator_snow_responder() {
 // ── Kpsk0 pattern: our initiator ↔ snow responder ───────────────
 
 #[tokio::test]
-async fn kpsk0_bubble_initiator_snow_responder() {
+async fn kpsk0_hiss_initiator_snow_responder() {
     let provider = SoftwareCryptoProvider;
 
     let alice_static = provider.generate_static_key().await.unwrap();
@@ -335,8 +335,8 @@ async fn kpsk0_bubble_initiator_snow_responder() {
 // ── N pattern with prologue: our initiator ↔ snow responder ──────
 
 #[tokio::test]
-async fn n_with_prologue_bubble_initiator_snow_responder() {
-    let prologue = b"bubble/v1";
+async fn n_with_prologue_hiss_initiator_snow_responder() {
+    let prologue = b"hiss/v1";
 
     let snow_builder = snow::Builder::new("Noise_N_P256_ChaChaPoly_BLAKE2b".parse().unwrap());
     let snow_keypair = snow_builder.generate_keypair().unwrap();
@@ -381,9 +381,9 @@ async fn n_with_prologue_bubble_initiator_snow_responder() {
 // ── IKpsk1 with prologue: both directions ────────────────────────
 
 #[tokio::test]
-async fn ikpsk1_with_prologue_bubble_initiator_snow_responder() {
+async fn ikpsk1_with_prologue_hiss_initiator_snow_responder() {
     let provider = SoftwareCryptoProvider;
-    let prologue = b"bubble/v1/ikpsk1";
+    let prologue = b"hiss/v1/ikpsk1";
 
     let initiator_static = provider.generate_static_key().await.unwrap();
     let psk = Psk::from_bytes([0xCC; 32]);
@@ -402,9 +402,9 @@ async fn ikpsk1_with_prologue_bubble_initiator_snow_responder() {
         .build_responder()
         .unwrap();
 
-    type BubbleProtocol = Noise<IKpsk1, P256, ChaChaPoly, Blake2b>;
+    type Channel = Noise<IKpsk1, P256, ChaChaPoly, Blake2b>;
 
-    let i_hs = BubbleProtocol::initiate(SoftwareCryptoProvider, prologue).set_rs(responder_pub);
+    let i_hs = Channel::initiate(SoftwareCryptoProvider, prologue).set_rs(responder_pub);
 
     // msg1: -> e, es, s, ss, psk
     let mut msg1_buf = [0u8; 162];
@@ -452,10 +452,10 @@ async fn ikpsk1_with_prologue_bubble_initiator_snow_responder() {
     assert_eq!(&pt[..pt_len], plaintext);
 }
 
-// ── Rekey interop: bubble ↔ snow ─────────────────────────────────
+// ── Rekey interop: hiss ↔ snow ─────────────────────────────────
 
 #[tokio::test]
-async fn n_rekey_bubble_initiator_snow_responder() {
+async fn n_rekey_hiss_initiator_snow_responder() {
     let snow_builder = snow::Builder::new("Noise_N_P256_ChaChaPoly_BLAKE2b".parse().unwrap());
     let snow_keypair = snow_builder.generate_keypair().unwrap();
 
@@ -487,7 +487,7 @@ async fn n_rekey_bubble_initiator_snow_responder() {
     let pt_len = snow_responder.read_message(&ct[..ct_len], &mut pt).unwrap();
     assert_eq!(&pt[..pt_len], b"before rekey");
 
-    // Rekey both sides — bubble rekeys send, snow rekeys incoming.
+    // Rekey both sides — hiss rekeys send, snow rekeys incoming.
     transport.rekey().unwrap();
     snow_responder.rekey_incoming();
 
@@ -498,7 +498,7 @@ async fn n_rekey_bubble_initiator_snow_responder() {
 }
 
 #[tokio::test]
-async fn ikpsk1_rekey_bubble_initiator_snow_responder() {
+async fn ikpsk1_rekey_hiss_initiator_snow_responder() {
     let provider = SoftwareCryptoProvider;
 
     let initiator_static = provider.generate_static_key().await.unwrap();
@@ -516,9 +516,9 @@ async fn ikpsk1_rekey_bubble_initiator_snow_responder() {
         .build_responder()
         .unwrap();
 
-    type BubbleProtocol = Noise<IKpsk1, P256, ChaChaPoly, Blake2b>;
+    type Channel = Noise<IKpsk1, P256, ChaChaPoly, Blake2b>;
 
-    let i_hs = BubbleProtocol::initiate(SoftwareCryptoProvider, &[]).set_rs(responder_pub);
+    let i_hs = Channel::initiate(SoftwareCryptoProvider, &[]).set_rs(responder_pub);
 
     // Complete handshake.
     // msg1: -> e, es, s, ss, psk
@@ -586,7 +586,7 @@ async fn ikpsk1_rekey_bubble_initiator_snow_responder() {
 // ── K pattern: our initiator ↔ snow responder ───────────────────
 
 #[tokio::test]
-async fn k_bubble_initiator_snow_responder() {
+async fn k_hiss_initiator_snow_responder() {
     let provider = SoftwareCryptoProvider;
 
     let alice_static = provider.generate_static_key().await.unwrap();

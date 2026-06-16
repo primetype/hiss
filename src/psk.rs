@@ -1,9 +1,9 @@
-//! Pre-shared key type for the Bubble protocol.
+//! Pre-shared key type for the `Noise_*psk*` patterns.
 //!
-//! A [`Psk`] is a 32-byte symmetric secret established during the
-//! physical trust ceremony and used in every subsequent
-//! `Noise_IKpsk1` session between a pair of devices. It is zeroed
-//! on drop to prevent lingering in memory.
+//! A [`Psk`] is a 32-byte symmetric secret established out of band
+//! (e.g. a physical pairing / QR trust ceremony) and used in every
+//! subsequent `Noise_IKpsk1` session between a pair of devices. It is
+//! zeroed on drop to prevent lingering in memory.
 
 use rand_core::{CryptoRng, RngCore};
 use std::fmt;

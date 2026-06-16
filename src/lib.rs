@@ -1,7 +1,15 @@
-//! Cryptographic primitives for the Bubble protocol.
+//! `hiss` — the Noise Protocol Framework, resolved at compile time.
 //!
-//! This crate provides the building blocks used throughout Bubble's
-//! trust ceremony and encrypted transport:
+//! A `Noise<Pattern, Curve, Cipher, Hash>` is zero-sized: the handshake
+//! pattern, curve, cipher, and hash are encoded as types, so every
+//! buffer size is a `const` and every protocol misuse — a token out of
+//! order, a wrong-direction message — is a *compile error*. To anyone
+//! on the wire, a `hiss` channel is indistinguishable from static.
+//!
+//! Secret keys live in software or behind a pluggable, hardware-backed
+//! provider (Apple Secure Enclave today), and are wiped on drop. The
+//! crate provides the building blocks for an authenticated, encrypted
+//! transport:
 //!
 //! * **[`curve`]** — Elliptic curve operations (ECDSA signing, ECDH
 //!   key exchange) on NIST P-256 (secp256r1). Includes both a
@@ -33,8 +41,8 @@ pub mod zeroize;
 
 /// Compute a BLAKE2b-128 digest (16 bytes) of `data`.
 ///
-/// Used for `message_id` derivation in DAG headers — compact,
-/// collision-resistant identifier with 2^64 birthday resistance.
+/// A compact, collision-resistant identifier with 2^64 birthday
+/// resistance — e.g. for deriving short message IDs.
 pub fn blake2b_128(data: &[u8]) -> [u8; 16] {
     use cryptoxide::blake2b::Blake2b;
     use cryptoxide::digest::Digest;
@@ -48,7 +56,7 @@ pub fn blake2b_128(data: &[u8]) -> [u8; 16] {
 
 /// Compute a BLAKE2b-256 digest (32 bytes) of `data`.
 ///
-/// Used for `content_hash` in DAG message headers.
+/// A collision-resistant content hash.
 pub fn blake2b_256(data: &[u8]) -> [u8; 32] {
     use cryptoxide::blake2b::Blake2b;
     use cryptoxide::digest::Digest;
