@@ -222,7 +222,6 @@ pub mod error;
 pub mod handshake;
 pub mod hash;
 pub mod pattern;
-pub mod pre_message;
 #[allow(clippy::type_complexity)]
 pub mod process;
 pub mod role;
