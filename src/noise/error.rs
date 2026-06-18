@@ -73,4 +73,10 @@ pub enum HandshakeError {
     /// Rekey was called on a CipherState without a key.
     #[error("cannot rekey — no key has been established")]
     RekeyWithoutKey,
+
+    /// An I/O error occurred while reading or writing the handshake
+    /// transcript over a [`std::io`] (or, behind the `async-io`
+    /// feature, a `tokio::io`) stream.
+    #[error("handshake I/O error: {0}")]
+    Io(#[from] std::io::Error),
 }

@@ -221,6 +221,8 @@ pub mod error;
 #[allow(clippy::type_complexity)]
 pub mod handshake;
 pub mod hash;
+#[allow(clippy::type_complexity)]
+pub mod io_sync;
 pub mod pattern;
 #[allow(clippy::type_complexity)]
 pub mod process;
@@ -236,6 +238,7 @@ pub use self::cipher_state::CipherState;
 pub use self::curve::{Curve, P256};
 pub use self::error::HandshakeError;
 pub use self::handshake::{HandshakeState, Receiving, Sending};
+pub use self::io_sync::{SyncHandshake, SyncReceiving, SyncSending, SyncTransport};
 // Protocol re-exported from this module (defined below on Noise).
 pub use self::hash::{Blake2b, Hash};
 pub use self::pattern::{IKpsk1, K, Kpsk0, N, Pattern};
