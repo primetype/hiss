@@ -26,7 +26,7 @@
 //!   use its single (data-protection) keychain as before.
 
 use super::{Error, P256, P256Signature, P256r1PublicKey};
-use crate::curve::{CryptoProvider, SharedSecret};
+use crate::curve::{CryptoKeys, CryptoProvider, CryptoProviderAsync, SharedSecret};
 use core_foundation::{base::TCFType as _, data::CFData, dictionary::CFDictionary};
 use security_framework::{
     access_control::{ProtectionMode, SecAccessControl},
@@ -291,9 +291,9 @@ impl P256r1PrivateKey {
     }
 }
 
-// ── CryptoProvider ──────────────────────────────────────────────
+// ── CryptoProviderAsync ──────────────────────────────────────────────
 
-/// macOS Secure Enclave [`CryptoProvider`] for P-256.
+/// macOS Secure Enclave [`CryptoProviderAsync`] for P-256.
 ///
 /// Static keys are generated in the Secure Enclave and persisted
 /// to the Data Protection Keychain. Ephemeral keys use a
@@ -301,20 +301,50 @@ impl P256r1PrivateKey {
 #[derive(Clone, Copy)]
 pub struct SecureEnclaveCryptoProvider;
 
-impl CryptoProvider<P256> for SecureEnclaveCryptoProvider {
+/// Run a blocking Security-framework operation on Tokio's blocking
+/// thread pool.
+///
+/// Apple's `SecKey*` crypto calls are synchronous, blocking C functions
+/// with no async variant — and a Secure Enclave operation can stall for
+/// a meaningful time (including any keychain/biometric wait). Running
+/// them inline inside an `async fn` would block the async executor;
+/// [`spawn_blocking`](tokio::task::spawn_blocking) moves them to a
+/// dedicated blocking thread so the executor keeps making progress and
+/// the future genuinely suspends until the work completes.
+///
+/// Because this offloads, the [`CryptoProviderAsync`] futures here resolve on
+/// a worker thread (not the first poll) — so, unlike the software
+/// backend, `SecureEnclaveCryptoProvider` deliberately does **not**
+/// implement [`CryptoProvider`](crate::curve::CryptoProvider)
+/// and is not usable with the blocking `std::io` handshake.
+async fn offload<T, F>(op: F) -> Result<T, Error>
+where
+    F: FnOnce() -> Result<T, Error> + Send + 'static,
+    T: Send + 'static,
+{
+    tokio::task::spawn_blocking(op)
+        .await
+        .map_err(|e| Error::Platform(format!("Secure Enclave task failed to join: {e}")))?
+}
+
+impl CryptoKeys<P256> for SecureEnclaveCryptoProvider {
     type Error = Error;
     type PrivateKey = P256r1PrivateKey;
 
+    fn public_key(&self, key: &Self::PrivateKey) -> Result<P256r1PublicKey, Self::Error> {
+        // Cheap, local SecKey accessor — no Secure Enclave round-trip and
+        // no prompt — so it stays inline (the trait declares it sync).
+        key.public()
+    }
+}
+
+impl CryptoProviderAsync<P256> for SecureEnclaveCryptoProvider {
     async fn generate_static_key(&self) -> Result<Self::PrivateKey, Self::Error> {
-        P256r1PrivateKey::generate_secure_enclave()
+        offload(P256r1PrivateKey::generate_secure_enclave).await
     }
 
     async fn generate_ephemeral_key(&self) -> Result<Self::PrivateKey, Self::Error> {
-        P256r1PrivateKey::generate_ephemeral()
-    }
-
-    fn public_key(&self, key: &Self::PrivateKey) -> Result<P256r1PublicKey, Self::Error> {
-        key.public()
+        offload(P256r1PrivateKey::generate_ephemeral).await
     }
 
     async fn sign(
@@ -322,10 +352,46 @@ impl CryptoProvider<P256> for SecureEnclaveCryptoProvider {
         key: &Self::PrivateKey,
         message: &[u8],
     ) -> Result<P256Signature, Self::Error> {
-        key.sign(message)
+        let key = key.clone();
+        let message = message.to_vec();
+        offload(move || key.sign(&message)).await
     }
 
     async fn dh(
+        &self,
+        key: &Self::PrivateKey,
+        peer: &P256r1PublicKey,
+    ) -> Result<SharedSecret, Self::Error> {
+        let key = key.clone();
+        let peer = *peer;
+        offload(move || key.dh(&peer)).await
+    }
+}
+
+// Apple's Security-framework operations are synchronous, blocking C
+// calls — so the *synchronous* surface is simply those inherent ops,
+// run directly on the calling thread. (This is the right behaviour in a
+// blocking context; the async impl above offloads the same calls.) This
+// is what makes Secure Enclave keys usable with the blocking `std::io`
+// handshake, exactly as Apple's libraries expose them.
+impl CryptoProvider<P256> for SecureEnclaveCryptoProvider {
+    fn generate_static_key_sync(&self) -> Result<Self::PrivateKey, Self::Error> {
+        P256r1PrivateKey::generate_secure_enclave()
+    }
+
+    fn generate_ephemeral_key_sync(&self) -> Result<Self::PrivateKey, Self::Error> {
+        P256r1PrivateKey::generate_ephemeral()
+    }
+
+    fn sign_sync(
+        &self,
+        key: &Self::PrivateKey,
+        message: &[u8],
+    ) -> Result<P256Signature, Self::Error> {
+        key.sign(message)
+    }
+
+    fn dh_sync(
         &self,
         key: &Self::PrivateKey,
         peer: &P256r1PublicKey,
@@ -381,6 +447,27 @@ mod tests {
         let our_dh = sk2.dh(&pk1).unwrap();
 
         assert_eq!(apple_dh, our_dh);
+    }
+
+    /// Drive the async `CryptoProviderAsync` trait methods (which offload to
+    /// the Tokio blocking pool) end-to-end under a real runtime: generate
+    /// two ephemeral keys, agree, and confirm the DH matches both ways.
+    #[tokio::test]
+    async fn crypto_provider_offloaded_dh_roundtrip() {
+        let provider = SecureEnclaveCryptoProvider;
+
+        let a = provider.generate_ephemeral_key().await.unwrap();
+        let b = provider.generate_ephemeral_key().await.unwrap();
+        let a_pub = provider.public_key(&a).unwrap();
+        let b_pub = provider.public_key(&b).unwrap();
+
+        let ab = provider.dh(&a, &b_pub).await.unwrap();
+        let ba = provider.dh(&b, &a_pub).await.unwrap();
+        assert_eq!(ab, ba);
+
+        // The offloaded signing path round-trips too.
+        let sig = provider.sign(&a, b"hello").await.unwrap();
+        assert!(a_pub.verify(sig, b"hello"));
     }
 
     #[test]

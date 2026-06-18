@@ -5,7 +5,7 @@
 //! between Edwards and Montgomery forms, for Diffie–Hellman key
 //! exchange.
 //!
-//! This module implements the [`Curve`] and [`CryptoProvider`] traits,
+//! This module implements the [`Curve`] and [`CryptoProviderAsync`] traits,
 //! following the same pattern as the [`p256`](super::p256) module.
 //!
 //! # Backends
@@ -42,7 +42,7 @@ use cryptoxide::ed25519 as ed;
 use packtool::Packed;
 use rand_core::{CryptoRng, RngCore};
 
-use super::{CryptoProvider, Curve, SharedSecret};
+use super::{CryptoKeys, CryptoProviderAsync, Curve, SharedSecret};
 
 // ── Errors ─────────────────────────────────────────────────────
 
@@ -63,7 +63,7 @@ pub enum Error {
 /// Zero-sized type implementing [`Curve`] that ties together the
 /// concrete [`Ed25519PublicKey`], [`Ed25519Signature`], and
 /// [`SharedSecret`] types. Used as a type parameter for
-/// [`CryptoProvider`].
+/// [`CryptoProviderAsync`].
 pub struct Ed25519;
 
 impl Curve for Ed25519 {
@@ -278,9 +278,9 @@ impl fmt::Debug for SoftwareEd25519PrivateKey {
     }
 }
 
-// ── Software CryptoProvider ────────────────────────────────────
+// ── Software CryptoProviderAsync ────────────────────────────────────
 
-/// Pure-software [`CryptoProvider`] for Ed25519.
+/// Pure-software [`CryptoProviderAsync`] for Ed25519.
 ///
 /// Uses `cryptoxide` for all operations. Works on every platform
 /// (including WASM). All operations resolve immediately — no
@@ -288,10 +288,16 @@ impl fmt::Debug for SoftwareEd25519PrivateKey {
 #[derive(Clone, Copy)]
 pub struct SoftwareCryptoProvider;
 
-impl CryptoProvider<Ed25519> for SoftwareCryptoProvider {
+impl CryptoKeys<Ed25519> for SoftwareCryptoProvider {
     type Error = Error;
     type PrivateKey = SoftwareEd25519PrivateKey;
 
+    fn public_key(&self, key: &Self::PrivateKey) -> Result<Ed25519PublicKey, Self::Error> {
+        Ok(key.public_key())
+    }
+}
+
+impl CryptoProviderAsync<Ed25519> for SoftwareCryptoProvider {
     async fn generate_static_key(&self) -> Result<Self::PrivateKey, Self::Error> {
         // TODO: maybe this should error since this key is not
         // going to be static at all at this point.
@@ -300,10 +306,6 @@ impl CryptoProvider<Ed25519> for SoftwareCryptoProvider {
 
     async fn generate_ephemeral_key(&self) -> Result<Self::PrivateKey, Self::Error> {
         SoftwareEd25519PrivateKey::generate_os()
-    }
-
-    fn public_key(&self, key: &Self::PrivateKey) -> Result<Ed25519PublicKey, Self::Error> {
-        Ok(key.public_key())
     }
 
     async fn sign(
@@ -433,7 +435,7 @@ pub mod data_dir {
 /// The cleartext seed never leaves the runtime — what hits disk is
 /// the sealed envelope. The macOS arm of `store_seed` / `load_seed` /
 /// `delete_seed` is `async fn` to match the existing
-/// `CryptoProvider<P256>` async-trait pattern; the cleartext API
+/// `CryptoProviderAsync<P256>` async-trait pattern; the cleartext API
 /// surface (`&[u8; 32]` in / `Option<[u8; 32]>` out / unit out) is
 /// preserved per
 /// `.planning/phases/18.1-secure-enclave-codesigning/18.1-CONTEXT.md`
@@ -700,7 +702,7 @@ mod apple_macos_tests {
     use super::*;
 
     #[tokio::test]
-    #[ignore = "requires codesigned test binary on macOS (SE-backed CryptoProvider for the seal recipient)"]
+    #[ignore = "requires codesigned test binary on macOS (SE-backed CryptoProviderAsync for the seal recipient)"]
     async fn store_load_delete_round_trip() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let data_dir = tmp.path();
@@ -888,7 +890,7 @@ mod tests {
         assert_ne!(ss1, ss2);
     }
 
-    // ── CryptoProvider trait tests ───────────────────────────────
+    // ── CryptoProviderAsync trait tests ───────────────────────────────
 
     #[tokio::test]
     async fn provider_sign_and_dh() {

@@ -11,7 +11,7 @@
 //! 2. Both sides derive the same handshake hash
 //! 3. Transport messages can be exchanged bidirectionally
 
-use hiss::curve::CryptoProvider;
+use hiss::curve::{CryptoKeys, CryptoProviderAsync};
 use hiss::curve::p256::SoftwareCryptoProvider;
 use hiss::noise::*;
 use hiss::psk::Psk;

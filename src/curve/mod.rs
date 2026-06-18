@@ -8,9 +8,9 @@
 //! implement it so that generic code can be parameterised over curves
 //! without runtime dispatch.
 //!
-//! # CryptoProvider trait
+//! # CryptoProviderAsync trait
 //!
-//! [`CryptoProvider<C>`] abstracts over *how* a curve's operations
+//! [`CryptoProviderAsync<C>`] abstracts over *how* a curve's operations
 //! are performed. The same curve may be backed by a pure-software
 //! implementation or by hardware (Secure Enclave, StrongBox). The
 //! trait is async because hardware-backed operations may require
@@ -76,49 +76,86 @@ pub trait Curve {
     fn public_key_from_bytes(bytes: &[u8]) -> Result<Self::PublicKey, Self::Error>;
 }
 
-// ── CryptoProvider trait ────────────────────────────────────────
+// ── Provider trait family ────────────────────────────────────────
 
-/// Platform-agnostic interface for elliptic curve key operations.
+/// The shared identity of a crypto backend: its key/handle types and
+/// the (always cheap, always synchronous) public-key extraction.
 ///
-/// Generic over a [`Curve`], so the same trait serves P-256 today
-/// and any future curve (e.g. X25519/Ed25519). Implementations may
-/// delegate to hardware (Secure Enclave) or run in pure software
-/// (`eccoxide`).
-///
-/// All async methods return `Send` futures so callers can use them
-/// in multi-threaded runtimes (`tokio::spawn`). Both
-/// `SoftwareCryptoProvider` and `SecureEnclaveCryptoProvider`
-/// satisfy this — their key types are `Send`.
-pub trait CryptoProvider<C: Curve> {
+/// Both [`CryptoProvider`] (synchronous) and [`CryptoProviderAsync`]
+/// build on this, so a backend declares its `PrivateKey`/`Error` once
+/// and may implement either operation surface — or both — independently.
+/// Generic code that only needs the key types (e.g. the handshake state
+/// holder) is bounded on this base trait alone.
+pub trait CryptoKeys<C: Curve> {
+    /// Error type for this backend's operations.
     type Error: std::error::Error + Send + Sync;
 
     /// Opaque private key handle.
     ///
     /// On macOS this wraps a `SecKey`; in software it holds raw
     /// scalar bytes. Callers never inspect the key material
-    /// directly — all operations go through this trait.
+    /// directly — all operations go through these traits.
     type PrivateKey: Clone + Send;
 
+    /// Extract the public key from a private key.
+    fn public_key(&self, key: &Self::PrivateKey) -> Result<C::PublicKey, Self::Error>;
+}
+
+/// Synchronous elliptic-curve key operations.
+///
+/// The canonical provider surface, for backends whose operations run to
+/// completion on the calling thread — pure software (`eccoxide`) and the
+/// Apple Secure Enclave (whose Security-framework calls are synchronous,
+/// blocking C functions). It is what the blocking `std::io` handshake
+/// (`hiss::noise::SyncHandshake`) is generic over.
+///
+/// **Independent of [`CryptoProviderAsync`]** — a backend may implement
+/// this, that, or both. The `*_sync` suffixes distinguish these from the
+/// identically-named async methods when a backend implements both.
+pub trait CryptoProvider<C: Curve>: CryptoKeys<C> {
+    /// Generate a long-term static key pair, synchronously.
+    fn generate_static_key_sync(&self) -> Result<Self::PrivateKey, Self::Error>;
+
+    /// Generate an ephemeral key pair for a single handshake, synchronously.
+    fn generate_ephemeral_key_sync(&self) -> Result<Self::PrivateKey, Self::Error>;
+
+    /// ECDSA sign a message, synchronously (hash applied internally).
+    fn sign_sync(
+        &self,
+        key: &Self::PrivateKey,
+        message: &[u8],
+    ) -> Result<C::Signature, Self::Error>;
+
+    /// ECDH key exchange, synchronously, returning the shared secret.
+    fn dh_sync(
+        &self,
+        key: &Self::PrivateKey,
+        peer: &C::PublicKey,
+    ) -> Result<C::SharedSecret, Self::Error>;
+}
+
+/// Asynchronous elliptic-curve key operations.
+///
+/// For backends that genuinely suspend — hardware that may prompt for
+/// user presence, or remote/WASM backends (KMS, WebCrypto). The Apple
+/// Secure Enclave implements this by offloading its blocking calls to a
+/// worker thread (`spawn_blocking`) so the executor never blocks; pure
+/// software resolves immediately.
+///
+/// **Independent of [`CryptoProvider`]** — a genuinely-async backend need
+/// not (and may be unable to) provide synchronous operations. All methods
+/// return `Send` futures so callers can use them in multi-threaded
+/// runtimes (`tokio::spawn`).
+pub trait CryptoProviderAsync<C: Curve>: CryptoKeys<C> {
     /// Generate a long-term static key pair.
-    ///
-    /// On Apple platforms this creates a Secure Enclave key
-    /// persisted to the Data Protection Keychain. In software
-    /// it draws random bytes for a scalar.
     fn generate_static_key(
         &self,
     ) -> impl Future<Output = Result<Self::PrivateKey, Self::Error>> + Send;
 
     /// Generate an ephemeral key pair for a single Noise handshake.
-    ///
-    /// Never persisted. On Apple platforms this is a
-    /// software-backed `SecKey`; in the software backend it is
-    /// identical to a static key but not stored.
     fn generate_ephemeral_key(
         &self,
     ) -> impl Future<Output = Result<Self::PrivateKey, Self::Error>> + Send;
-
-    /// Extract the public key from a private key.
-    fn public_key(&self, key: &Self::PrivateKey) -> Result<C::PublicKey, Self::Error>;
 
     /// ECDSA sign a message (hash is applied internally).
     fn sign(

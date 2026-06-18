@@ -149,7 +149,7 @@
 //!
 //! # Async crypto provider
 //!
-//! Token methods are `async` because the [`CryptoProvider`] trait is
+//! Token methods are `async` because the [`CryptoProviderAsync`] trait is
 //! async-native. This allows pluggable crypto backends:
 //!
 //! - **Software** (`eccoxide`/`cryptoxide`) — resolves immediately.
@@ -211,7 +211,7 @@
 //!     .se().await?;
 //! ```
 //!
-//! [`CryptoProvider`]: crate::curve::CryptoProvider
+//! [`CryptoProviderAsync`]: crate::curve::CryptoProviderAsync
 
 pub(crate) mod buffers;
 pub mod cipher;
@@ -337,7 +337,7 @@ impl<P: Pattern, Cu: Curve, Ci: Cipher, H: Hash> Noise<P, Cu, Ci, H> {
     /// let hs = Channel::initiate(provider, &[])
     ///     .set_rs(responder_pub);
     /// ```
-    pub fn initiate<CP: crate::curve::CryptoProvider<Cu>>(
+    pub fn initiate<CP: crate::curve::CryptoProviderAsync<Cu>>(
         provider: CP,
         prologue: &[u8],
     ) -> HandshakeState<Self, Initiator, P::PreMessages, P::Messages, CP> {
@@ -357,7 +357,7 @@ impl<P: Pattern, Cu: Curve, Ci: Cipher, H: Hash> Noise<P, Cu, Ci, H> {
     /// let hs = Channel::respond(provider, &[])
     ///     .set_s(our_static)?;
     /// ```
-    pub fn respond<CP: crate::curve::CryptoProvider<Cu>>(
+    pub fn respond<CP: crate::curve::CryptoProviderAsync<Cu>>(
         provider: CP,
         prologue: &[u8],
     ) -> HandshakeState<Self, Responder, P::PreMessages, P::Messages, CP> {
@@ -368,7 +368,7 @@ impl<P: Pattern, Cu: Curve, Ci: Cipher, H: Hash> Noise<P, Cu, Ci, H> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::curve::CryptoProvider;
+    use crate::curve::{CryptoKeys, CryptoProviderAsync};
     use crate::curve::p256::{P256r1PrivateKey, P256r1PublicKey, SoftwareCryptoProvider};
     use crate::noise_message_size;
     use crate::psk::Psk;

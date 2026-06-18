@@ -81,7 +81,7 @@ fn eccoxide_pubkey_matches_snow_p256() {
 /// prologue mix_hash) and verify the result matches snow.
 #[tokio::test]
 async fn manual_n_replay_matches_snow() {
-    use hiss::curve::CryptoProvider;
+    use hiss::curve::{CryptoKeys, CryptoProviderAsync};
     use hiss::curve::p256::SoftwareCryptoProvider;
 
     let provider = SoftwareCryptoProvider;

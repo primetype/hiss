@@ -13,7 +13,7 @@
 //! interoperate with any standard SEC1 / RFC-conformant P-256 tooling.
 
 use super::{Error, P256, P256Signature, P256r1PublicKey};
-use crate::curve::{CryptoProvider, SharedSecret};
+use crate::curve::{CryptoKeys, CryptoProvider, CryptoProviderAsync, SharedSecret};
 
 use eccoxide::curve::sec2::p256r1::{Point, Scalar};
 use rand_core::{CryptoRng, RngCore};
@@ -121,7 +121,7 @@ impl P256r1PrivateKey {
     /// nonce-reuse / weak-RNG failure modes of randomized ECDSA. The `s`
     /// value is low-S normalized, so each signature has one canonical
     /// encoding. Returns `Result` only for parity with the
-    /// [`CryptoProvider`] trait; signing does not fail in practice.
+    /// [`CryptoProviderAsync`] trait; signing does not fail in practice.
     pub fn sign(&self, data: impl AsRef<[u8]>) -> Result<P256Signature, Error> {
         Ok(super::ecdsa_sign_rfc6979(&self.0, data.as_ref()))
     }
@@ -159,9 +159,9 @@ fn shared_secret_from(scalar: &Scalar, peer: &Point) -> Result<SharedSecret, Err
     Ok(SharedSecret::new(x.to_bytes()))
 }
 
-// ── CryptoProvider ──────────────────────────────────────────────
+// ── CryptoProviderAsync ──────────────────────────────────────────────
 
-/// Pure-software [`CryptoProvider`] for P-256.
+/// Pure-software [`CryptoProviderAsync`] for P-256.
 ///
 /// Uses `eccoxide` for all curve operations. Works on every
 /// platform (including WASM). All operations resolve immediately —
@@ -169,20 +169,22 @@ fn shared_secret_from(scalar: &Scalar, peer: &Point) -> Result<SharedSecret, Err
 #[derive(Clone, Copy)]
 pub struct SoftwareCryptoProvider;
 
-impl CryptoProvider<P256> for SoftwareCryptoProvider {
+impl CryptoKeys<P256> for SoftwareCryptoProvider {
     type Error = Error;
     type PrivateKey = P256r1PrivateKey;
 
+    fn public_key(&self, key: &Self::PrivateKey) -> Result<P256r1PublicKey, Self::Error> {
+        Ok(key.public())
+    }
+}
+
+impl CryptoProviderAsync<P256> for SoftwareCryptoProvider {
     async fn generate_static_key(&self) -> Result<Self::PrivateKey, Self::Error> {
         P256r1PrivateKey::generate()
     }
 
     async fn generate_ephemeral_key(&self) -> Result<Self::PrivateKey, Self::Error> {
         P256r1PrivateKey::generate()
-    }
-
-    fn public_key(&self, key: &Self::PrivateKey) -> Result<P256r1PublicKey, Self::Error> {
-        Ok(key.public())
     }
 
     async fn sign(
@@ -194,6 +196,34 @@ impl CryptoProvider<P256> for SoftwareCryptoProvider {
     }
 
     async fn dh(
+        &self,
+        key: &Self::PrivateKey,
+        peer: &P256r1PublicKey,
+    ) -> Result<SharedSecret, Self::Error> {
+        key.dh(peer)
+    }
+}
+
+// Software P-256 is synchronous end-to-end (eccoxide); the sync surface
+// is just the inherent operations, no offload, no `async`.
+impl CryptoProvider<P256> for SoftwareCryptoProvider {
+    fn generate_static_key_sync(&self) -> Result<Self::PrivateKey, Self::Error> {
+        P256r1PrivateKey::generate()
+    }
+
+    fn generate_ephemeral_key_sync(&self) -> Result<Self::PrivateKey, Self::Error> {
+        P256r1PrivateKey::generate()
+    }
+
+    fn sign_sync(
+        &self,
+        key: &Self::PrivateKey,
+        message: &[u8],
+    ) -> Result<P256Signature, Self::Error> {
+        key.sign(message)
+    }
+
+    fn dh_sync(
         &self,
         key: &Self::PrivateKey,
         peer: &P256r1PublicKey,
@@ -291,7 +321,7 @@ mod tests {
     }
 
     /// Exercises the [`SoftwareCryptoProvider`] through the
-    /// [`CryptoProvider`] trait — sign/verify and ECDH.
+    /// [`CryptoProviderAsync`] trait — sign/verify and ECDH.
     #[tokio::test]
     async fn provider_sign_and_dh() {
         let provider = SoftwareCryptoProvider;

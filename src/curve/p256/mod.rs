@@ -49,7 +49,7 @@ pub use self::software::{P256r1PrivateKey, SoftwareCryptoProvider};
 /// concrete [`P256r1PublicKey`], [`P256Signature`], and
 /// [`SharedSecret`] types. Used as a type parameter for
 /// [`Noise`](crate::noise::Noise) and
-/// [`CryptoProvider`](super::CryptoProvider).
+/// [`CryptoProviderAsync`](super::CryptoProviderAsync).
 pub struct P256;
 
 impl Curve for P256 {

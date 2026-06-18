@@ -6,7 +6,7 @@
 
 use criterion::{Criterion, criterion_group, criterion_main};
 
-use hiss::curve::CryptoProvider;
+use hiss::curve::{CryptoKeys, CryptoProviderAsync};
 use hiss::curve::p256::SoftwareCryptoProvider;
 use hiss::noise::*;
 use hiss::psk::Psk;
