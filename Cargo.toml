@@ -16,6 +16,17 @@ hex = "0.4"
 packtool = "0.4"
 rand_core = "0.9"
 thiserror = "2"
+# Only pulled in by the `async-io` feature (the `tokio::io` handshake
+# layer). On macOS/iOS tokio is already a non-optional platform dep below
+# (for the Apple Secure Enclave offload); there the feature merely adds
+# `io-util` on top of `rt`.
+tokio = { version = "1.50", default-features = false, optional = true }
+
+[features]
+# The blocking `std::io` handshake (`io_sync`) is always available and
+# needs no runtime. `async-io` adds the `tokio::io` mirror (`io_async`),
+# pulling in tokio with its I/O extension traits.
+async-io = ["dep:tokio", "tokio/io-util"]
 
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 core-foundation = { version = "0.10", features = [] }
