@@ -37,6 +37,10 @@ use security_framework::{
 
 const TAG: &str = "uk.co.primetype.hiss.p256";
 
+// `Clone` here is a CoreFoundation retain of the `SecKey` handle — no
+// secret material is copied (the key stays in the keychain / Secure
+// Enclave). It is required so the async impl can move the handle into a
+// `spawn_blocking` closure; the trait deliberately does not mandate it.
 #[derive(Clone)]
 pub struct P256r1PrivateKey {
     key: SecKey,

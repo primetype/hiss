@@ -95,7 +95,13 @@ pub trait CryptoKeys<C: Curve> {
     /// On macOS this wraps a `SecKey`; in software it holds raw
     /// scalar bytes. Callers never inspect the key material
     /// directly — all operations go through these traits.
-    type PrivateKey: Clone + Send;
+    ///
+    /// Intentionally **not** `Clone`: secret keys should not be silently
+    /// duplicated. A backend whose handle is cheap to copy (e.g. an Apple
+    /// `SecKey` — a refcounted retain, not a copy of key material) may
+    /// still derive `Clone` on its own concrete type; the software
+    /// backends, which hold raw secret bytes, do not.
+    type PrivateKey: Send;
 
     /// Extract the public key from a private key.
     fn public_key(&self, key: &Self::PrivateKey) -> Result<C::PublicKey, Self::Error>;

@@ -245,15 +245,6 @@ impl SoftwareEd25519PrivateKey {
     }
 }
 
-impl Clone for SoftwareEd25519PrivateKey {
-    fn clone(&self) -> Self {
-        Self {
-            seed: self.seed,
-            keypair: self.keypair,
-        }
-    }
-}
-
 impl Drop for SoftwareEd25519PrivateKey {
     fn drop(&mut self) {
         crate::zeroize::zeroize_array(&mut self.seed);

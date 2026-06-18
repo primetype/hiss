@@ -19,7 +19,6 @@ use eccoxide::curve::sec2::p256r1::{Point, Scalar};
 use rand_core::{CryptoRng, RngCore};
 use std::fmt;
 
-#[derive(Clone)]
 pub struct P256r1PrivateKey([u8; Self::SIZE]);
 
 impl P256r1PrivateKey {
