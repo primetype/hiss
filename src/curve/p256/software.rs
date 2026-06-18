@@ -178,15 +178,15 @@ impl CryptoKeys<P256> for SoftwareCryptoProvider {
 }
 
 impl CryptoProviderAsync<P256> for SoftwareCryptoProvider {
-    async fn generate_static_key(&self) -> Result<Self::PrivateKey, Self::Error> {
+    async fn generate_static_key_async(&self) -> Result<Self::PrivateKey, Self::Error> {
         P256r1PrivateKey::generate()
     }
 
-    async fn generate_ephemeral_key(&self) -> Result<Self::PrivateKey, Self::Error> {
+    async fn generate_ephemeral_key_async(&self) -> Result<Self::PrivateKey, Self::Error> {
         P256r1PrivateKey::generate()
     }
 
-    async fn sign(
+    async fn sign_async(
         &self,
         key: &Self::PrivateKey,
         message: &[u8],
@@ -194,7 +194,7 @@ impl CryptoProviderAsync<P256> for SoftwareCryptoProvider {
         key.sign(message)
     }
 
-    async fn dh(
+    async fn dh_async(
         &self,
         key: &Self::PrivateKey,
         peer: &P256r1PublicKey,
@@ -206,15 +206,15 @@ impl CryptoProviderAsync<P256> for SoftwareCryptoProvider {
 // Software P-256 is synchronous end-to-end (eccoxide); the sync surface
 // is just the inherent operations, no offload, no `async`.
 impl CryptoProvider<P256> for SoftwareCryptoProvider {
-    fn generate_static_key_sync(&self) -> Result<Self::PrivateKey, Self::Error> {
+    fn generate_static_key(&self) -> Result<Self::PrivateKey, Self::Error> {
         P256r1PrivateKey::generate()
     }
 
-    fn generate_ephemeral_key_sync(&self) -> Result<Self::PrivateKey, Self::Error> {
+    fn generate_ephemeral_key(&self) -> Result<Self::PrivateKey, Self::Error> {
         P256r1PrivateKey::generate()
     }
 
-    fn sign_sync(
+    fn sign(
         &self,
         key: &Self::PrivateKey,
         message: &[u8],
@@ -222,7 +222,7 @@ impl CryptoProvider<P256> for SoftwareCryptoProvider {
         key.sign(message)
     }
 
-    fn dh_sync(
+    fn dh(
         &self,
         key: &Self::PrivateKey,
         peer: &P256r1PublicKey,
@@ -325,21 +325,21 @@ mod tests {
     async fn provider_sign_and_dh() {
         let provider = SoftwareCryptoProvider;
 
-        let sk1 = provider.generate_static_key().await.unwrap();
+        let sk1 = provider.generate_static_key_async().await.unwrap();
         let pk1 = provider.public_key(&sk1).unwrap();
 
-        let sk2 = provider.generate_ephemeral_key().await.unwrap();
+        let sk2 = provider.generate_ephemeral_key_async().await.unwrap();
         let pk2 = provider.public_key(&sk2).unwrap();
 
         // Sign and verify
         const MSG: &[u8] = b"hello hiss";
-        let sig = provider.sign(&sk1, MSG).await.unwrap();
+        let sig = provider.sign_async(&sk1, MSG).await.unwrap();
         assert!(pk1.verify(sig, MSG));
         assert!(!pk2.verify(sig, MSG));
 
         // DH symmetry
-        let ss1 = provider.dh(&sk1, &pk2).await.unwrap();
-        let ss2 = provider.dh(&sk2, &pk1).await.unwrap();
+        let ss1 = provider.dh_async(&sk1, &pk2).await.unwrap();
+        let ss2 = provider.dh_async(&sk2, &pk1).await.unwrap();
         assert_eq!(ss1, ss2);
     }
 

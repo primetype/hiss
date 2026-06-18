@@ -176,7 +176,7 @@ where
 {
     let e = inner
         .provider
-        .generate_ephemeral_key()
+        .generate_ephemeral_key_async()
         .await
         .map_err(|e| HandshakeError::Crypto(e.to_string()))?;
     let e_pub = inner
@@ -291,7 +291,7 @@ where
         .ok_or(HandshakeError::MissingRemoteEphemeral)?;
     let ss = inner
         .provider
-        .dh(e, re)
+        .dh_async(e, re)
         .await
         .map_err(|e| HandshakeError::Crypto(e.to_string()))?;
     inner.symmetric.mix_key(ss.as_ref());
@@ -318,7 +318,7 @@ where
         .ok_or(HandshakeError::MissingRemoteStatic)?;
     let ss = inner
         .provider
-        .dh(e, rs)
+        .dh_async(e, rs)
         .await
         .map_err(|e| HandshakeError::Crypto(e.to_string()))?;
     inner.symmetric.mix_key(ss.as_ref());
@@ -342,7 +342,7 @@ where
         .ok_or(HandshakeError::MissingRemoteEphemeral)?;
     let ss = inner
         .provider
-        .dh(s, re)
+        .dh_async(s, re)
         .await
         .map_err(|e| HandshakeError::Crypto(e.to_string()))?;
     inner.symmetric.mix_key(ss.as_ref());
@@ -366,7 +366,7 @@ where
         .ok_or(HandshakeError::MissingRemoteEphemeral)?;
     let ss = inner
         .provider
-        .dh(s, re)
+        .dh_async(s, re)
         .await
         .map_err(|e| HandshakeError::Crypto(e.to_string()))?;
     inner.symmetric.mix_key(ss.as_ref());
@@ -393,7 +393,7 @@ where
         .ok_or(HandshakeError::MissingRemoteStatic)?;
     let ss = inner
         .provider
-        .dh(e, rs)
+        .dh_async(e, rs)
         .await
         .map_err(|e| HandshakeError::Crypto(e.to_string()))?;
     inner.symmetric.mix_key(ss.as_ref());
@@ -417,7 +417,7 @@ where
         .ok_or(HandshakeError::MissingRemoteStatic)?;
     let ss = inner
         .provider
-        .dh(s, rs)
+        .dh_async(s, rs)
         .await
         .map_err(|e| HandshakeError::Crypto(e.to_string()))?;
     inner.symmetric.mix_key(ss.as_ref());

@@ -116,24 +116,26 @@ pub trait CryptoKeys<C: Curve> {
 /// (`hiss::noise::SyncHandshake`) is generic over.
 ///
 /// **Independent of [`CryptoProviderAsync`]** — a backend may implement
-/// this, that, or both. The `*_sync` suffixes distinguish these from the
-/// identically-named async methods when a backend implements both.
+/// this, that, or both. As the canonical, always-available surface these
+/// take the plain method names (`generate_static_key`, `sign`, `dh`, …);
+/// the async trait suffixes its methods `_async`, so a backend that
+/// implements both has no name clash.
 pub trait CryptoProvider<C: Curve>: CryptoKeys<C> {
     /// Generate a long-term static key pair, synchronously.
-    fn generate_static_key_sync(&self) -> Result<Self::PrivateKey, Self::Error>;
+    fn generate_static_key(&self) -> Result<Self::PrivateKey, Self::Error>;
 
     /// Generate an ephemeral key pair for a single handshake, synchronously.
-    fn generate_ephemeral_key_sync(&self) -> Result<Self::PrivateKey, Self::Error>;
+    fn generate_ephemeral_key(&self) -> Result<Self::PrivateKey, Self::Error>;
 
     /// ECDSA sign a message, synchronously (hash applied internally).
-    fn sign_sync(
+    fn sign(
         &self,
         key: &Self::PrivateKey,
         message: &[u8],
     ) -> Result<C::Signature, Self::Error>;
 
     /// ECDH key exchange, synchronously, returning the shared secret.
-    fn dh_sync(
+    fn dh(
         &self,
         key: &Self::PrivateKey,
         peer: &C::PublicKey,
@@ -151,27 +153,29 @@ pub trait CryptoProvider<C: Curve>: CryptoKeys<C> {
 /// **Independent of [`CryptoProvider`]** — a genuinely-async backend need
 /// not (and may be unable to) provide synchronous operations. All methods
 /// return `Send` futures so callers can use them in multi-threaded
-/// runtimes (`tokio::spawn`).
+/// runtimes (`tokio::spawn`). They are suffixed `_async` to mark this as
+/// the non-default surface and to avoid clashing with the synchronous
+/// [`CryptoProvider`] when a backend implements both.
 pub trait CryptoProviderAsync<C: Curve>: CryptoKeys<C> {
     /// Generate a long-term static key pair.
-    fn generate_static_key(
+    fn generate_static_key_async(
         &self,
     ) -> impl Future<Output = Result<Self::PrivateKey, Self::Error>> + Send;
 
     /// Generate an ephemeral key pair for a single Noise handshake.
-    fn generate_ephemeral_key(
+    fn generate_ephemeral_key_async(
         &self,
     ) -> impl Future<Output = Result<Self::PrivateKey, Self::Error>> + Send;
 
     /// ECDSA sign a message (hash is applied internally).
-    fn sign(
+    fn sign_async(
         &self,
         key: &Self::PrivateKey,
         message: &[u8],
     ) -> impl Future<Output = Result<C::Signature, Self::Error>> + Send;
 
     /// ECDH key exchange, returning the derived shared secret.
-    fn dh(
+    fn dh_async(
         &self,
         key: &Self::PrivateKey,
         peer: &C::PublicKey,

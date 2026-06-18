@@ -30,7 +30,7 @@ fn bench_n_hiss(c: &mut Criterion) {
             rt.block_on(async {
                 let provider = SoftwareCryptoProvider;
 
-                let responder_static = provider.generate_static_key().await.unwrap();
+                let responder_static = provider.generate_static_key_async().await.unwrap();
                 let responder_pub = provider.public_key(&responder_static).unwrap();
 
                 type NoiseSeal = Noise<N, P256, ChaChaPoly, Blake2b>;
@@ -113,8 +113,8 @@ fn bench_ikpsk1_hiss(c: &mut Criterion) {
             rt.block_on(async {
                 let provider = SoftwareCryptoProvider;
 
-                let i_static = provider.generate_static_key().await.unwrap();
-                let r_static = provider.generate_static_key().await.unwrap();
+                let i_static = provider.generate_static_key_async().await.unwrap();
+                let r_static = provider.generate_static_key_async().await.unwrap();
                 let r_pub = provider.public_key(&r_static).unwrap();
                 let psk = Psk::from_bytes([0xAA; 32]);
 
@@ -245,7 +245,7 @@ fn bench_transport_hiss(c: &mut Criterion) {
     let (mut sender, mut receiver) = rt.block_on(async {
         let provider = SoftwareCryptoProvider;
 
-        let r_static = provider.generate_static_key().await.unwrap();
+        let r_static = provider.generate_static_key_async().await.unwrap();
         let r_pub = provider.public_key(&r_static).unwrap();
 
         type NoiseSeal = Noise<N, P256, ChaChaPoly, Blake2b>;

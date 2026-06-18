@@ -103,7 +103,7 @@ where
 {
     let e = inner
         .provider
-        .generate_ephemeral_key_sync()
+        .generate_ephemeral_key()
         .map_err(|e| HandshakeError::Crypto(e.to_string()))?;
     let e_pub = inner
         .provider
@@ -140,7 +140,7 @@ where
         .ok_or(HandshakeError::MissingRemoteStatic)?;
     let ss = inner
         .provider
-        .dh_sync(e, rs)
+        .dh(e, rs)
         .map_err(|e| HandshakeError::Crypto(e.to_string()))?;
     inner.symmetric.mix_key(ss.as_ref());
     Ok(())
@@ -164,7 +164,7 @@ where
         .ok_or(HandshakeError::MissingRemoteEphemeral)?;
     let ss = inner
         .provider
-        .dh_sync(s, re)
+        .dh(s, re)
         .map_err(|e| HandshakeError::Crypto(e.to_string()))?;
     inner.symmetric.mix_key(ss.as_ref());
     Ok(())
@@ -191,7 +191,7 @@ where
         .ok_or(HandshakeError::MissingRemoteEphemeral)?;
     let ss = inner
         .provider
-        .dh_sync(e, re)
+        .dh(e, re)
         .map_err(|e| HandshakeError::Crypto(e.to_string()))?;
     inner.symmetric.mix_key(ss.as_ref());
     Ok(())
@@ -215,7 +215,7 @@ where
         .ok_or(HandshakeError::MissingRemoteEphemeral)?;
     let ss = inner
         .provider
-        .dh_sync(s, re)
+        .dh(s, re)
         .map_err(|e| HandshakeError::Crypto(e.to_string()))?;
     inner.symmetric.mix_key(ss.as_ref());
     Ok(())
@@ -242,7 +242,7 @@ where
         .ok_or(HandshakeError::MissingRemoteStatic)?;
     let ss = inner
         .provider
-        .dh_sync(e, rs)
+        .dh(e, rs)
         .map_err(|e| HandshakeError::Crypto(e.to_string()))?;
     inner.symmetric.mix_key(ss.as_ref());
     Ok(())
@@ -266,7 +266,7 @@ where
         .ok_or(HandshakeError::MissingRemoteStatic)?;
     let ss = inner
         .provider
-        .dh_sync(s, rs)
+        .dh(s, rs)
         .map_err(|e| HandshakeError::Crypto(e.to_string()))?;
     inner.symmetric.mix_key(ss.as_ref());
     Ok(())
@@ -1195,7 +1195,7 @@ mod tests {
     #[test]
     fn n_sync_seal_open_roundtrip() {
         let provider = SoftwareCryptoProvider;
-        let recipient_static = provider.generate_static_key_sync().unwrap();
+        let recipient_static = provider.generate_static_key().unwrap();
         let recipient_pub = provider.public_key(&recipient_static).unwrap();
 
         // ── Seal (initiator) — stream into an owned Vec ──────────────
@@ -1245,7 +1245,7 @@ mod tests {
     #[test]
     fn n_sync_tampered_ephemeral_rejected() {
         let provider = SoftwareCryptoProvider;
-        let recipient_static = provider.generate_static_key_sync().unwrap();
+        let recipient_static = provider.generate_static_key().unwrap();
         let recipient_pub = provider.public_key(&recipient_static).unwrap();
 
         let sealer = SyncHandshake::<Seal, Initiator, _, _, _, _>::initiate(
@@ -1282,7 +1282,7 @@ mod tests {
         use crate::curve::p256::SecureEnclaveCryptoProvider;
 
         let provider = SecureEnclaveCryptoProvider;
-        let recipient_static = provider.generate_ephemeral_key_sync().unwrap();
+        let recipient_static = provider.generate_ephemeral_key().unwrap();
         let recipient_pub = provider.public_key(&recipient_static).unwrap();
 
         let sealer = SyncHandshake::<Seal, Initiator, _, _, _, _>::initiate(
@@ -1330,9 +1330,9 @@ mod tests {
     #[tokio::test]
     async fn ikpsk1_sync_initiator_vs_buffer_core() {
         let provider = SoftwareCryptoProvider;
-        let initiator_static = provider.generate_static_key_sync().unwrap();
+        let initiator_static = provider.generate_static_key().unwrap();
         let initiator_pub = provider.public_key(&initiator_static).unwrap();
-        let responder_static = provider.generate_static_key_sync().unwrap();
+        let responder_static = provider.generate_static_key().unwrap();
         let responder_pub = provider.public_key(&responder_static).unwrap();
         let psk = Psk::from_bytes([0xAA; 32]);
 
@@ -1406,9 +1406,9 @@ mod tests {
     #[tokio::test]
     async fn ikpsk1_sync_responder_vs_buffer_core() {
         let provider = SoftwareCryptoProvider;
-        let initiator_static = provider.generate_static_key_sync().unwrap();
+        let initiator_static = provider.generate_static_key().unwrap();
         let initiator_pub = provider.public_key(&initiator_static).unwrap();
-        let responder_static = provider.generate_static_key_sync().unwrap();
+        let responder_static = provider.generate_static_key().unwrap();
         let responder_pub = provider.public_key(&responder_static).unwrap();
         let psk = Psk::from_bytes([0xBB; 32]);
 
@@ -1477,9 +1477,9 @@ mod tests {
     #[test]
     fn k_sync_round_trip() {
         let provider = SoftwareCryptoProvider;
-        let alice_static = provider.generate_static_key_sync().unwrap();
+        let alice_static = provider.generate_static_key().unwrap();
         let alice_pub = provider.public_key(&alice_static).unwrap();
-        let bob_static = provider.generate_static_key_sync().unwrap();
+        let bob_static = provider.generate_static_key().unwrap();
         let bob_pub = provider.public_key(&bob_static).unwrap();
         let payload = [0x42u8; 32];
 

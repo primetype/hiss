@@ -426,7 +426,7 @@ mod tests {
         let provider = SoftwareCryptoProvider;
 
         // The "recipient" — in practice, the device's own Secure Enclave key.
-        let recipient_static = provider.generate_static_key().await.unwrap();
+        let recipient_static = provider.generate_static_key_async().await.unwrap();
         let recipient_pub = provider.public_key(&recipient_static).unwrap();
 
         let psk_to_seal = Psk::from_bytes([0x42; 32]);
@@ -469,7 +469,7 @@ mod tests {
     async fn noise_n_tampered_ephemeral_rejected() {
         let provider = SoftwareCryptoProvider;
 
-        let recipient_static = provider.generate_static_key().await.unwrap();
+        let recipient_static = provider.generate_static_key_async().await.unwrap();
         let recipient_pub = provider.public_key(&recipient_static).unwrap();
 
         let sealer = NoiseSeal::initiate(SoftwareCryptoProvider, &[]).set_rs(recipient_pub);
@@ -503,7 +503,7 @@ mod tests {
     async fn noise_n_tampered_tag_rejected() {
         let provider = SoftwareCryptoProvider;
 
-        let recipient_static = provider.generate_static_key().await.unwrap();
+        let recipient_static = provider.generate_static_key_async().await.unwrap();
         let recipient_pub = provider.public_key(&recipient_static).unwrap();
 
         let sealer = NoiseSeal::initiate(SoftwareCryptoProvider, &[]).set_rs(recipient_pub);
@@ -558,10 +558,10 @@ mod tests {
         let provider = SoftwareCryptoProvider;
 
         // Alice (sender) and Bob (recipient) each have static keys.
-        let alice_static = provider.generate_static_key().await.unwrap();
+        let alice_static = provider.generate_static_key_async().await.unwrap();
         let alice_pub = provider.public_key(&alice_static).unwrap();
 
-        let bob_static = provider.generate_static_key().await.unwrap();
+        let bob_static = provider.generate_static_key_async().await.unwrap();
         let bob_pub = provider.public_key(&bob_static).unwrap();
 
         let payload: [u8; 32] = [0x42; 32];
@@ -619,10 +619,10 @@ mod tests {
     async fn noise_kpsk0_seal_open() {
         let provider = SoftwareCryptoProvider;
 
-        let alice_static = provider.generate_static_key().await.unwrap();
+        let alice_static = provider.generate_static_key_async().await.unwrap();
         let alice_pub = provider.public_key(&alice_static).unwrap();
 
-        let bob_static = provider.generate_static_key().await.unwrap();
+        let bob_static = provider.generate_static_key_async().await.unwrap();
         let bob_pub = provider.public_key(&bob_static).unwrap();
 
         let psk = Psk::from_bytes([0xBB; 32]);
@@ -683,10 +683,10 @@ mod tests {
     async fn noise_kpsk0_wrong_psk_fails() {
         let provider = SoftwareCryptoProvider;
 
-        let alice_static = provider.generate_static_key().await.unwrap();
+        let alice_static = provider.generate_static_key_async().await.unwrap();
         let alice_pub = provider.public_key(&alice_static).unwrap();
 
-        let bob_static = provider.generate_static_key().await.unwrap();
+        let bob_static = provider.generate_static_key_async().await.unwrap();
         let bob_pub = provider.public_key(&bob_static).unwrap();
 
         let psk = Psk::from_bytes([0xBB; 32]);
@@ -755,10 +755,10 @@ mod tests {
         let provider = SoftwareCryptoProvider;
 
         // ── Key generation ──────────────────────────────────────
-        let initiator_static = provider.generate_static_key().await.unwrap();
+        let initiator_static = provider.generate_static_key_async().await.unwrap();
         let initiator_pub = provider.public_key(&initiator_static).unwrap();
 
-        let responder_static = provider.generate_static_key().await.unwrap();
+        let responder_static = provider.generate_static_key_async().await.unwrap();
         let responder_pub = provider.public_key(&responder_static).unwrap();
 
         // PSK established during the QR ceremony.
@@ -1031,7 +1031,7 @@ mod tests {
     #[tokio::test]
     async fn wrong_message_length_rejected() {
         let provider = SoftwareCryptoProvider;
-        let responder_static = provider.generate_static_key().await.unwrap();
+        let responder_static = provider.generate_static_key_async().await.unwrap();
 
         let r_hs = Channel::respond(SoftwareCryptoProvider, &[])
             .set_s(responder_static)
@@ -1052,7 +1052,7 @@ mod tests {
     #[tokio::test]
     async fn expected_message_size_reports_correctly() {
         let provider = SoftwareCryptoProvider;
-        let responder_static = provider.generate_static_key().await.unwrap();
+        let responder_static = provider.generate_static_key_async().await.unwrap();
 
         let r_hs = Channel::respond(SoftwareCryptoProvider, &[])
             .set_s(responder_static)
@@ -1066,8 +1066,8 @@ mod tests {
     async fn corrupted_encrypted_static_in_msg1_rejected() {
         let provider = SoftwareCryptoProvider;
 
-        let initiator_static = provider.generate_static_key().await.unwrap();
-        let responder_static = provider.generate_static_key().await.unwrap();
+        let initiator_static = provider.generate_static_key_async().await.unwrap();
+        let responder_static = provider.generate_static_key_async().await.unwrap();
         let responder_pub = provider.public_key(&responder_static).unwrap();
 
         let psk = Psk::from_bytes([0xBB; 32]);
@@ -1114,8 +1114,8 @@ mod tests {
     async fn mismatched_psk_fails() {
         let provider = SoftwareCryptoProvider;
 
-        let initiator_static = provider.generate_static_key().await.unwrap();
-        let responder_static = provider.generate_static_key().await.unwrap();
+        let initiator_static = provider.generate_static_key_async().await.unwrap();
+        let responder_static = provider.generate_static_key_async().await.unwrap();
         let responder_pub = provider.public_key(&responder_static).unwrap();
 
         let i_psk = Psk::from_bytes([0xAA; 32]);
@@ -1164,8 +1164,8 @@ mod tests {
     async fn transport_corrupted_ciphertext_rejected() {
         let provider = SoftwareCryptoProvider;
 
-        let initiator_static = provider.generate_static_key().await.unwrap();
-        let responder_static = provider.generate_static_key().await.unwrap();
+        let initiator_static = provider.generate_static_key_async().await.unwrap();
+        let responder_static = provider.generate_static_key_async().await.unwrap();
         let responder_pub = provider.public_key(&responder_static).unwrap();
         let psk = Psk::from_bytes([0xCC; 32]);
 
@@ -1235,8 +1235,8 @@ mod tests {
     async fn transport_multiple_messages_nonce_advances() {
         let provider = SoftwareCryptoProvider;
 
-        let initiator_static = provider.generate_static_key().await.unwrap();
-        let responder_static = provider.generate_static_key().await.unwrap();
+        let initiator_static = provider.generate_static_key_async().await.unwrap();
+        let responder_static = provider.generate_static_key_async().await.unwrap();
         let responder_pub = provider.public_key(&responder_static).unwrap();
         let psk = Psk::from_bytes([0xDD; 32]);
 
@@ -1323,9 +1323,9 @@ mod tests {
     async fn ikpsk1_wrong_responder_key_rejected() {
         let provider = SoftwareCryptoProvider;
 
-        let initiator_static = provider.generate_static_key().await.unwrap();
-        let responder_static = provider.generate_static_key().await.unwrap();
-        let wrong_static = provider.generate_static_key().await.unwrap();
+        let initiator_static = provider.generate_static_key_async().await.unwrap();
+        let responder_static = provider.generate_static_key_async().await.unwrap();
+        let wrong_static = provider.generate_static_key_async().await.unwrap();
         let wrong_pub = provider.public_key(&wrong_static).unwrap();
         let psk = Psk::from_bytes([0xCC; 32]);
 
@@ -1375,8 +1375,8 @@ mod tests {
     async fn transport_keys_are_directional() {
         let provider = SoftwareCryptoProvider;
 
-        let initiator_static = provider.generate_static_key().await.unwrap();
-        let responder_static = provider.generate_static_key().await.unwrap();
+        let initiator_static = provider.generate_static_key_async().await.unwrap();
+        let responder_static = provider.generate_static_key_async().await.unwrap();
         let responder_pub = provider.public_key(&responder_static).unwrap();
         let psk = Psk::from_bytes([0xFF; 32]);
 
@@ -1463,7 +1463,7 @@ mod tests {
                 P256r1PrivateKey::from_bytes(responder_bytes).expect("valid test scalar");
             let responder_pub = responder_static.public();
 
-            let initiator_static = SoftwareCryptoProvider.generate_static_key().await.unwrap();
+            let initiator_static = SoftwareCryptoProvider.generate_static_key_async().await.unwrap();
 
             let i_hs = Channel::initiate(SoftwareCryptoProvider, &[]).set_rs(responder_pub);
 
@@ -1528,9 +1528,9 @@ mod tests {
     async fn ikpsk1_wrong_initiator_static_in_msg1() {
         let provider = SoftwareCryptoProvider;
 
-        let initiator_static = provider.generate_static_key().await.unwrap();
+        let initiator_static = provider.generate_static_key_async().await.unwrap();
         let initiator_pub = provider.public_key(&initiator_static).unwrap();
-        let responder_static = provider.generate_static_key().await.unwrap();
+        let responder_static = provider.generate_static_key_async().await.unwrap();
         let responder_pub = provider.public_key(&responder_static).unwrap();
         let psk = Psk::from_bytes([0xCC; 32]);
 
@@ -1541,7 +1541,7 @@ mod tests {
         // the handshake completes — but the responder sees a different
         // initiator identity. The application layer must verify the
         // revealed static key matches the expected peer.
-        let wrong_static = provider.generate_static_key().await.unwrap();
+        let wrong_static = provider.generate_static_key_async().await.unwrap();
 
         let i_hs = Channel::initiate(SoftwareCryptoProvider, &[]).set_rs(responder_pub);
 
@@ -1612,8 +1612,8 @@ mod tests {
     async fn ikpsk1_corrupted_msg1_rejected() {
         let provider = SoftwareCryptoProvider;
 
-        let initiator_static = provider.generate_static_key().await.unwrap();
-        let responder_static = provider.generate_static_key().await.unwrap();
+        let initiator_static = provider.generate_static_key_async().await.unwrap();
+        let responder_static = provider.generate_static_key_async().await.unwrap();
         let responder_pub = provider.public_key(&responder_static).unwrap();
         let psk = Psk::from_bytes([0xDD; 32]);
 
@@ -1665,8 +1665,8 @@ mod tests {
     async fn ikpsk1_corrupted_msg2_rejected() {
         let provider = SoftwareCryptoProvider;
 
-        let initiator_static = provider.generate_static_key().await.unwrap();
-        let responder_static = provider.generate_static_key().await.unwrap();
+        let initiator_static = provider.generate_static_key_async().await.unwrap();
+        let responder_static = provider.generate_static_key_async().await.unwrap();
         let responder_pub = provider.public_key(&responder_static).unwrap();
         let psk = Psk::from_bytes([0xDD; 32]);
 
@@ -1733,8 +1733,8 @@ mod tests {
     async fn transport_replayed_message_rejected() {
         let provider = SoftwareCryptoProvider;
 
-        let initiator_static = provider.generate_static_key().await.unwrap();
-        let responder_static = provider.generate_static_key().await.unwrap();
+        let initiator_static = provider.generate_static_key_async().await.unwrap();
+        let responder_static = provider.generate_static_key_async().await.unwrap();
         let responder_pub = provider.public_key(&responder_static).unwrap();
         let psk = Psk::from_bytes([0xEE; 32]);
 
@@ -1808,8 +1808,8 @@ mod tests {
     async fn transport_enforces_max_message_length() {
         let provider = SoftwareCryptoProvider;
 
-        let initiator_static = provider.generate_static_key().await.unwrap();
-        let responder_static = provider.generate_static_key().await.unwrap();
+        let initiator_static = provider.generate_static_key_async().await.unwrap();
+        let responder_static = provider.generate_static_key_async().await.unwrap();
         let responder_pub = provider.public_key(&responder_static).unwrap();
         let psk = Psk::from_bytes([0xFF; 32]);
 
@@ -1901,8 +1901,8 @@ mod tests {
     async fn transport_rekey_then_communicate() {
         let provider = SoftwareCryptoProvider;
 
-        let initiator_static = provider.generate_static_key().await.unwrap();
-        let responder_static = provider.generate_static_key().await.unwrap();
+        let initiator_static = provider.generate_static_key_async().await.unwrap();
+        let responder_static = provider.generate_static_key_async().await.unwrap();
         let responder_pub = provider.public_key(&responder_static).unwrap();
         let psk = Psk::from_bytes([0x11; 32]);
 
@@ -1982,8 +1982,8 @@ mod tests {
     async fn transport_rekey_desync_rejected() {
         let provider = SoftwareCryptoProvider;
 
-        let initiator_static = provider.generate_static_key().await.unwrap();
-        let responder_static = provider.generate_static_key().await.unwrap();
+        let initiator_static = provider.generate_static_key_async().await.unwrap();
+        let responder_static = provider.generate_static_key_async().await.unwrap();
         let responder_pub = provider.public_key(&responder_static).unwrap();
         let psk = Psk::from_bytes([0x22; 32]);
 
@@ -2063,7 +2063,7 @@ mod tests {
     async fn matching_prologue_succeeds() {
         let provider = SoftwareCryptoProvider;
 
-        let responder_static = provider.generate_static_key().await.unwrap();
+        let responder_static = provider.generate_static_key_async().await.unwrap();
         let responder_pub = provider.public_key(&responder_static).unwrap();
 
         let prologue = b"hiss/v1";
@@ -2094,7 +2094,7 @@ mod tests {
     async fn mismatched_prologue_rejected() {
         let provider = SoftwareCryptoProvider;
 
-        let responder_static = provider.generate_static_key().await.unwrap();
+        let responder_static = provider.generate_static_key_async().await.unwrap();
         let responder_pub = provider.public_key(&responder_static).unwrap();
 
         type NoiseSeal = Noise<N, P256, ChaChaPoly, Blake2b>;
@@ -2228,8 +2228,8 @@ mod tests {
                     .build()
                     .unwrap();
                 rt.block_on(async {
-                    let i_sk = SoftwareCryptoProvider.generate_static_key().await.unwrap();
-                    let r_sk = SoftwareCryptoProvider.generate_static_key().await.unwrap();
+                    let i_sk = SoftwareCryptoProvider.generate_static_key_async().await.unwrap();
+                    let r_sk = SoftwareCryptoProvider.generate_static_key_async().await.unwrap();
 
                     let (mut i_t, mut r_t) = full_ikpsk1_handshake(i_sk, r_sk, psk).await;
 
@@ -2262,8 +2262,8 @@ mod tests {
                     .build()
                     .unwrap();
                 rt.block_on(async {
-                    let i_sk = SoftwareCryptoProvider.generate_static_key().await.unwrap();
-                    let r_sk = SoftwareCryptoProvider.generate_static_key().await.unwrap();
+                    let i_sk = SoftwareCryptoProvider.generate_static_key_async().await.unwrap();
+                    let r_sk = SoftwareCryptoProvider.generate_static_key_async().await.unwrap();
 
                     let (mut i_t, mut r_t) = full_ikpsk1_handshake(i_sk, r_sk, psk).await;
 
@@ -2292,7 +2292,7 @@ mod tests {
                     .build()
                     .unwrap();
                 rt.block_on(async {
-                    let r_sk = SoftwareCryptoProvider.generate_static_key().await.unwrap();
+                    let r_sk = SoftwareCryptoProvider.generate_static_key_async().await.unwrap();
                     let r_hs = Channel::respond(SoftwareCryptoProvider, &[])
                         .set_s(r_sk)
                         .unwrap();

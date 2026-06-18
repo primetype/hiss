@@ -25,7 +25,7 @@ async fn ikpsk1_hiss_initiator_snow_responder() {
     let provider = SoftwareCryptoProvider;
 
     // Generate keys for both sides.
-    let initiator_static = provider.generate_static_key().await.unwrap();
+    let initiator_static = provider.generate_static_key_async().await.unwrap();
     let _initiator_pub = provider.public_key(&initiator_static).unwrap();
 
     let psk = Psk::from_bytes([0xAA; 32]);
@@ -121,7 +121,7 @@ async fn ikpsk1_snow_initiator_hiss_responder() {
     let provider = SoftwareCryptoProvider;
 
     // Generate keys for our responder.
-    let responder_static = provider.generate_static_key().await.unwrap();
+    let responder_static = provider.generate_static_key_async().await.unwrap();
     let responder_pub = provider.public_key(&responder_static).unwrap();
 
     let psk = Psk::from_bytes([0xBB; 32]);
@@ -266,7 +266,7 @@ async fn n_hiss_initiator_snow_responder() {
 async fn kpsk0_hiss_initiator_snow_responder() {
     let provider = SoftwareCryptoProvider;
 
-    let alice_static = provider.generate_static_key().await.unwrap();
+    let alice_static = provider.generate_static_key_async().await.unwrap();
     let alice_pub = provider.public_key(&alice_static).unwrap();
 
     let psk = Psk::from_bytes([0x55; 32]);
@@ -385,7 +385,7 @@ async fn ikpsk1_with_prologue_hiss_initiator_snow_responder() {
     let provider = SoftwareCryptoProvider;
     let prologue = b"hiss/v1/ikpsk1";
 
-    let initiator_static = provider.generate_static_key().await.unwrap();
+    let initiator_static = provider.generate_static_key_async().await.unwrap();
     let psk = Psk::from_bytes([0xCC; 32]);
 
     let snow_responder_builder = snow::Builder::new(PROTOCOL.parse().unwrap());
@@ -501,7 +501,7 @@ async fn n_rekey_hiss_initiator_snow_responder() {
 async fn ikpsk1_rekey_hiss_initiator_snow_responder() {
     let provider = SoftwareCryptoProvider;
 
-    let initiator_static = provider.generate_static_key().await.unwrap();
+    let initiator_static = provider.generate_static_key_async().await.unwrap();
     let psk = Psk::from_bytes([0xDD; 32]);
 
     let snow_responder_builder = snow::Builder::new(PROTOCOL.parse().unwrap());
@@ -589,7 +589,7 @@ async fn ikpsk1_rekey_hiss_initiator_snow_responder() {
 async fn k_hiss_initiator_snow_responder() {
     let provider = SoftwareCryptoProvider;
 
-    let alice_static = provider.generate_static_key().await.unwrap();
+    let alice_static = provider.generate_static_key_async().await.unwrap();
     let alice_pub = provider.public_key(&alice_static).unwrap();
 
     let payload: [u8; 32] = [0x42; 32];

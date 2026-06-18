@@ -982,7 +982,7 @@ mod tests {
     #[tokio::test]
     async fn n_async_seal_open_roundtrip() {
         let provider = SoftwareCryptoProvider;
-        let recipient_static = provider.generate_static_key().await.unwrap();
+        let recipient_static = provider.generate_static_key_async().await.unwrap();
         let recipient_pub = provider.public_key(&recipient_static).unwrap();
 
         let sealer = AsyncHandshake::<Seal, Initiator, _, _, _, _>::initiate(
@@ -1028,7 +1028,7 @@ mod tests {
     #[tokio::test]
     async fn n_async_tampered_ephemeral_rejected() {
         let provider = SoftwareCryptoProvider;
-        let recipient_static = provider.generate_static_key().await.unwrap();
+        let recipient_static = provider.generate_static_key_async().await.unwrap();
         let recipient_pub = provider.public_key(&recipient_static).unwrap();
 
         let sealer = AsyncHandshake::<Seal, Initiator, _, _, _, _>::initiate(
@@ -1064,7 +1064,7 @@ mod tests {
         use crate::curve::p256::SecureEnclaveCryptoProvider;
 
         let provider = SecureEnclaveCryptoProvider;
-        let recipient_static = provider.generate_ephemeral_key().await.unwrap();
+        let recipient_static = provider.generate_ephemeral_key_async().await.unwrap();
         let recipient_pub = provider.public_key(&recipient_static).unwrap();
 
         let sealer = AsyncHandshake::<Seal, Initiator, _, _, _, _>::initiate(
@@ -1110,9 +1110,9 @@ mod tests {
     #[tokio::test]
     async fn ikpsk1_async_initiator_vs_buffer_core() {
         let provider = SoftwareCryptoProvider;
-        let initiator_static = provider.generate_static_key().await.unwrap();
+        let initiator_static = provider.generate_static_key_async().await.unwrap();
         let initiator_pub = provider.public_key(&initiator_static).unwrap();
-        let responder_static = provider.generate_static_key().await.unwrap();
+        let responder_static = provider.generate_static_key_async().await.unwrap();
         let responder_pub = provider.public_key(&responder_static).unwrap();
         let psk = Psk::from_bytes([0xAA; 32]);
 
@@ -1183,9 +1183,9 @@ mod tests {
     #[tokio::test]
     async fn ikpsk1_async_responder_vs_buffer_core() {
         let provider = SoftwareCryptoProvider;
-        let initiator_static = provider.generate_static_key().await.unwrap();
+        let initiator_static = provider.generate_static_key_async().await.unwrap();
         let initiator_pub = provider.public_key(&initiator_static).unwrap();
-        let responder_static = provider.generate_static_key().await.unwrap();
+        let responder_static = provider.generate_static_key_async().await.unwrap();
         let responder_pub = provider.public_key(&responder_static).unwrap();
         let psk = Psk::from_bytes([0xBB; 32]);
 
@@ -1255,9 +1255,9 @@ mod tests {
     #[tokio::test]
     async fn k_async_round_trip() {
         let provider = SoftwareCryptoProvider;
-        let alice_static = provider.generate_static_key().await.unwrap();
+        let alice_static = provider.generate_static_key_async().await.unwrap();
         let alice_pub = provider.public_key(&alice_static).unwrap();
-        let bob_static = provider.generate_static_key().await.unwrap();
+        let bob_static = provider.generate_static_key_async().await.unwrap();
         let bob_pub = provider.public_key(&bob_static).unwrap();
         let payload = [0x42u8; 32];
 

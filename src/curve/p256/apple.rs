@@ -343,15 +343,15 @@ impl CryptoKeys<P256> for SecureEnclaveCryptoProvider {
 }
 
 impl CryptoProviderAsync<P256> for SecureEnclaveCryptoProvider {
-    async fn generate_static_key(&self) -> Result<Self::PrivateKey, Self::Error> {
+    async fn generate_static_key_async(&self) -> Result<Self::PrivateKey, Self::Error> {
         offload(P256r1PrivateKey::generate_secure_enclave).await
     }
 
-    async fn generate_ephemeral_key(&self) -> Result<Self::PrivateKey, Self::Error> {
+    async fn generate_ephemeral_key_async(&self) -> Result<Self::PrivateKey, Self::Error> {
         offload(P256r1PrivateKey::generate_ephemeral).await
     }
 
-    async fn sign(
+    async fn sign_async(
         &self,
         key: &Self::PrivateKey,
         message: &[u8],
@@ -361,7 +361,7 @@ impl CryptoProviderAsync<P256> for SecureEnclaveCryptoProvider {
         offload(move || key.sign(&message)).await
     }
 
-    async fn dh(
+    async fn dh_async(
         &self,
         key: &Self::PrivateKey,
         peer: &P256r1PublicKey,
@@ -379,15 +379,15 @@ impl CryptoProviderAsync<P256> for SecureEnclaveCryptoProvider {
 // is what makes Secure Enclave keys usable with the blocking `std::io`
 // handshake, exactly as Apple's libraries expose them.
 impl CryptoProvider<P256> for SecureEnclaveCryptoProvider {
-    fn generate_static_key_sync(&self) -> Result<Self::PrivateKey, Self::Error> {
+    fn generate_static_key(&self) -> Result<Self::PrivateKey, Self::Error> {
         P256r1PrivateKey::generate_secure_enclave()
     }
 
-    fn generate_ephemeral_key_sync(&self) -> Result<Self::PrivateKey, Self::Error> {
+    fn generate_ephemeral_key(&self) -> Result<Self::PrivateKey, Self::Error> {
         P256r1PrivateKey::generate_ephemeral()
     }
 
-    fn sign_sync(
+    fn sign(
         &self,
         key: &Self::PrivateKey,
         message: &[u8],
@@ -395,7 +395,7 @@ impl CryptoProvider<P256> for SecureEnclaveCryptoProvider {
         key.sign(message)
     }
 
-    fn dh_sync(
+    fn dh(
         &self,
         key: &Self::PrivateKey,
         peer: &P256r1PublicKey,
@@ -460,17 +460,17 @@ mod tests {
     async fn crypto_provider_offloaded_dh_roundtrip() {
         let provider = SecureEnclaveCryptoProvider;
 
-        let a = provider.generate_ephemeral_key().await.unwrap();
-        let b = provider.generate_ephemeral_key().await.unwrap();
+        let a = provider.generate_ephemeral_key_async().await.unwrap();
+        let b = provider.generate_ephemeral_key_async().await.unwrap();
         let a_pub = provider.public_key(&a).unwrap();
         let b_pub = provider.public_key(&b).unwrap();
 
-        let ab = provider.dh(&a, &b_pub).await.unwrap();
-        let ba = provider.dh(&b, &a_pub).await.unwrap();
+        let ab = provider.dh_async(&a, &b_pub).await.unwrap();
+        let ba = provider.dh_async(&b, &a_pub).await.unwrap();
         assert_eq!(ab, ba);
 
         // The offloaded signing path round-trips too.
-        let sig = provider.sign(&a, b"hello").await.unwrap();
+        let sig = provider.sign_async(&a, b"hello").await.unwrap();
         assert!(a_pub.verify(sig, b"hello"));
     }
 
