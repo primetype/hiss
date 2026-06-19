@@ -238,3 +238,48 @@ impl Pattern for NK {
 }
 
 assert_well_formed!(NK);
+
+// ── IX ──────────────────────────────────────────────────────────
+
+/// `IX` — interactive mutual authentication with **no pre-messages**:
+/// neither party knows the other's static key up front. Both transmit
+/// their static keys *during* the handshake (as `s` tokens).
+///
+/// Because the initiator's static is sent in msg1 **before any DH**, it
+/// travels **in the clear** — exposed to a passive eavesdropper. The
+/// responder's static is sent in msg2 *after* `ee` keys the cipher, so
+/// it is encrypted. Authentication is mutual: the initiator is
+/// authenticated to the responder via `se`, the responder to the
+/// initiator via `es`.
+///
+/// Unlike [`IK`], there is no pre-known static on either side — IX
+/// trades the initiator's identity privacy for not needing the
+/// responder's static key in advance.
+///
+/// ```text
+/// IX:
+///   -> e, s
+///   <- e, ee, se, s, es
+/// ```
+pub struct IX;
+
+impl Pattern for IX {
+    const NAME: &'static str = "IX";
+    const NUM_MESSAGES: usize = 2;
+    const HAS_PSK: bool = false;
+
+    // No pre-messages: neither static is known up front.
+    type PreMessages = Nil;
+
+    // -> e, s
+    // <- e, ee, se, s, es
+    type Messages = Cons<
+        Message<ToResponder, Cons<E, Cons<S, Nil>>>,
+        Cons<
+            Message<ToInitiator, Cons<E, Cons<Ee, Cons<Se, Cons<S, Cons<Es, Nil>>>>>>,
+            Nil,
+        >,
+    >;
+}
+
+assert_well_formed!(IX);

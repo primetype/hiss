@@ -45,3 +45,8 @@ pub type IK = Noise<pattern::IK, P256, ChaChaPoly, Blake2b>;
 /// `Noise_NK_P256_ChaChaPoly_BLAKE2b` — interactive,
 /// responder-authenticated handshake with an anonymous initiator.
 pub type NK = Noise<pattern::NK, P256, ChaChaPoly, Blake2b>;
+
+/// `Noise_IX_P256_ChaChaPoly_BLAKE2b` — interactive mutual
+/// authentication with no pre-messages; both statics are exchanged
+/// during the handshake (the initiator's in the clear).
+pub type IX = Noise<pattern::IX, P256, ChaChaPoly, Blake2b>;

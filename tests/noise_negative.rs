@@ -2,7 +2,7 @@
 //!
 //! Where `src/noise/mod.rs` has hand-picked single-corruption tests, this
 //! file sweeps the adversarial space deterministically (via the
-//! [`ScriptedRng`] ephemeral-injection harness) across all six supported
+//! [`ScriptedRng`] ephemeral-injection harness) across all seven supported
 //! patterns:
 //!
 //! * **tamper** — flip *every* byte of *every* handshake message → the
@@ -43,6 +43,8 @@ const IK_MSG1: usize = 162; // IK / IKpsk1 msg1: e + encrypted s + tags
 const IK_MSG2: usize = 81; // IK / IKpsk1 msg2: e + tag
 const NK_MSG1: usize = 81; // NK msg1: e + es (keys cipher) + tag
 const NK_MSG2: usize = 81; // NK msg2: e + ee + tag
+const IX_MSG1: usize = 130; // IX msg1: e + s (both plaintext, no DH yet)
+const IX_MSG2: usize = 162; // IX msg2: e + ee/se key cipher + encrypted s + es + tag
 
 /// Transform applied to a handshake message before the peer reads it.
 type Xform<'a> = dyn Fn(usize, Vec<u8>) -> Vec<u8> + 'a;
@@ -299,6 +301,59 @@ async fn run_nk(xform: &Xform<'_>) -> Result<(), ()> {
     Ok(())
 }
 
+async fn run_ix(xform: &Xform<'_>) -> Result<(), ()> {
+    // IX has no pre-messages: both statics are transmitted in-handshake
+    // via `s` tokens, so neither side has a pre-message setter.
+    let i = IX::initiate(
+        EphemeralOnly::new(ScriptedRng::new(&[&INIT_EPHEMERAL])),
+        &[],
+    );
+    let mut b1 = [0u8; 256];
+    let (msg1, i) = i
+        .e(&mut b1)
+        .await
+        .unwrap()
+        .s(private_key(&INIT_STATIC))
+        .await
+        .unwrap();
+    let msg1 = xform(0, msg1.to_vec());
+
+    // Responder reads msg1 (-> e, s); the `s` reveals the initiator static.
+    let r = IX::respond(
+        EphemeralOnly::new(ScriptedRng::new(&[&RESP_EPHEMERAL])),
+        &[],
+    );
+    let (_, recv) = r.read(&msg1).map_err(|_| ())?.e().await.map_err(|_| ())?;
+    let (_, recv) = recv.s().await.map_err(|_| ())?;
+
+    // Responder sends msg2 (<- e, ee, se, s, es) — genuine.
+    let mut b2 = [0u8; 256];
+    let (msg2, _r_transport) = recv
+        .e(&mut b2)
+        .await
+        .unwrap()
+        .ee()
+        .await
+        .unwrap()
+        .se()
+        .await
+        .unwrap()
+        .s(private_key(&RESP_STATIC))
+        .await
+        .unwrap()
+        .es()
+        .await
+        .unwrap();
+    let msg2 = xform(1, msg2.to_vec());
+
+    // Initiator reads msg2; the `s` reveals the responder static.
+    let (_, recv) = i.read(&msg2).map_err(|_| ())?.e().await.map_err(|_| ())?;
+    let recv = recv.ee().await.map_err(|_| ())?.se().await.map_err(|_| ())?;
+    let (_, recv) = recv.s().await.map_err(|_| ())?;
+    recv.es().await.map_err(|_| ())?;
+    Ok(())
+}
+
 // ── Sweep helpers ────────────────────────────────────────────────
 
 /// Assert that the genuine handshake completes, then that flipping any
@@ -380,6 +435,16 @@ async fn nk_msg1_tamper_truncation_sweep() {
 #[tokio::test]
 async fn nk_msg2_tamper_truncation_sweep() {
     sweep("NK msg2", 1, NK_MSG2, |xf| async move { run_nk(&*xf).await }).await;
+}
+
+#[tokio::test]
+async fn ix_msg1_tamper_truncation_sweep() {
+    sweep("IX msg1", 0, IX_MSG1, |xf| async move { run_ix(&*xf).await }).await;
+}
+
+#[tokio::test]
+async fn ix_msg2_tamper_truncation_sweep() {
+    sweep("IX msg2", 1, IX_MSG2, |xf| async move { run_ix(&*xf).await }).await;
 }
 
 // ── Wrong PSK ────────────────────────────────────────────────────
