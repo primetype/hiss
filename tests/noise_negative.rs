@@ -2,7 +2,7 @@
 //!
 //! Where `src/noise/mod.rs` has hand-picked single-corruption tests, this
 //! file sweeps the adversarial space deterministically (via the
-//! [`ScriptedRng`] ephemeral-injection harness) across all five supported
+//! [`ScriptedRng`] ephemeral-injection harness) across all six supported
 //! patterns:
 //!
 //! * **tamper** — flip *every* byte of *every* handshake message → the
@@ -41,6 +41,8 @@ const PSK_BYTES: [u8; 32] = [0xE5; 32];
 const ONE_MSG: usize = 81; // N / K / Kpsk0 msg1
 const IK_MSG1: usize = 162; // IK / IKpsk1 msg1: e + encrypted s + tags
 const IK_MSG2: usize = 81; // IK / IKpsk1 msg2: e + tag
+const NK_MSG1: usize = 81; // NK msg1: e + es (keys cipher) + tag
+const NK_MSG2: usize = 81; // NK msg2: e + ee + tag
 
 /// Transform applied to a handshake message before the peer reads it.
 type Xform<'a> = dyn Fn(usize, Vec<u8>) -> Vec<u8> + 'a;
@@ -265,6 +267,38 @@ async fn run_ik(xform: &Xform<'_>) -> Result<(), ()> {
     Ok(())
 }
 
+async fn run_nk(xform: &Xform<'_>) -> Result<(), ()> {
+    // NK initiator is anonymous: no static, responder static known.
+    let i = NK::initiate(
+        EphemeralOnly::new(ScriptedRng::new(&[&INIT_EPHEMERAL])),
+        &[],
+    )
+    .set_rs(public_key(&RESP_STATIC));
+    let mut b1 = [0u8; 256];
+    let (msg1, i) = i.e(&mut b1).await.unwrap().es().await.unwrap();
+    let msg1 = xform(0, msg1.to_vec());
+
+    // Responder reads msg1.
+    let r = NK::respond(
+        EphemeralOnly::new(ScriptedRng::new(&[&RESP_EPHEMERAL])),
+        &[],
+    )
+    .set_s(private_key(&RESP_STATIC))
+    .map_err(|_| ())?;
+    let (_, recv) = r.read(&msg1).map_err(|_| ())?.e().await.map_err(|_| ())?;
+    let r = recv.es().await.map_err(|_| ())?;
+
+    // Responder sends msg2 (genuine).
+    let mut b2 = [0u8; 256];
+    let (msg2, _r_transport) = r.e(&mut b2).await.unwrap().ee().await.unwrap();
+    let msg2 = xform(1, msg2.to_vec());
+
+    // Initiator reads msg2.
+    let (_, recv) = i.read(&msg2).map_err(|_| ())?.e().await.map_err(|_| ())?;
+    recv.ee().await.map_err(|_| ())?;
+    Ok(())
+}
+
 // ── Sweep helpers ────────────────────────────────────────────────
 
 /// Assert that the genuine handshake completes, then that flipping any
@@ -336,6 +370,16 @@ async fn ik_msg1_tamper_truncation_sweep() {
 #[tokio::test]
 async fn ik_msg2_tamper_truncation_sweep() {
     sweep("IK msg2", 1, IK_MSG2, |xf| async move { run_ik(&*xf).await }).await;
+}
+
+#[tokio::test]
+async fn nk_msg1_tamper_truncation_sweep() {
+    sweep("NK msg1", 0, NK_MSG1, |xf| async move { run_nk(&*xf).await }).await;
+}
+
+#[tokio::test]
+async fn nk_msg2_tamper_truncation_sweep() {
+    sweep("NK msg2", 1, NK_MSG2, |xf| async move { run_nk(&*xf).await }).await;
 }
 
 // ── Wrong PSK ────────────────────────────────────────────────────

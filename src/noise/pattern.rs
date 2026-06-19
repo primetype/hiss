@@ -199,3 +199,42 @@ impl Pattern for IK {
 }
 
 assert_well_formed!(IK);
+
+// ── NK ──────────────────────────────────────────────────────────
+
+/// `NK` — interactive, responder-authenticated handshake. The
+/// initiator knows the responder's static key up front and is
+/// **anonymous** (it has no static key of its own); only the
+/// responder is authenticated, via the `es` DH that binds its static
+/// key.
+///
+/// Like [`IK`] minus the initiator's static key — confidentiality to
+/// a known recipient plus a fresh responder ephemeral, without
+/// initiator authentication.
+///
+/// ```text
+/// NK:
+///   <- s
+///   ...
+///   -> e, es
+///   <- e, ee
+/// ```
+pub struct NK;
+
+impl Pattern for NK {
+    const NAME: &'static str = "NK";
+    const NUM_MESSAGES: usize = 2;
+    const HAS_PSK: bool = false;
+
+    // Pre-messages: <- s (responder's static key known)
+    type PreMessages = Cons<Message<ToInitiator, Cons<S, Nil>>, Nil>;
+
+    // -> e, es
+    // <- e, ee
+    type Messages = Cons<
+        Message<ToResponder, Cons<E, Cons<Es, Nil>>>,
+        Cons<Message<ToInitiator, Cons<E, Cons<Ee, Nil>>>, Nil>,
+    >;
+}
+
+assert_well_formed!(NK);

@@ -235,7 +235,7 @@ pub mod tokens;
 pub mod transport;
 pub mod well_formed;
 
-pub use self::alias::{IK, IKpsk1, K, Kpsk0, N};
+pub use self::alias::{IK, IKpsk1, K, Kpsk0, N, NK};
 pub use self::cipher::{ChaChaPoly, Cipher};
 pub use self::cipher_state::CipherState;
 pub use self::curve::{Curve, DhCurve, P256};

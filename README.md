@@ -35,7 +35,7 @@ This `0.1` targets one cipher suite and a fixed set of patterns:
 
 | Axis    | Supported |
 |---------|-----------|
-| Patterns | `N`, `K`, `Kpsk0`, `IKpsk1`, `IK` |
+| Patterns | `N`, `K`, `Kpsk0`, `IKpsk1`, `IK`, `NK` |
 | Curve   | NIST **P-256** (secp256r1) |
 | Cipher  | **ChaCha20-Poly1305** |
 | Hash    | **BLAKE2b** |
@@ -106,7 +106,9 @@ assert_eq!(&opened, payload);
 The same protocol can be driven with explicit buffers (the `HandshakeState` core) instead
 of an owned stream, and — with the `async-io` feature — over `tokio::io` via
 `AsyncHandshake`. The mutual-authentication patterns (`K`, `Kpsk0`, `IKpsk1`, `IK`) follow the
-same builder shape with additional pre-message setters.
+same builder shape with additional pre-message setters; `NK` is interactive and
+responder-authenticated (the initiator is anonymous) and likewise pre-knows the
+responder's static key via `set_rs`.
 
 ## Providers
 
