@@ -584,6 +584,168 @@ async fn ikpsk1_rekey_hiss_initiator_snow_responder() {
     assert_eq!(&pt[..pt_len], b"post-rekey r->i");
 }
 
+// ── IK: our initiator ↔ snow responder ──────────────────────────
+
+#[tokio::test]
+async fn ik_hiss_initiator_snow_responder() {
+    let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
+    let initiator_static = provider.generate::<P256>().unwrap();
+
+    let proto = "Noise_IK_P256_ChaChaPoly_BLAKE2b";
+
+    // ── Snow responder setup ─────────────────────────────────
+    let snow_responder_builder = snow::Builder::new(proto.parse().unwrap());
+    let snow_responder_keypair = snow_responder_builder.generate_keypair().unwrap();
+    let responder_pub = P256::public_key_from_bytes(&snow_responder_keypair.public).unwrap();
+
+    let mut snow_responder = snow_responder_builder
+        .local_private_key(&snow_responder_keypair.private)
+        .unwrap()
+        .build_responder()
+        .unwrap();
+
+    // ── Our initiator setup ──────────────────────────────────
+    type Channel = IK;
+
+    let i_hs =
+        Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
+
+    // msg1: -> e, es, s, ss (our initiator sends)
+    let mut msg1_buf = [0u8; 162];
+    let (msg1, i_hs) = i_hs
+        .e(&mut msg1_buf)
+        .await
+        .unwrap()
+        .es()
+        .await
+        .unwrap()
+        .s(initiator_static)
+        .await
+        .unwrap()
+        .ss()
+        .await
+        .unwrap();
+    let msg1 = msg1.to_vec();
+
+    let mut buf = [0u8; 256];
+    snow_responder.read_message(&msg1, &mut buf).unwrap();
+
+    // msg2: <- e, ee, se (snow responder sends)
+    let mut msg2 = [0u8; 256];
+    let msg2_len = snow_responder.write_message(&[], &mut msg2).unwrap();
+    let (_, recv) = i_hs.read(&msg2[..msg2_len]).unwrap().e().await.unwrap();
+    let i_transport = recv.ee().await.unwrap().se().await.unwrap();
+
+    assert_eq!(
+        i_transport.session_id().as_ref(),
+        snow_responder.get_handshake_hash(),
+    );
+
+    let mut snow_responder = snow_responder.into_transport_mode().unwrap();
+    let mut i_transport = i_transport;
+
+    // Transport: bidirectional exchange.
+    let plaintext = b"hello from hiss IK initiator";
+    let mut ct = [0u8; 256];
+    let ct_len = i_transport.send(plaintext, &mut ct).unwrap();
+    let mut pt = [0u8; 256];
+    let pt_len = snow_responder.read_message(&ct[..ct_len], &mut pt).unwrap();
+    assert_eq!(&pt[..pt_len], plaintext);
+
+    let reply = b"hello from snow IK responder";
+    let mut ct = [0u8; 256];
+    let ct_len = snow_responder.write_message(reply, &mut ct).unwrap();
+    let mut pt = [0u8; 256];
+    let pt_len = i_transport.receive(&ct[..ct_len], &mut pt).unwrap();
+    assert_eq!(&pt[..pt_len], reply);
+}
+
+// ── IK: snow initiator ↔ our responder ──────────────────────────
+
+#[tokio::test]
+async fn ik_snow_initiator_hiss_responder() {
+    let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
+    let responder_static = provider.generate::<P256>().unwrap();
+    let responder_pub = provider.public(&responder_static).unwrap();
+
+    let proto = "Noise_IK_P256_ChaChaPoly_BLAKE2b";
+
+    // ── Snow initiator setup ─────────────────────────────────
+    let snow_initiator_builder = snow::Builder::new(proto.parse().unwrap());
+    let snow_initiator_keypair = snow_initiator_builder.generate_keypair().unwrap();
+
+    let mut snow_initiator = snow_initiator_builder
+        .local_private_key(&snow_initiator_keypair.private)
+        .unwrap()
+        .remote_public_key(responder_pub.to_bytes())
+        .unwrap()
+        .build_initiator()
+        .unwrap();
+
+    // ── Our responder setup ──────────────────────────────────
+    type Channel = IK;
+
+    let r_hs = Channel::respond(EphemeralOnly::new(StdRng::from_os_rng()), &[])
+        .set_s(responder_static)
+        .unwrap();
+
+    // msg1: -> e, es, s, ss (snow initiator sends)
+    let mut msg1 = [0u8; 256];
+    let msg1_len = snow_initiator.write_message(&[], &mut msg1).unwrap();
+
+    // Our responder reads msg1.
+    let (_, recv) = r_hs.read(&msg1[..msg1_len]).unwrap().e().await.unwrap();
+    let recv = recv.es().await.unwrap();
+    let (revealed_initiator_pub, recv) = recv.s().await.unwrap();
+    let r_hs = recv.ss().await.unwrap();
+
+    // The revealed initiator static must match snow's.
+    assert_eq!(
+        revealed_initiator_pub.to_bytes(),
+        snow_initiator_keypair.public.as_slice(),
+    );
+
+    // msg2: <- e, ee, se (our responder sends)
+    let mut msg2_buf = [0u8; 81];
+    let (msg2, r_transport) = r_hs
+        .e(&mut msg2_buf)
+        .await
+        .unwrap()
+        .ee()
+        .await
+        .unwrap()
+        .se()
+        .await
+        .unwrap();
+    let msg2 = msg2.to_vec();
+
+    let mut buf = [0u8; 256];
+    snow_initiator.read_message(&msg2, &mut buf).unwrap();
+
+    assert_eq!(
+        r_transport.session_id().as_ref(),
+        snow_initiator.get_handshake_hash(),
+    );
+
+    let mut snow_initiator = snow_initiator.into_transport_mode().unwrap();
+    let mut r_transport = r_transport;
+
+    // Transport: bidirectional exchange.
+    let plaintext = b"hello from snow IK initiator";
+    let mut ct = [0u8; 256];
+    let ct_len = snow_initiator.write_message(plaintext, &mut ct).unwrap();
+    let mut pt = [0u8; 256];
+    let pt_len = r_transport.receive(&ct[..ct_len], &mut pt).unwrap();
+    assert_eq!(&pt[..pt_len], plaintext);
+
+    let reply = b"hello from hiss IK responder";
+    let mut ct = [0u8; 256];
+    let ct_len = r_transport.send(reply, &mut ct).unwrap();
+    let mut pt = [0u8; 256];
+    let pt_len = snow_initiator.read_message(&ct[..ct_len], &mut pt).unwrap();
+    assert_eq!(&pt[..pt_len], reply);
+}
+
 // ── K pattern: our initiator ↔ snow responder ───────────────────
 
 #[tokio::test]

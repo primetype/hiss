@@ -1,8 +1,8 @@
 //! Frozen Noise known-answer-test (KAT) vectors.
 //!
 //! The vectors in `tests/vectors/noise/p256_chachapoly_blake2b.json` are
-//! **frozen** byte-for-byte expectations for the four supported patterns
-//! (N, K, Kpsk0, IKpsk1) over `P256 / ChaChaPoly / BLAKE2b`, produced from
+//! **frozen** byte-for-byte expectations for the five supported patterns
+//! (N, K, Kpsk0, IKpsk1, IK) over `P256 / ChaChaPoly / BLAKE2b`, produced from
 //! the `snow` reference implementation with fixed keys and pinned
 //! ephemerals (`generate_noise_kat_vectors`, `#[ignore]`).
 //!
@@ -263,6 +263,58 @@ async fn noise_kat_ikpsk1() {
     assert_eq!(&pt[..pn], TRANSPORT_R2I, "IKpsk1 transport r->i plaintext");
 }
 
+#[tokio::test]
+async fn noise_kat_ik() {
+    let file = load_vectors();
+    let v = vector(&file, "Noise_IK_P256_ChaChaPoly_BLAKE2b");
+
+    let provider = EphemeralOnly::new(ScriptedRng::new(&[&INIT_EPHEMERAL]));
+    let hs = IK::initiate(provider, &[]).set_rs(public_key(&RESP_STATIC));
+
+    // msg1: -> e, es, s, ss
+    let mut buf1 = [0u8; 256];
+    let (msg1, hs) = hs
+        .e(&mut buf1)
+        .await
+        .unwrap()
+        .es()
+        .await
+        .unwrap()
+        .s(private_key(&INIT_STATIC))
+        .await
+        .unwrap()
+        .ss()
+        .await
+        .unwrap();
+    assert_eq!(msg1.to_vec(), decode(&v.messages[0].ciphertext), "IK msg1");
+
+    // msg2: <- e, ee, se (read the frozen responder message)
+    let msg2 = decode(&v.messages[1].ciphertext);
+    let (_, recv) = hs.read(&msg2).unwrap().e().await.unwrap();
+    let mut transport = recv.ee().await.unwrap().se().await.unwrap();
+
+    assert_eq!(
+        transport.session_id().as_ref(),
+        decode(&v.handshake_hash),
+        "IK handshake hash"
+    );
+
+    // transport: initiator -> responder (we produce it)
+    let mut ct = [0u8; 256];
+    let n = transport.send(TRANSPORT_I2R, &mut ct).unwrap();
+    assert_eq!(
+        &ct[..n],
+        decode(&v.transport[0].ciphertext),
+        "IK transport i->r"
+    );
+
+    // transport: responder -> initiator (we decrypt the frozen ciphertext)
+    let r2i = decode(&v.transport[1].ciphertext);
+    let mut pt = [0u8; 256];
+    let pn = transport.receive(&r2i, &mut pt).unwrap();
+    assert_eq!(&pt[..pn], TRANSPORT_R2I, "IK transport r->i plaintext");
+}
+
 // ── Generator (reference: snow) ──────────────────────────────────
 
 #[cfg(test)]
@@ -337,6 +389,103 @@ mod generate {
         }
     }
 
+    /// Captured bytes from a two-message handshake run.
+    struct TwoMessageRun {
+        msg1: Vec<u8>,
+        msg2: Vec<u8>,
+        hash: Vec<u8>,
+        i2r: Vec<u8>,
+        r2i: Vec<u8>,
+    }
+
+    /// Run a two-message pattern (initiator msg1, responder msg2) through
+    /// snow and capture both messages, the handshake hash, and both
+    /// transport directions.
+    fn two_message(
+        mut init: snow::HandshakeState,
+        mut resp: snow::HandshakeState,
+    ) -> TwoMessageRun {
+        let mut b1 = [0u8; 512];
+        let n1 = init.write_message(&[], &mut b1).unwrap();
+        let msg1 = b1[..n1].to_vec();
+        let mut rb = [0u8; 512];
+        resp.read_message(&msg1, &mut rb).unwrap();
+
+        let mut b2 = [0u8; 512];
+        let n2 = resp.write_message(&[], &mut b2).unwrap();
+        let msg2 = b2[..n2].to_vec();
+        let mut ib = [0u8; 512];
+        init.read_message(&msg2, &mut ib).unwrap();
+
+        let hash = init.get_handshake_hash().to_vec();
+        assert_eq!(hash, resp.get_handshake_hash(), "snow hashes diverged");
+
+        let mut it = init.into_transport_mode().unwrap();
+        let mut rt = resp.into_transport_mode().unwrap();
+
+        let mut c = [0u8; 512];
+        let cn = it.write_message(TRANSPORT_I2R, &mut c).unwrap();
+        let i2r = c[..cn].to_vec();
+        let mut c2 = [0u8; 512];
+        let cn2 = rt.write_message(TRANSPORT_R2I, &mut c2).unwrap();
+        let r2i = c2[..cn2].to_vec();
+
+        TwoMessageRun {
+            msg1,
+            msg2,
+            hash,
+            i2r,
+            r2i,
+        }
+    }
+
+    fn two_message_vector(
+        protocol_name: &str,
+        init_static: Option<String>,
+        psk: Option<String>,
+        init: snow::HandshakeState,
+        resp: snow::HandshakeState,
+    ) -> Vector {
+        let TwoMessageRun {
+            msg1,
+            msg2,
+            hash,
+            i2r,
+            r2i,
+        } = two_message(init, resp);
+        Vector {
+            protocol_name: protocol_name.to_string(),
+            init_static,
+            init_ephemeral: hh(&INIT_EPHEMERAL),
+            resp_static: hh(&RESP_STATIC),
+            resp_ephemeral: Some(hh(&RESP_EPHEMERAL)),
+            psk,
+            messages: vec![
+                HandshakeMessage {
+                    payload: String::new(),
+                    ciphertext: hh(&msg1),
+                },
+                HandshakeMessage {
+                    payload: String::new(),
+                    ciphertext: hh(&msg2),
+                },
+            ],
+            handshake_hash: hh(&hash),
+            transport: vec![
+                TransportMessage {
+                    sender: "initiator".to_string(),
+                    payload: hh(TRANSPORT_I2R),
+                    ciphertext: hh(&i2r),
+                },
+                TransportMessage {
+                    sender: "responder".to_string(),
+                    payload: hh(TRANSPORT_R2I),
+                    ciphertext: hh(&r2i),
+                },
+            ],
+        }
+    }
+
     fn vector_n() -> Vector {
         let proto = "Noise_N_P256_ChaChaPoly_BLAKE2b";
         let init = snow::Builder::new(proto.parse().unwrap())
@@ -399,7 +548,7 @@ mod generate {
 
     fn vector_ikpsk1() -> Vector {
         let proto = "Noise_IKpsk1_P256_ChaChaPoly_BLAKE2b";
-        let mut init = snow::Builder::new(proto.parse().unwrap())
+        let init = snow::Builder::new(proto.parse().unwrap())
             .local_private_key(&INIT_STATIC)
             .unwrap()
             .remote_public_key(&resp_pub_bytes())
@@ -409,7 +558,7 @@ mod generate {
             .fixed_ephemeral_key_for_testing_only(&INIT_EPHEMERAL)
             .build_initiator()
             .unwrap();
-        let mut resp = snow::Builder::new(proto.parse().unwrap())
+        let resp = snow::Builder::new(proto.parse().unwrap())
             .local_private_key(&RESP_STATIC)
             .unwrap()
             .psk(1, &PSK_BYTES)
@@ -417,63 +566,26 @@ mod generate {
             .fixed_ephemeral_key_for_testing_only(&RESP_EPHEMERAL)
             .build_responder()
             .unwrap();
+        two_message_vector(proto, Some(hh(&INIT_STATIC)), Some(hh(&PSK_BYTES)), init, resp)
+    }
 
-        let mut b1 = [0u8; 512];
-        let n1 = init.write_message(&[], &mut b1).unwrap();
-        let msg1 = b1[..n1].to_vec();
-        let mut rb = [0u8; 512];
-        resp.read_message(&msg1, &mut rb).unwrap();
-
-        let mut b2 = [0u8; 512];
-        let n2 = resp.write_message(&[], &mut b2).unwrap();
-        let msg2 = b2[..n2].to_vec();
-        let mut ib = [0u8; 512];
-        init.read_message(&msg2, &mut ib).unwrap();
-
-        let hash = init.get_handshake_hash().to_vec();
-        assert_eq!(hash, resp.get_handshake_hash(), "snow hashes diverged");
-
-        let mut it = init.into_transport_mode().unwrap();
-        let mut rt = resp.into_transport_mode().unwrap();
-
-        let mut c = [0u8; 512];
-        let cn = it.write_message(TRANSPORT_I2R, &mut c).unwrap();
-        let i2r = c[..cn].to_vec();
-        let mut c2 = [0u8; 512];
-        let cn2 = rt.write_message(TRANSPORT_R2I, &mut c2).unwrap();
-        let r2i = c2[..cn2].to_vec();
-
-        Vector {
-            protocol_name: proto.to_string(),
-            init_static: Some(hh(&INIT_STATIC)),
-            init_ephemeral: hh(&INIT_EPHEMERAL),
-            resp_static: hh(&RESP_STATIC),
-            resp_ephemeral: Some(hh(&RESP_EPHEMERAL)),
-            psk: Some(hh(&PSK_BYTES)),
-            messages: vec![
-                HandshakeMessage {
-                    payload: String::new(),
-                    ciphertext: hh(&msg1),
-                },
-                HandshakeMessage {
-                    payload: String::new(),
-                    ciphertext: hh(&msg2),
-                },
-            ],
-            handshake_hash: hh(&hash),
-            transport: vec![
-                TransportMessage {
-                    sender: "initiator".to_string(),
-                    payload: hh(TRANSPORT_I2R),
-                    ciphertext: hh(&i2r),
-                },
-                TransportMessage {
-                    sender: "responder".to_string(),
-                    payload: hh(TRANSPORT_R2I),
-                    ciphertext: hh(&r2i),
-                },
-            ],
-        }
+    fn vector_ik() -> Vector {
+        let proto = "Noise_IK_P256_ChaChaPoly_BLAKE2b";
+        let init = snow::Builder::new(proto.parse().unwrap())
+            .local_private_key(&INIT_STATIC)
+            .unwrap()
+            .remote_public_key(&resp_pub_bytes())
+            .unwrap()
+            .fixed_ephemeral_key_for_testing_only(&INIT_EPHEMERAL)
+            .build_initiator()
+            .unwrap();
+        let resp = snow::Builder::new(proto.parse().unwrap())
+            .local_private_key(&RESP_STATIC)
+            .unwrap()
+            .fixed_ephemeral_key_for_testing_only(&RESP_EPHEMERAL)
+            .build_responder()
+            .unwrap();
+        two_message_vector(proto, Some(hh(&INIT_STATIC)), None, init, resp)
     }
 
     /// Regenerate the frozen vectors from snow. Ignored: run manually with
@@ -485,10 +597,17 @@ mod generate {
             note: "Noise KAT vectors for P256/ChaChaPoly/BLAKE2b, generated \
                    from snow with fixed keys + pinned ephemerals. One-way \
                    patterns freeze msg1 + the initiator->responder transport; \
-                   IKpsk1 freezes both messages + both transport directions. \
+                   the interactive patterns (IKpsk1, IK) freeze both messages \
+                   + both transport directions. \
                    Provenance: agreement with snow (no spec P-256 vectors exist)."
                 .to_string(),
-            vectors: vec![vector_n(), vector_k(), vector_kpsk0(), vector_ikpsk1()],
+            vectors: vec![
+                vector_n(),
+                vector_k(),
+                vector_kpsk0(),
+                vector_ikpsk1(),
+                vector_ik(),
+            ],
         };
         let json = serde_json::to_string_pretty(&file).unwrap();
         std::fs::write(VECTORS_PATH, json + "\n").unwrap();

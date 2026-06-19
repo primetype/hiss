@@ -163,3 +163,39 @@ impl Pattern for IKpsk1 {
 }
 
 assert_well_formed!(IKpsk1);
+
+// ── IK ──────────────────────────────────────────────────────────
+
+/// `IK` — interactive mutual authentication. The initiator knows the
+/// responder's static key up front and transmits its own static key,
+/// encrypted, in msg1; the responder authenticates in msg2.
+///
+/// Identical to [`IKpsk1`] without the pre-shared key — full mutual
+/// authentication from raw static-key DH alone.
+///
+/// ```text
+/// IK:
+///   <- s
+///   ...
+///   -> e, es, s, ss
+///   <- e, ee, se
+/// ```
+pub struct IK;
+
+impl Pattern for IK {
+    const NAME: &'static str = "IK";
+    const NUM_MESSAGES: usize = 2;
+    const HAS_PSK: bool = false;
+
+    // Pre-messages: <- s (responder's static key known)
+    type PreMessages = Cons<Message<ToInitiator, Cons<S, Nil>>, Nil>;
+
+    // -> e, es, s, ss
+    // <- e, ee, se
+    type Messages = Cons<
+        Message<ToResponder, Cons<E, Cons<Es, Cons<S, Cons<Ss, Nil>>>>>,
+        Cons<Message<ToInitiator, Cons<E, Cons<Ee, Cons<Se, Nil>>>>, Nil>,
+    >;
+}
+
+assert_well_formed!(IK);

@@ -49,7 +49,7 @@ Noise matrix. The security claims below apply only to this surface:
 
 | Component | Supported |
 |-----------|-----------|
-| Handshake patterns | `N`, `K`, `Kpsk0`, `IKpsk1` (a 4-pattern subset) |
+| Handshake patterns | `N`, `K`, `Kpsk0`, `IKpsk1`, `IK` (a 5-pattern subset) |
 | DH / signing curves | NIST **P-256** (the Noise DH curve) and **Ed25519** (signing; Curve25519 DH) |
 | AEAD cipher | **ChaCha20-Poly1305** |
 | Hash | **BLAKE2b-512** |
@@ -93,7 +93,7 @@ party's host OS or RNG.
 - Patterns, curves, ciphers, or hashes outside the [Scope](#scope) table.
 - Replay protection for the one-way patterns (`N`/`K`/`Kpsk0`) — they are one-shot
   seals by construction; replay resistance is a property only of the interactive
-  `IKpsk1` handshake. See the per-pattern table.
+  `IK` / `IKpsk1` handshakes. See the per-pattern table.
 - Anything a caller does with secret bytes after copying them out of a `hiss` type
   (e.g. via `seed()`).
 
@@ -112,6 +112,7 @@ P-256 is not part of the Noise spec (see the provenance note under
 | **K** | one message (`-> e, es, ss`) | sender's static key, **vulnerable to key-compromise impersonation** (auth rests on the static–static `ss` DH) | encrypted to the recipient's known static key | sender-side only | **no** (one-way) | — |
 | **Kpsk0** | one message (`-> psk, e, es, ss`) | sender's static key **plus a PSK** (a second factor) | recipient's static key **plus the PSK** — an attacker needs the relevant private key *and* the PSK | sender-side only | **no** (one-way) | position 0 |
 | **IKpsk1** | two messages (`-> e, es, s, ss, psk` / `<- e, ee, se`) | **mutual** — responder authenticated to the initiator via `es`/`ss` (the DHs that bind the responder's static key); initiator authenticated to the responder via `ss` then `se` — **plus a PSK** | recipient's static key plus the PSK; the initiator's identity is hidden from a passive eavesdropper | **full** once both ephemerals are mixed (`ee`) | **yes** (responder contributes a fresh ephemeral) | position 1 |
+| **IK** | two messages (`-> e, es, s, ss` / `<- e, ee, se`) | **mutual** — responder authenticated to the initiator via `es`/`ss` (the DHs that bind the responder's static key); initiator authenticated to the responder via `ss` then `se` | encrypted to the recipient's known static key; the initiator's identity is hidden from a passive eavesdropper | **full** once both ephemerals are mixed (`ee`) | **yes** (responder contributes a fresh ephemeral) | — |
 
 Notes:
 
@@ -120,8 +121,9 @@ Notes:
   intended for encrypting data at rest to a known public key (for example, sealing a
   per-pair PSK to a device's own Secure Enclave key). Because there is no recipient
   ephemeral, compromise of the recipient's static private key exposes past payloads.
-- `IKpsk1` is the **interactive mutually-authenticated handshake**. Forward secrecy
-  and replay resistance are established only after the second message (the `ee` DH).
+- `IK` and `IKpsk1` are the **interactive mutually-authenticated handshakes**
+  (`IKpsk1` layers a PSK on top of `IK`). Forward secrecy and replay resistance are
+  established only after the second message (the `ee` DH).
 - A PSK (`Kpsk0`, `IKpsk1`) is an **additional** authentication and confidentiality
   factor layered on top of the asymmetric authentication — not a replacement for it.
 
@@ -189,7 +191,7 @@ in-tree tests:
 | Wycheproof ECDH (secp256r1) | **355** vectors | Project Wycheproof, `ecpoint` encoding |
 | RFC 6979 deterministic ECDSA | Appendix A.2.5 (P-256/SHA-256) KAT | RFC 6979; raw `(r, s)` pinned for `"sample"` and `"test"` |
 | NIST ECC CDH | P-256 `Count=0` | NIST CAVP ECDH vector |
-| Noise handshake KATs | patterns `N` / `K` / `Kpsk0` / `IKpsk1` | frozen, replayed byte-for-byte (handshake ciphertexts + handshake hash + transport) |
+| Noise handshake KATs | patterns `N` / `K` / `Kpsk0` / `IKpsk1` / `IK` | frozen, replayed byte-for-byte (handshake ciphertexts + handshake hash + transport) |
 | Negative / boundary sweeps | per-pattern, deterministic | every-byte tamper, every-prefix truncation, over-length, ciphertext bit-flip, replay, out-of-order, wrong-PSK → all rejected |
 
 The Wycheproof corpora are third-party authoritative. The negative sweeps are

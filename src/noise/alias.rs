@@ -37,3 +37,7 @@ pub type Kpsk0 = Noise<pattern::Kpsk0, P256, ChaChaPoly, Blake2b>;
 /// `Noise_IKpsk1_P256_ChaChaPoly_BLAKE2b` — interactive mutual
 /// authentication with a pre-shared key.
 pub type IKpsk1 = Noise<pattern::IKpsk1, P256, ChaChaPoly, Blake2b>;
+
+/// `Noise_IK_P256_ChaChaPoly_BLAKE2b` — interactive mutual
+/// authentication (no pre-shared key).
+pub type IK = Noise<pattern::IK, P256, ChaChaPoly, Blake2b>;
