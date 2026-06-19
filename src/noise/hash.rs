@@ -1,9 +1,9 @@
 //! Hash trait for Noise protocol hashing and HMAC.
 //!
-//! This is distinct from [`crate::hash::HashAlgorithm`] — it adds
-//! Noise-specific constants (`BLOCK_LEN` for HMAC) and the Noise
-//! name component. The actual hashing delegates to the concrete
-//! implementations in [`crate::hash`].
+//! Beyond a plain digest, this trait carries the Noise-specific
+//! constants (`BLOCK_LEN` for HMAC) and the Noise name component. The
+//! concrete implementation ([`Blake2b`]) delegates the actual hashing
+//! to `cryptoxide`.
 
 /// A hash function usable in Noise handshakes.
 pub trait Hash {

@@ -83,7 +83,7 @@
 //!
 //! The [`Pattern::PreMessages`] Cons-list drives the prologue. The
 //! handshake starts with the full pre-message list as a type
-//! parameter. Each call to [`set_s()`] or [`set_rs()`] consumes one
+//! parameter. Each call to `set_s()` or `set_rs()` consumes one
 //! pre-message entry, advancing the list toward [`Nil`]. The
 //! direction of the pre-message combined with the [`Role`]
 //! determines which method is available:
@@ -142,10 +142,10 @@
 //! [`Hash`] — the exact byte size of every handshake message is
 //! known at compile time. For `Noise_IKpsk1_P256_ChaChaPoly_BLAKE2b`:
 //!
-//! | Message | Contents                              | Size (bytes)     |
-//! |---------|---------------------------------------|------------------|
-//! | msg1    | `e_pub` + `encrypted(s_pub)` + tag    | 65 + 65 + 16 = 146 |
-//! | msg2    | `e_pub`                               | 65               |
+//! | Message | Contents                                   | Size (bytes)              |
+//! |---------|--------------------------------------------|---------------------------|
+//! | msg1    | `e_pub` + `encrypted(s_pub)` + payload tag | 65 + (65 + 16) + 16 = 162 |
+//! | msg2    | `e_pub` + payload tag                      | 65 + 16 = 81              |
 //!
 //! # Async crypto provider
 //!
@@ -156,10 +156,6 @@
 //! - **Software** (`eccoxide`/`cryptoxide`) — resolves immediately.
 //! - **Secure Enclave** (Apple Security framework) — suspends until the
 //!   hardware completes; may prompt for biometric authentication.
-//! - **KMS / HSM / USB hardware key** — suspends until the external
-//!   device responds.
-//! - **WebCrypto** (WASM) — suspends until the browser promise
-//!   resolves.
 //!
 //! The handshake state machine is a single `async` function that
 //! `await`s each crypto operation. The runtime handles scheduling

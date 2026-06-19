@@ -25,9 +25,9 @@
 //! # Design
 //!
 //! This layer is **purely additive**: the buffer-based core
-//! ([`HandshakeState`]/[`Sending`]/[`Receiving`](super::handshake)) is
+//! ([`HandshakeState`]/[`Sending`](super::handshake::Sending)/[`Receiving`](super::handshake)) is
 //! untouched and remains canonical. Each token method here threads its
-//! compile-time [`WireSize`](super::tokens::WireSize)-sized bytes through
+//! compile-time [`WireSize`]-sized bytes through
 //! a small fixed stack scratch and streams them to the stream, so the
 //! bytes on the wire are identical to the buffer path; only buffer
 //! ownership and the I/O differ. The structure mirrors

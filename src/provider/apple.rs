@@ -524,7 +524,7 @@ impl AppleSecureEnclave {
 ///
 /// Because this offloads, the [`CryptoProviderAsync`] futures here resolve
 /// on a worker thread rather than the first poll. The synchronous
-/// [`CryptoProvider`](crate::provider::CryptoProvider) surface runs the
+/// [`CryptoProvider`] surface runs the
 /// same blocking calls directly on the caller's thread, so
 /// `AppleSecureEnclave` is usable with the blocking `std::io` handshake
 /// too.

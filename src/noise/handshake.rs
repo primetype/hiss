@@ -116,11 +116,11 @@ where
 /// Type parameters:
 /// * `N` — the protocol descriptor (e.g.
 ///   `Noise<IKpsk1, P256, ChaChaPoly, Blake2b>`)
-/// * `R` — role ([`Initiator`](super::role::Initiator) or
-///   [`Responder`](super::role::Responder))
+/// * `R` — role ([`Initiator`] or
+///   [`Responder`])
 /// * `PreMsgs` — remaining pre-message Cons-list. Starts as
 ///   [`Pattern::PreMessages`] and advances toward [`Nil`] as
-///   pre-message keys are provided via [`set_s`] / [`set_rs`].
+///   pre-message keys are provided via `set_s` / `set_rs`.
 ///   Handshake messages can only be processed once this reaches
 ///   [`Nil`].
 /// * `Msgs` — the remaining handshake message Cons-list
@@ -155,8 +155,8 @@ where
     /// `Noise<IKpsk1, P256, ChaChaPoly, Blake2b>`) determines the
     /// pattern, curve, cipher, and hash. The pre-message Cons-list
     /// from the pattern becomes the `PreMsgs` type parameter —
-    /// pre-message keys must be provided (via [`set_s`] or
-    /// [`set_rs`]) to advance it to [`Nil`] before the handshake
+    /// pre-message keys must be provided (via `set_s` or
+    /// `set_rs`) to advance it to [`Nil`] before the handshake
     /// can proceed.
     ///
     /// The `prologue` is mixed into the handshake hash before any
@@ -347,8 +347,8 @@ where
     /// output buffer.
     ///
     /// The buffer must be exactly the right size for this message.
-    /// Use [`noise_message_size!`] to compute the size at compile
-    /// time, or [`expected_send_size`] to query it at runtime.
+    /// Use [`noise_message_size!`](crate::noise_message_size) to compute the size at compile
+    /// time, or [`expected_send_size`](Self::expected_send_size) to query it at runtime.
     ///
     /// This is called implicitly by the first token method — users
     /// do not need to call this directly. It transitions from

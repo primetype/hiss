@@ -841,7 +841,7 @@ where
     /// Start a send message with the `E` token.
     ///
     /// `output` must be exactly the right size for this message.
-    /// Use [`noise_message_size!`] to compute the size at compile time.
+    /// Use [`noise_message_size!`](crate::noise_message_size) to compute the size at compile time.
     pub async fn e(
         self,
         output: &mut [u8],
@@ -870,7 +870,7 @@ where
     /// Start a send message with the `Psk` token.
     ///
     /// `output` must be exactly the right size for this message.
-    /// Use [`noise_message_size!`] to compute the size at compile time.
+    /// Use [`noise_message_size!`](crate::noise_message_size) to compute the size at compile time.
     pub async fn psk<'a>(
         self,
         output: &'a mut [u8],
@@ -900,7 +900,7 @@ where
     /// Start a send message with the `S` token.
     ///
     /// `output` must be exactly the right size for this message.
-    /// Use [`noise_message_size!`] to compute the size at compile time.
+    /// Use [`noise_message_size!`](crate::noise_message_size) to compute the size at compile time.
     pub async fn s(
         self,
         output: &mut [u8],

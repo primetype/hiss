@@ -4,7 +4,7 @@
 //! Where [`crate::curve`] holds the curve math and key/handle types, a
 //! **provider** describes *where and how* keys live — an environment, not
 //! a curve. A provider is parameterised by a
-//! [`Curve`](crate::curve::Curve), and one provider may back several
+//! [`Curve`], and one provider may back several
 //! curves (it implements the trait family once per curve it supports).
 //!
 //! The family is three traits:
@@ -153,7 +153,7 @@ pub trait CryptoProviderAsync<C: Curve>: CryptoKeys<C> {
 /// keys": it still generates long-term keys for a handshake — persisting
 /// their bytes, if wanted, is the caller's job. For hardware-backed,
 /// persistent keys on Apple platforms use
-/// [`AppleSecureEnclave`](apple::AppleSecureEnclave).
+/// [`AppleSecureEnclave`].
 ///
 /// Owns a caller-supplied CSPRNG `R` (`CryptoRng + RngCore`): pass
 /// `rand::rng()` in production or a seeded RNG for deterministic tests.

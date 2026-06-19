@@ -10,7 +10,7 @@
 //! methods append data via [`write`](SendBuffer::write) or obtain a
 //! mutable slice for in-place encryption via
 //! [`reserve`](SendBuffer::reserve). When all tokens have been
-//! processed, [`written`](SendBuffer::written) returns the filled
+//! processed, `written` returns the filled
 //! portion as `&[u8]`.
 //!
 //! # Receive path
@@ -25,7 +25,7 @@ use super::error::HandshakeError;
 /// handshake messages.
 ///
 /// The buffer is provided by the caller — typically a stack-allocated
-/// `[u8; N]` where `N` comes from [`noise_message_size!`]. No heap
+/// `[u8; N]` where `N` comes from [`noise_message_size!`](crate::noise_message_size). No heap
 /// allocation occurs.
 pub(crate) struct SendBuffer<'a> {
     data: &'a mut [u8],
@@ -36,7 +36,7 @@ impl<'a> SendBuffer<'a> {
     /// Wrap a mutable byte slice as a send buffer.
     ///
     /// The caller is responsible for providing a buffer of the correct
-    /// size (see [`noise_message_size!`]).
+    /// size (see [`noise_message_size!`](crate::noise_message_size)).
     pub(crate) fn new(data: &'a mut [u8]) -> Self {
         Self { data, cursor: 0 }
     }

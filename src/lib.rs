@@ -3,8 +3,8 @@
 //! A `Noise<Pattern, Curve, Cipher, Hash>` is zero-sized: the handshake
 //! pattern, curve, cipher, and hash are encoded as types, so every
 //! buffer size is a `const` and every protocol misuse — a token out of
-//! order, a wrong-direction message — is a *compile error*. To anyone
-//! on the wire, a `hiss` channel is indistinguishable from static.
+//! order, a wrong-direction message — is a *compile error*. Get the
+//! handshake wrong and it never builds.
 //!
 //! Secret keys live in software or behind a pluggable, hardware-backed
 //! provider (Apple Secure Enclave today), and are wiped on drop. The

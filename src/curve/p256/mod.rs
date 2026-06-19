@@ -18,7 +18,7 @@
 //! # ECDH
 //!
 //! Both software and Apple backends provide a `dh()` method that
-//! returns a [`SharedSecret`](super::SharedSecret) — the raw
+//! returns a [`SharedSecret`] — the raw
 //! 32-byte x-coordinate of the shared ECDH point, as required by
 //! the Noise protocol specification (`DHLEN = 32` for P-256).
 

@@ -12,7 +12,7 @@
 //! ```
 //!
 //! [`ASN1Reader`] walks a byte slice non-destructively.
-//! [`ASN1Writer`] (test-only) builds a DER blob from scratch.
+//! `ASN1Writer` (test-only) builds a DER blob from scratch.
 
 #[derive(Debug, thiserror::Error)]
 pub enum Asn1Error {
