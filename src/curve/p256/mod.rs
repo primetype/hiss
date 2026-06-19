@@ -22,8 +22,6 @@
 //! 32-byte x-coordinate of the shared ECDH point, as required by
 //! the Noise protocol specification (`DHLEN = 32` for P-256).
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-pub mod apple;
 mod software;
 
 use super::{Curve, SharedSecret};
@@ -37,9 +35,7 @@ use eccoxide::curve::{
 use packtool::Packed;
 use std::fmt;
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-pub use self::apple::SecureEnclaveCryptoProvider;
-pub use self::software::{P256r1PrivateKey, SoftwareCryptoProvider};
+pub use self::software::P256r1PrivateKey;
 
 // ── Curve marker ────────────────────────────────────────────────
 
@@ -49,7 +45,7 @@ pub use self::software::{P256r1PrivateKey, SoftwareCryptoProvider};
 /// concrete [`P256r1PublicKey`], [`P256Signature`], and
 /// [`SharedSecret`] types. Used as a type parameter for
 /// [`Noise`](crate::noise::Noise) and
-/// [`CryptoProviderAsync`](super::CryptoProviderAsync).
+/// [`CryptoProviderAsync`](crate::provider::CryptoProviderAsync).
 pub struct P256;
 
 impl Curve for P256 {

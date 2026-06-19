@@ -25,8 +25,9 @@
 //!   `kSecAttrTokenIDSecureEnclave` — D-23 invariant. iOS continues to
 //!   use its single (data-protection) keychain as before.
 
-use super::{Error, P256, P256Signature, P256r1PublicKey};
-use crate::curve::{CryptoKeys, CryptoProvider, CryptoProviderAsync, SharedSecret};
+use crate::curve::p256::{Error, P256, P256Signature, P256r1PublicKey};
+use crate::curve::SharedSecret;
+use crate::provider::{CryptoKeys, CryptoProvider, CryptoProviderAsync};
 use core_foundation::{base::TCFType as _, data::CFData, dictionary::CFDictionary};
 use security_framework::{
     access_control::{ProtectionMode, SecAccessControl},
@@ -49,7 +50,7 @@ pub struct P256r1PrivateKey {
 
 impl P256r1PublicKey {
     fn as_sec_key(&self, attributes: &CFDictionary) -> Result<SecKey, Error> {
-        let key_data = CFData::from_buffer(&self.0);
+        let key_data = CFData::from_buffer(self.to_bytes());
         unsafe {
             let mut error = std::ptr::null_mut();
 
@@ -303,7 +304,7 @@ impl P256r1PrivateKey {
 /// to the Data Protection Keychain. Ephemeral keys use a
 /// software-backed `SecKey` (no persistence, no biometric).
 #[derive(Clone, Copy)]
-pub struct SecureEnclaveCryptoProvider;
+pub struct AppleSecureEnclave;
 
 /// Run a blocking Security-framework operation on Tokio's blocking
 /// thread pool.
@@ -318,8 +319,8 @@ pub struct SecureEnclaveCryptoProvider;
 ///
 /// Because this offloads, the [`CryptoProviderAsync`] futures here resolve on
 /// a worker thread (not the first poll) — so, unlike the software
-/// backend, `SecureEnclaveCryptoProvider` deliberately does **not**
-/// implement [`CryptoProvider`](crate::curve::CryptoProvider)
+/// backend, `AppleSecureEnclave` deliberately does **not**
+/// implement [`CryptoProvider`](crate::provider::CryptoProvider)
 /// and is not usable with the blocking `std::io` handshake.
 async fn offload<T, F>(op: F) -> Result<T, Error>
 where
@@ -331,7 +332,7 @@ where
         .map_err(|e| Error::Platform(format!("Secure Enclave task failed to join: {e}")))?
 }
 
-impl CryptoKeys<P256> for SecureEnclaveCryptoProvider {
+impl CryptoKeys<P256> for AppleSecureEnclave {
     type Error = Error;
     type PrivateKey = P256r1PrivateKey;
 
@@ -342,7 +343,7 @@ impl CryptoKeys<P256> for SecureEnclaveCryptoProvider {
     }
 }
 
-impl CryptoProviderAsync<P256> for SecureEnclaveCryptoProvider {
+impl CryptoProviderAsync<P256> for AppleSecureEnclave {
     async fn generate_static_key_async(&self) -> Result<Self::PrivateKey, Self::Error> {
         offload(P256r1PrivateKey::generate_secure_enclave).await
     }
@@ -378,7 +379,7 @@ impl CryptoProviderAsync<P256> for SecureEnclaveCryptoProvider {
 // blocking context; the async impl above offloads the same calls.) This
 // is what makes Secure Enclave keys usable with the blocking `std::io`
 // handshake, exactly as Apple's libraries expose them.
-impl CryptoProvider<P256> for SecureEnclaveCryptoProvider {
+impl CryptoProvider<P256> for AppleSecureEnclave {
     fn generate_static_key(&self) -> Result<Self::PrivateKey, Self::Error> {
         P256r1PrivateKey::generate_secure_enclave()
     }
@@ -458,7 +459,7 @@ mod tests {
     /// two ephemeral keys, agree, and confirm the DH matches both ways.
     #[tokio::test]
     async fn crypto_provider_offloaded_dh_roundtrip() {
-        let provider = SecureEnclaveCryptoProvider;
+        let provider = AppleSecureEnclave;
 
         let a = provider.generate_ephemeral_key_async().await.unwrap();
         let b = provider.generate_ephemeral_key_async().await.unwrap();

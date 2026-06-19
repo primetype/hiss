@@ -81,13 +81,14 @@ fn eccoxide_pubkey_matches_snow_p256() {
 /// prologue mix_hash) and verify the result matches snow.
 #[tokio::test]
 async fn manual_n_replay_matches_snow() {
-    use hiss::curve::{CryptoKeys, CryptoProviderAsync};
-    use hiss::curve::p256::SoftwareCryptoProvider;
+    use hiss::provider::ProviderExt;
+    use hiss::provider::EphemeralOnly;
+    use hiss::curve::p256::P256;
 
-    let provider = SoftwareCryptoProvider;
+    let provider = EphemeralOnly;
 
-    let our_static = provider.generate_static_key_async().await.unwrap();
-    let our_static_pub = provider.public_key(&our_static).unwrap();
+    let our_static = provider.generate::<P256>().unwrap();
+    let our_static_pub = provider.public(&our_static).unwrap();
     let rs_bytes = our_static_pub.to_bytes();
 
     // Snow N initiator
@@ -124,7 +125,7 @@ async fn manual_n_replay_matches_snow() {
 
     // es: DH(s, re)
     let snow_e_pub_key = P256r1PublicKey::from_bytes(snow_e_pub).unwrap();
-    let shared_secret = provider.dh_async(&our_static, &snow_e_pub_key).await.unwrap();
+    let shared_secret = our_static.dh(&snow_e_pub_key).unwrap();
     let ss_bytes: &[u8] = shared_secret.as_ref();
 
     // mix_key(shared_secret)

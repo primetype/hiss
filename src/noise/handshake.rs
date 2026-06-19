@@ -23,7 +23,8 @@ use super::pattern::Pattern;
 use super::role::{Initiator, Responder, Role};
 use super::symmetric_state::SymmetricState;
 use super::tokens::*;
-use crate::curve::{CryptoKeys, CryptoProviderAsync, Curve};
+use crate::curve::Curve;
+use crate::provider::{CryptoKeys, CryptoProviderAsync};
 use std::marker::PhantomData;
 
 // ── Wire size helper ─────────────────────────────────────────

@@ -42,7 +42,7 @@ use cryptoxide::ed25519 as ed;
 use packtool::Packed;
 use rand_core::{CryptoRng, RngCore};
 
-use super::{CryptoKeys, CryptoProviderAsync, Curve, SharedSecret};
+use super::{Curve, SharedSecret};
 
 // ── Errors ─────────────────────────────────────────────────────
 
@@ -269,53 +269,6 @@ impl fmt::Debug for SoftwareEd25519PrivateKey {
     }
 }
 
-// ── Software CryptoProviderAsync ────────────────────────────────────
-
-/// Pure-software [`CryptoProviderAsync`] for Ed25519.
-///
-/// Uses `cryptoxide` for all operations. Works on every platform
-/// (including WASM). All operations resolve immediately — no
-/// hardware interaction, no biometric prompts.
-#[derive(Clone, Copy)]
-pub struct SoftwareCryptoProvider;
-
-impl CryptoKeys<Ed25519> for SoftwareCryptoProvider {
-    type Error = Error;
-    type PrivateKey = SoftwareEd25519PrivateKey;
-
-    fn public_key(&self, key: &Self::PrivateKey) -> Result<Ed25519PublicKey, Self::Error> {
-        Ok(key.public_key())
-    }
-}
-
-impl CryptoProviderAsync<Ed25519> for SoftwareCryptoProvider {
-    async fn generate_static_key_async(&self) -> Result<Self::PrivateKey, Self::Error> {
-        // TODO: maybe this should error since this key is not
-        // going to be static at all at this point.
-        SoftwareEd25519PrivateKey::generate_os()
-    }
-
-    async fn generate_ephemeral_key_async(&self) -> Result<Self::PrivateKey, Self::Error> {
-        SoftwareEd25519PrivateKey::generate_os()
-    }
-
-    async fn sign_async(
-        &self,
-        key: &Self::PrivateKey,
-        message: &[u8],
-    ) -> Result<Ed25519Signature, Self::Error> {
-        Ok(key.sign(message))
-    }
-
-    async fn dh_async(
-        &self,
-        key: &Self::PrivateKey,
-        peer: &Ed25519PublicKey,
-    ) -> Result<SharedSecret, Self::Error> {
-        Ok(key.dh(peer))
-    }
-}
-
 // ── Apple Ed25519 seed at-rest storage ─────────────────────────
 
 /// Module-level data-directory plumbing for the macOS Ed25519 seed
@@ -458,8 +411,8 @@ pub mod apple {
         use std::os::unix::fs::OpenOptionsExt;
         use std::path::{Path, PathBuf};
 
-        use crate::curve::p256::SecureEnclaveCryptoProvider;
-        use crate::curve::p256::apple::P256r1PrivateKey;
+        use crate::provider::apple::AppleSecureEnclave;
+        use crate::provider::apple::P256r1PrivateKey;
         use crate::noise::seal::{SEALED_SIZE, open_32, seal_32};
 
         const SEED_REL_PATH_PARENT: &str = "identity";
@@ -494,7 +447,7 @@ pub mod apple {
 
             // Load the SE P-256 public key (recipient of the Noise N
             // seal) BEFORE moving the private key into the seal —
-            // `SecureEnclaveCryptoProvider::public_key` is sync, so
+            // `AppleSecureEnclave::public_key` is sync, so
             // we extract the public, drop the private key handle, and
             // pass only the public into the seal.
             let se_private = P256r1PrivateKey::load_from_keychain()
@@ -508,7 +461,7 @@ pub mod apple {
             // Seal via async Noise N. NO `block_on` /
             // `Handle::try_current` — those would panic inside a
             // Tokio worker. The caller is `async fn`.
-            let sealed = seal_32(SecureEnclaveCryptoProvider, &se_public, seed)
+            let sealed = seal_32(AppleSecureEnclave, &se_public, seed)
                 .await
                 .map_err(|e| format!("Noise N seal of Ed25519 seed failed: {e}"))?;
 
@@ -565,7 +518,7 @@ pub mod apple {
                 .map_err(|e| format!("failed to load SE P-256 key for seal recipient: {e}"))?
                 .ok_or_else(|| "SE P-256 key missing at Ed25519 seed-open time".to_string())?;
 
-            let opened = open_32(SecureEnclaveCryptoProvider, se_private, &sealed)
+            let opened = open_32(AppleSecureEnclave, se_private, &sealed)
                 .await
                 .map_err(|e| format!("Noise N open of Ed25519 seed failed: {e}"))?;
 
@@ -737,6 +690,7 @@ mod apple_macos_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::provider::{CryptoProviderAsync, EphemeralOnly, ProviderExt};
 
     // ── Direct API tests ─────────────────────────────────────────
 
@@ -885,23 +839,33 @@ mod tests {
 
     #[tokio::test]
     async fn provider_sign_and_dh() {
-        let provider = SoftwareCryptoProvider;
+        let provider = EphemeralOnly;
 
-        let sk1 = provider.generate_static_key_async().await.unwrap();
-        let pk1 = provider.public_key(&sk1).unwrap();
+        let sk1 = CryptoProviderAsync::<Ed25519>::generate_static_key_async(&provider)
+            .await
+            .unwrap();
+        let pk1 = provider.public(&sk1).unwrap();
 
-        let sk2 = provider.generate_ephemeral_key_async().await.unwrap();
-        let pk2 = provider.public_key(&sk2).unwrap();
+        let sk2 = CryptoProviderAsync::<Ed25519>::generate_ephemeral_key_async(&provider)
+            .await
+            .unwrap();
+        let pk2 = provider.public(&sk2).unwrap();
 
         // Sign and verify
         const MSG: &[u8] = b"hello hiss";
-        let sig = provider.sign_async(&sk1, MSG).await.unwrap();
+        let sig = CryptoProviderAsync::<Ed25519>::sign_async(&provider, &sk1, MSG)
+            .await
+            .unwrap();
         assert!(pk1.verify(sig, MSG));
         assert!(!pk2.verify(sig, MSG));
 
         // DH symmetry
-        let ss1 = provider.dh_async(&sk1, &pk2).await.unwrap();
-        let ss2 = provider.dh_async(&sk2, &pk1).await.unwrap();
+        let ss1 = CryptoProviderAsync::<Ed25519>::dh_async(&provider, &sk1, &pk2)
+            .await
+            .unwrap();
+        let ss2 = CryptoProviderAsync::<Ed25519>::dh_async(&provider, &sk2, &pk1)
+            .await
+            .unwrap();
         assert_eq!(ss1, ss2);
     }
 }

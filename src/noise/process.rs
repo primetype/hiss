@@ -27,7 +27,8 @@ use super::hash::Hash;
 use super::role::{Initiator, Responder, Role};
 use super::tokens::*;
 use super::transport::Transport;
-use crate::curve::{CryptoKeys, CryptoProviderAsync, Curve};
+use crate::curve::Curve;
+use crate::provider::{CryptoKeys, CryptoProviderAsync};
 use std::marker::PhantomData;
 
 // ═══════════════════════════════════════════════════════════════

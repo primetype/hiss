@@ -29,7 +29,7 @@
 //! lives in the Secure Enclave (non-exportable hardware-resident
 //! material).
 
-use crate::curve::CryptoProviderAsync;
+use crate::provider::CryptoProviderAsync;
 use crate::curve::p256::{P256, P256r1PublicKey};
 use crate::noise::{Blake2b, ChaChaPoly, N, Noise, Transport};
 
@@ -147,7 +147,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::curve::p256::{P256r1PrivateKey, SoftwareCryptoProvider};
+    use crate::curve::p256::P256r1PrivateKey;
+    use crate::provider::EphemeralOnly;
 
     #[tokio::test]
     async fn seal_open_round_trip() {
@@ -155,7 +156,7 @@ mod tests {
         let device_pub = device_key.public();
         let payload: [u8; 32] = [0x42; 32];
 
-        let sealed = seal_32(SoftwareCryptoProvider, &device_pub, &payload)
+        let sealed = seal_32(EphemeralOnly, &device_pub, &payload)
             .await
             .unwrap();
         assert_eq!(sealed.len(), SEALED_SIZE);
@@ -168,7 +169,7 @@ mod tests {
             "sealed envelope must not contain cleartext payload",
         );
 
-        let opened = open_32(SoftwareCryptoProvider, device_key, &sealed)
+        let opened = open_32(EphemeralOnly, device_key, &sealed)
             .await
             .unwrap();
         assert_eq!(opened, payload);
@@ -179,12 +180,12 @@ mod tests {
         let device_key = P256r1PrivateKey::generate().unwrap();
         let device_pub = device_key.public();
         let payload: [u8; 32] = [0x99; 32];
-        let sealed = seal_32(SoftwareCryptoProvider, &device_pub, &payload)
+        let sealed = seal_32(EphemeralOnly, &device_pub, &payload)
             .await
             .unwrap();
 
         let other_key = P256r1PrivateKey::generate().unwrap();
-        let result = open_32(SoftwareCryptoProvider, other_key, &sealed).await;
+        let result = open_32(EphemeralOnly, other_key, &sealed).await;
         assert!(
             matches!(result, Err(SealError::Open(_))),
             "opening with wrong key must fail",
@@ -197,10 +198,10 @@ mod tests {
         let device_pub = device_key.public();
         let payload: [u8; 32] = [0xAB; 32];
 
-        let sealed_a = seal_32(SoftwareCryptoProvider, &device_pub, &payload)
+        let sealed_a = seal_32(EphemeralOnly, &device_pub, &payload)
             .await
             .unwrap();
-        let sealed_b = seal_32(SoftwareCryptoProvider, &device_pub, &payload)
+        let sealed_b = seal_32(EphemeralOnly, &device_pub, &payload)
             .await
             .unwrap();
 

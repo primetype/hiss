@@ -12,8 +12,8 @@
 //! [`to_bytes`](P256r1PrivateKey::to_bytes) round-trips it — so keys
 //! interoperate with any standard SEC1 / RFC-conformant P-256 tooling.
 
-use super::{Error, P256, P256Signature, P256r1PublicKey};
-use crate::curve::{CryptoKeys, CryptoProvider, CryptoProviderAsync, SharedSecret};
+use super::{Error, P256Signature, P256r1PublicKey};
+use crate::curve::SharedSecret;
 
 use eccoxide::curve::sec2::p256r1::{Point, Scalar};
 use rand_core::{CryptoRng, RngCore};
@@ -158,79 +158,6 @@ fn shared_secret_from(scalar: &Scalar, peer: &Point) -> Result<SharedSecret, Err
     Ok(SharedSecret::new(x.to_bytes()))
 }
 
-// ── CryptoProviderAsync ──────────────────────────────────────────────
-
-/// Pure-software [`CryptoProviderAsync`] for P-256.
-///
-/// Uses `eccoxide` for all curve operations. Works on every
-/// platform (including WASM). All operations resolve immediately —
-/// no hardware interaction, no biometric prompts.
-#[derive(Clone, Copy)]
-pub struct SoftwareCryptoProvider;
-
-impl CryptoKeys<P256> for SoftwareCryptoProvider {
-    type Error = Error;
-    type PrivateKey = P256r1PrivateKey;
-
-    fn public_key(&self, key: &Self::PrivateKey) -> Result<P256r1PublicKey, Self::Error> {
-        Ok(key.public())
-    }
-}
-
-impl CryptoProviderAsync<P256> for SoftwareCryptoProvider {
-    async fn generate_static_key_async(&self) -> Result<Self::PrivateKey, Self::Error> {
-        P256r1PrivateKey::generate()
-    }
-
-    async fn generate_ephemeral_key_async(&self) -> Result<Self::PrivateKey, Self::Error> {
-        P256r1PrivateKey::generate()
-    }
-
-    async fn sign_async(
-        &self,
-        key: &Self::PrivateKey,
-        message: &[u8],
-    ) -> Result<P256Signature, Self::Error> {
-        key.sign(message)
-    }
-
-    async fn dh_async(
-        &self,
-        key: &Self::PrivateKey,
-        peer: &P256r1PublicKey,
-    ) -> Result<SharedSecret, Self::Error> {
-        key.dh(peer)
-    }
-}
-
-// Software P-256 is synchronous end-to-end (eccoxide); the sync surface
-// is just the inherent operations, no offload, no `async`.
-impl CryptoProvider<P256> for SoftwareCryptoProvider {
-    fn generate_static_key(&self) -> Result<Self::PrivateKey, Self::Error> {
-        P256r1PrivateKey::generate()
-    }
-
-    fn generate_ephemeral_key(&self) -> Result<Self::PrivateKey, Self::Error> {
-        P256r1PrivateKey::generate()
-    }
-
-    fn sign(
-        &self,
-        key: &Self::PrivateKey,
-        message: &[u8],
-    ) -> Result<P256Signature, Self::Error> {
-        key.sign(message)
-    }
-
-    fn dh(
-        &self,
-        key: &Self::PrivateKey,
-        peer: &P256r1PublicKey,
-    ) -> Result<SharedSecret, Self::Error> {
-        key.dh(peer)
-    }
-}
-
 #[cfg(not(test))]
 impl fmt::Debug for P256r1PrivateKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -256,6 +183,8 @@ impl Drop for P256r1PrivateKey {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::curve::p256::P256;
+    use crate::provider::{CryptoProviderAsync, EphemeralOnly, ProviderExt};
     use proptest::prelude::*;
 
     fn arbitrary_secret_key() -> impl Strategy<Value = P256r1PrivateKey> {
@@ -319,27 +248,37 @@ mod tests {
         }
     }
 
-    /// Exercises the [`SoftwareCryptoProvider`] through the
+    /// Exercises the [`EphemeralOnly`] through the
     /// [`CryptoProviderAsync`] trait — sign/verify and ECDH.
     #[tokio::test]
     async fn provider_sign_and_dh() {
-        let provider = SoftwareCryptoProvider;
+        let provider = EphemeralOnly;
 
-        let sk1 = provider.generate_static_key_async().await.unwrap();
-        let pk1 = provider.public_key(&sk1).unwrap();
+        let sk1 = CryptoProviderAsync::<P256>::generate_static_key_async(&provider)
+            .await
+            .unwrap();
+        let pk1 = provider.public(&sk1).unwrap();
 
-        let sk2 = provider.generate_ephemeral_key_async().await.unwrap();
-        let pk2 = provider.public_key(&sk2).unwrap();
+        let sk2 = CryptoProviderAsync::<P256>::generate_ephemeral_key_async(&provider)
+            .await
+            .unwrap();
+        let pk2 = provider.public(&sk2).unwrap();
 
         // Sign and verify
         const MSG: &[u8] = b"hello hiss";
-        let sig = provider.sign_async(&sk1, MSG).await.unwrap();
+        let sig = CryptoProviderAsync::<P256>::sign_async(&provider, &sk1, MSG)
+            .await
+            .unwrap();
         assert!(pk1.verify(sig, MSG));
         assert!(!pk2.verify(sig, MSG));
 
         // DH symmetry
-        let ss1 = provider.dh_async(&sk1, &pk2).await.unwrap();
-        let ss2 = provider.dh_async(&sk2, &pk1).await.unwrap();
+        let ss1 = CryptoProviderAsync::<P256>::dh_async(&provider, &sk1, &pk2)
+            .await
+            .unwrap();
+        let ss2 = CryptoProviderAsync::<P256>::dh_async(&provider, &sk2, &pk1)
+            .await
+            .unwrap();
         assert_eq!(ss1, ss2);
     }
 

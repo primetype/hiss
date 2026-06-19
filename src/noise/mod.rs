@@ -211,7 +211,7 @@
 //!     .se().await?;
 //! ```
 //!
-//! [`CryptoProviderAsync`]: crate::curve::CryptoProviderAsync
+//! [`CryptoProviderAsync`]: crate::provider::CryptoProviderAsync
 
 pub(crate) mod buffers;
 pub mod cipher;
@@ -345,7 +345,7 @@ impl<P: Pattern, Cu: Curve, Ci: Cipher, H: Hash> Noise<P, Cu, Ci, H> {
     /// let hs = Channel::initiate(provider, &[])
     ///     .set_rs(responder_pub);
     /// ```
-    pub fn initiate<CP: crate::curve::CryptoProviderAsync<Cu>>(
+    pub fn initiate<CP: crate::provider::CryptoProviderAsync<Cu>>(
         provider: CP,
         prologue: &[u8],
     ) -> HandshakeState<Self, Initiator, P::PreMessages, P::Messages, CP> {
@@ -365,7 +365,7 @@ impl<P: Pattern, Cu: Curve, Ci: Cipher, H: Hash> Noise<P, Cu, Ci, H> {
     /// let hs = Channel::respond(provider, &[])
     ///     .set_s(our_static)?;
     /// ```
-    pub fn respond<CP: crate::curve::CryptoProviderAsync<Cu>>(
+    pub fn respond<CP: crate::provider::CryptoProviderAsync<Cu>>(
         provider: CP,
         prologue: &[u8],
     ) -> HandshakeState<Self, Responder, P::PreMessages, P::Messages, CP> {
@@ -376,8 +376,9 @@ impl<P: Pattern, Cu: Curve, Ci: Cipher, H: Hash> Noise<P, Cu, Ci, H> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::curve::{CryptoKeys, CryptoProviderAsync};
-    use crate::curve::p256::{P256r1PrivateKey, P256r1PublicKey, SoftwareCryptoProvider};
+    use crate::provider::ProviderExt;
+    use crate::curve::p256::{P256r1PrivateKey, P256r1PublicKey};
+    use crate::provider::EphemeralOnly;
     use crate::noise_message_size;
     use crate::psk::Psk;
     type Channel = Noise<IKpsk1, P256, ChaChaPoly, Blake2b>;
@@ -423,16 +424,16 @@ mod tests {
     /// then open it with the corresponding private key.
     #[tokio::test]
     async fn noise_n_seal_open() {
-        let provider = SoftwareCryptoProvider;
+        let provider = EphemeralOnly;
 
         // The "recipient" — in practice, the device's own Secure Enclave key.
-        let recipient_static = provider.generate_static_key_async().await.unwrap();
-        let recipient_pub = provider.public_key(&recipient_static).unwrap();
+        let recipient_static = provider.generate::<P256>().unwrap();
+        let recipient_pub = provider.public(&recipient_static).unwrap();
 
         let psk_to_seal = Psk::from_bytes([0x42; 32]);
 
         // ── Seal (initiator side) ─────────────────────────────────
-        let sealer = NoiseSeal::initiate(SoftwareCryptoProvider, &[]).set_rs(recipient_pub);
+        let sealer = NoiseSeal::initiate(EphemeralOnly, &[]).set_rs(recipient_pub);
 
         let mut msg_buf = [0u8;
             noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: false, keyed: false, tokens: [E, Es],)];
@@ -446,7 +447,7 @@ mod tests {
         let sealed_len = transport.send(psk_to_seal.as_bytes(), &mut sealed).unwrap();
 
         // ── Open (responder side) ─────────────────────────────────
-        let opener = NoiseSeal::respond(SoftwareCryptoProvider, &[])
+        let opener = NoiseSeal::respond(EphemeralOnly, &[])
             .set_s(recipient_static)
             .unwrap();
 
@@ -467,12 +468,12 @@ mod tests {
 
     #[tokio::test]
     async fn noise_n_tampered_ephemeral_rejected() {
-        let provider = SoftwareCryptoProvider;
+        let provider = EphemeralOnly;
 
-        let recipient_static = provider.generate_static_key_async().await.unwrap();
-        let recipient_pub = provider.public_key(&recipient_static).unwrap();
+        let recipient_static = provider.generate::<P256>().unwrap();
+        let recipient_pub = provider.public(&recipient_static).unwrap();
 
-        let sealer = NoiseSeal::initiate(SoftwareCryptoProvider, &[]).set_rs(recipient_pub);
+        let sealer = NoiseSeal::initiate(EphemeralOnly, &[]).set_rs(recipient_pub);
         let mut msg_buf = [0u8;
             noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: false, keyed: false, tokens: [E, Es],)];
         let (msg, _transport) = sealer.e(&mut msg_buf).await.unwrap().es().await.unwrap();
@@ -481,7 +482,7 @@ mod tests {
         // Flip a byte in the ephemeral public key.
         tampered[1] ^= 0xFF;
 
-        let opener = NoiseSeal::respond(SoftwareCryptoProvider, &[])
+        let opener = NoiseSeal::respond(EphemeralOnly, &[])
             .set_s(recipient_static)
             .unwrap();
 
@@ -501,12 +502,12 @@ mod tests {
 
     #[tokio::test]
     async fn noise_n_tampered_tag_rejected() {
-        let provider = SoftwareCryptoProvider;
+        let provider = EphemeralOnly;
 
-        let recipient_static = provider.generate_static_key_async().await.unwrap();
-        let recipient_pub = provider.public_key(&recipient_static).unwrap();
+        let recipient_static = provider.generate::<P256>().unwrap();
+        let recipient_pub = provider.public(&recipient_static).unwrap();
 
-        let sealer = NoiseSeal::initiate(SoftwareCryptoProvider, &[]).set_rs(recipient_pub);
+        let sealer = NoiseSeal::initiate(EphemeralOnly, &[]).set_rs(recipient_pub);
         let mut msg_buf = [0u8;
             noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: false, keyed: false, tokens: [E, Es],)];
         let (msg, _transport) = sealer.e(&mut msg_buf).await.unwrap().es().await.unwrap();
@@ -516,7 +517,7 @@ mod tests {
         let len = tampered.len();
         tampered[len - 1] ^= 0xFF;
 
-        let opener = NoiseSeal::respond(SoftwareCryptoProvider, &[])
+        let opener = NoiseSeal::respond(EphemeralOnly, &[])
             .set_s(recipient_static)
             .unwrap();
 
@@ -555,20 +556,20 @@ mod tests {
     /// where both static keys are known. Open with Bob's key.
     #[tokio::test]
     async fn noise_k_seal_open() {
-        let provider = SoftwareCryptoProvider;
+        let provider = EphemeralOnly;
 
         // Alice (sender) and Bob (recipient) each have static keys.
-        let alice_static = provider.generate_static_key_async().await.unwrap();
-        let alice_pub = provider.public_key(&alice_static).unwrap();
+        let alice_static = provider.generate::<P256>().unwrap();
+        let alice_pub = provider.public(&alice_static).unwrap();
 
-        let bob_static = provider.generate_static_key_async().await.unwrap();
-        let bob_pub = provider.public_key(&bob_static).unwrap();
+        let bob_static = provider.generate::<P256>().unwrap();
+        let bob_pub = provider.public(&bob_static).unwrap();
 
         let payload: [u8; 32] = [0x42; 32];
 
         // ── Seal (Alice → Bob) ──────────────────────────────────
         // Pre-messages: -> s (Alice), <- s (Bob)
-        let sealer = NoiseK::initiate(SoftwareCryptoProvider, &[])
+        let sealer = NoiseK::initiate(EphemeralOnly, &[])
             .set_s(alice_static)
             .unwrap()
             .set_rs(bob_pub);
@@ -595,7 +596,7 @@ mod tests {
 
         // ── Open (Bob) ──────────────────────────────────────────
         // Pre-messages: -> s (Alice), <- s (Bob)
-        let opener = NoiseK::respond(SoftwareCryptoProvider, &[])
+        let opener = NoiseK::respond(EphemeralOnly, &[])
             .set_rs(alice_pub)
             .set_s(bob_static)
             .unwrap();
@@ -617,19 +618,19 @@ mod tests {
     /// Noise Kpsk0 authenticated seal with PSK binding.
     #[tokio::test]
     async fn noise_kpsk0_seal_open() {
-        let provider = SoftwareCryptoProvider;
+        let provider = EphemeralOnly;
 
-        let alice_static = provider.generate_static_key_async().await.unwrap();
-        let alice_pub = provider.public_key(&alice_static).unwrap();
+        let alice_static = provider.generate::<P256>().unwrap();
+        let alice_pub = provider.public(&alice_static).unwrap();
 
-        let bob_static = provider.generate_static_key_async().await.unwrap();
-        let bob_pub = provider.public_key(&bob_static).unwrap();
+        let bob_static = provider.generate::<P256>().unwrap();
+        let bob_pub = provider.public(&bob_static).unwrap();
 
         let psk = Psk::from_bytes([0xBB; 32]);
         let payload: [u8; 32] = [0x42; 32];
 
         // ── Seal (Alice → Bob) ──────────────────────────────────
-        let sealer = NoiseKpsk0::initiate(SoftwareCryptoProvider, &[])
+        let sealer = NoiseKpsk0::initiate(EphemeralOnly, &[])
             .set_s(alice_static)
             .unwrap()
             .set_rs(bob_pub);
@@ -657,7 +658,7 @@ mod tests {
         let sealed_len = transport.send(&payload, &mut sealed).unwrap();
 
         // ── Open (Bob) ──────────────────────────────────────────
-        let opener = NoiseKpsk0::respond(SoftwareCryptoProvider, &[])
+        let opener = NoiseKpsk0::respond(EphemeralOnly, &[])
             .set_rs(alice_pub)
             .set_s(bob_static)
             .unwrap();
@@ -681,20 +682,20 @@ mod tests {
     /// Kpsk0 with wrong PSK fails to decrypt.
     #[tokio::test]
     async fn noise_kpsk0_wrong_psk_fails() {
-        let provider = SoftwareCryptoProvider;
+        let provider = EphemeralOnly;
 
-        let alice_static = provider.generate_static_key_async().await.unwrap();
-        let alice_pub = provider.public_key(&alice_static).unwrap();
+        let alice_static = provider.generate::<P256>().unwrap();
+        let alice_pub = provider.public(&alice_static).unwrap();
 
-        let bob_static = provider.generate_static_key_async().await.unwrap();
-        let bob_pub = provider.public_key(&bob_static).unwrap();
+        let bob_static = provider.generate::<P256>().unwrap();
+        let bob_pub = provider.public(&bob_static).unwrap();
 
         let psk = Psk::from_bytes([0xBB; 32]);
         let wrong_psk = Psk::from_bytes([0xCC; 32]);
         let payload: [u8; 32] = [0x42; 32];
 
         // Seal with correct PSK
-        let sealer = NoiseKpsk0::initiate(SoftwareCryptoProvider, &[])
+        let sealer = NoiseKpsk0::initiate(EphemeralOnly, &[])
             .set_s(alice_static)
             .unwrap()
             .set_rs(bob_pub);
@@ -720,7 +721,7 @@ mod tests {
 
         // Open with wrong PSK — the empty payload tag verification at
         // the end of the message catches the key divergence immediately.
-        let opener = NoiseKpsk0::respond(SoftwareCryptoProvider, &[])
+        let opener = NoiseKpsk0::respond(EphemeralOnly, &[])
             .set_rs(alice_pub)
             .set_s(bob_static)
             .unwrap();
@@ -752,22 +753,22 @@ mod tests {
     /// ```
     #[tokio::test]
     async fn ikpsk1_round_trip() {
-        let provider = SoftwareCryptoProvider;
+        let provider = EphemeralOnly;
 
         // ── Key generation ──────────────────────────────────────
-        let initiator_static = provider.generate_static_key_async().await.unwrap();
-        let initiator_pub = provider.public_key(&initiator_static).unwrap();
+        let initiator_static = provider.generate::<P256>().unwrap();
+        let initiator_pub = provider.public(&initiator_static).unwrap();
 
-        let responder_static = provider.generate_static_key_async().await.unwrap();
-        let responder_pub = provider.public_key(&responder_static).unwrap();
+        let responder_static = provider.generate::<P256>().unwrap();
+        let responder_pub = provider.public(&responder_static).unwrap();
 
         // PSK established during the QR ceremony.
         let psk = Psk::from_bytes([0xAA; 32]);
 
         // ── Construction ────────────────────────────────────────
-        let i_hs = Channel::initiate(SoftwareCryptoProvider, &[]).set_rs(responder_pub);
+        let i_hs = Channel::initiate(EphemeralOnly, &[]).set_rs(responder_pub);
 
-        let r_hs = Channel::respond(SoftwareCryptoProvider, &[])
+        let r_hs = Channel::respond(EphemeralOnly, &[])
             .set_s(responder_static)
             .unwrap();
 
@@ -1030,10 +1031,10 @@ mod tests {
 
     #[tokio::test]
     async fn wrong_message_length_rejected() {
-        let provider = SoftwareCryptoProvider;
-        let responder_static = provider.generate_static_key_async().await.unwrap();
+        let provider = EphemeralOnly;
+        let responder_static = provider.generate::<P256>().unwrap();
 
-        let r_hs = Channel::respond(SoftwareCryptoProvider, &[])
+        let r_hs = Channel::respond(EphemeralOnly, &[])
             .set_s(responder_static)
             .unwrap();
 
@@ -1051,10 +1052,10 @@ mod tests {
 
     #[tokio::test]
     async fn expected_message_size_reports_correctly() {
-        let provider = SoftwareCryptoProvider;
-        let responder_static = provider.generate_static_key_async().await.unwrap();
+        let provider = EphemeralOnly;
+        let responder_static = provider.generate::<P256>().unwrap();
 
-        let r_hs = Channel::respond(SoftwareCryptoProvider, &[])
+        let r_hs = Channel::respond(EphemeralOnly, &[])
             .set_s(responder_static)
             .unwrap();
 
@@ -1064,16 +1065,16 @@ mod tests {
 
     #[tokio::test]
     async fn corrupted_encrypted_static_in_msg1_rejected() {
-        let provider = SoftwareCryptoProvider;
+        let provider = EphemeralOnly;
 
-        let initiator_static = provider.generate_static_key_async().await.unwrap();
-        let responder_static = provider.generate_static_key_async().await.unwrap();
-        let responder_pub = provider.public_key(&responder_static).unwrap();
+        let initiator_static = provider.generate::<P256>().unwrap();
+        let responder_static = provider.generate::<P256>().unwrap();
+        let responder_pub = provider.public(&responder_static).unwrap();
 
         let psk = Psk::from_bytes([0xBB; 32]);
 
         // Initiator constructs msg1 normally.
-        let i_hs = Channel::initiate(SoftwareCryptoProvider, &[]).set_rs(responder_pub);
+        let i_hs = Channel::initiate(EphemeralOnly, &[]).set_rs(responder_pub);
 
         let mut msg1_buf = [0u8;
             noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: true, keyed: false, tokens: [E, Es, S, Ss, Psk],)];
@@ -1100,7 +1101,7 @@ mod tests {
 
         // Responder reads msg1 — corruption in the encrypted static key
         // area causes decryption failure at the `s` token.
-        let r_hs = Channel::respond(SoftwareCryptoProvider, &[])
+        let r_hs = Channel::respond(EphemeralOnly, &[])
             .set_s(responder_static)
             .unwrap();
 
@@ -1112,17 +1113,17 @@ mod tests {
 
     #[tokio::test]
     async fn mismatched_psk_fails() {
-        let provider = SoftwareCryptoProvider;
+        let provider = EphemeralOnly;
 
-        let initiator_static = provider.generate_static_key_async().await.unwrap();
-        let responder_static = provider.generate_static_key_async().await.unwrap();
-        let responder_pub = provider.public_key(&responder_static).unwrap();
+        let initiator_static = provider.generate::<P256>().unwrap();
+        let responder_static = provider.generate::<P256>().unwrap();
+        let responder_pub = provider.public(&responder_static).unwrap();
 
         let i_psk = Psk::from_bytes([0xAA; 32]);
         let r_psk = Psk::from_bytes([0xBB; 32]); // different!
 
         // Initiator sends msg1 with i_psk.
-        let i_hs = Channel::initiate(SoftwareCryptoProvider, &[]).set_rs(responder_pub);
+        let i_hs = Channel::initiate(EphemeralOnly, &[]).set_rs(responder_pub);
 
         let mut msg1_buf = [0u8;
             noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: true, keyed: false, tokens: [E, Es, S, Ss, Psk],)];
@@ -1145,7 +1146,7 @@ mod tests {
         let msg1 = msg1.to_vec();
 
         // Responder reads msg1 with r_psk — mismatch.
-        let r_hs = Channel::respond(SoftwareCryptoProvider, &[])
+        let r_hs = Channel::respond(EphemeralOnly, &[])
             .set_s(responder_static)
             .unwrap();
 
@@ -1162,16 +1163,16 @@ mod tests {
 
     #[tokio::test]
     async fn transport_corrupted_ciphertext_rejected() {
-        let provider = SoftwareCryptoProvider;
+        let provider = EphemeralOnly;
 
-        let initiator_static = provider.generate_static_key_async().await.unwrap();
-        let responder_static = provider.generate_static_key_async().await.unwrap();
-        let responder_pub = provider.public_key(&responder_static).unwrap();
+        let initiator_static = provider.generate::<P256>().unwrap();
+        let responder_static = provider.generate::<P256>().unwrap();
+        let responder_pub = provider.public(&responder_static).unwrap();
         let psk = Psk::from_bytes([0xCC; 32]);
 
         // Complete handshake.
-        let i_hs = Channel::initiate(SoftwareCryptoProvider, &[]).set_rs(responder_pub);
-        let r_hs = Channel::respond(SoftwareCryptoProvider, &[])
+        let i_hs = Channel::initiate(EphemeralOnly, &[]).set_rs(responder_pub);
+        let r_hs = Channel::respond(EphemeralOnly, &[])
             .set_s(responder_static)
             .unwrap();
 
@@ -1233,16 +1234,16 @@ mod tests {
 
     #[tokio::test]
     async fn transport_multiple_messages_nonce_advances() {
-        let provider = SoftwareCryptoProvider;
+        let provider = EphemeralOnly;
 
-        let initiator_static = provider.generate_static_key_async().await.unwrap();
-        let responder_static = provider.generate_static_key_async().await.unwrap();
-        let responder_pub = provider.public_key(&responder_static).unwrap();
+        let initiator_static = provider.generate::<P256>().unwrap();
+        let responder_static = provider.generate::<P256>().unwrap();
+        let responder_pub = provider.public(&responder_static).unwrap();
         let psk = Psk::from_bytes([0xDD; 32]);
 
         // Complete handshake.
-        let i_hs = Channel::initiate(SoftwareCryptoProvider, &[]).set_rs(responder_pub);
-        let r_hs = Channel::respond(SoftwareCryptoProvider, &[])
+        let i_hs = Channel::initiate(EphemeralOnly, &[]).set_rs(responder_pub);
+        let r_hs = Channel::respond(EphemeralOnly, &[])
             .set_s(responder_static)
             .unwrap();
 
@@ -1321,16 +1322,16 @@ mod tests {
 
     #[tokio::test]
     async fn ikpsk1_wrong_responder_key_rejected() {
-        let provider = SoftwareCryptoProvider;
+        let provider = EphemeralOnly;
 
-        let initiator_static = provider.generate_static_key_async().await.unwrap();
-        let responder_static = provider.generate_static_key_async().await.unwrap();
-        let wrong_static = provider.generate_static_key_async().await.unwrap();
-        let wrong_pub = provider.public_key(&wrong_static).unwrap();
+        let initiator_static = provider.generate::<P256>().unwrap();
+        let responder_static = provider.generate::<P256>().unwrap();
+        let wrong_static = provider.generate::<P256>().unwrap();
+        let wrong_pub = provider.public(&wrong_static).unwrap();
         let psk = Psk::from_bytes([0xCC; 32]);
 
         // Initiator targets the wrong responder public key.
-        let i_hs = Channel::initiate(SoftwareCryptoProvider, &[]).set_rs(wrong_pub);
+        let i_hs = Channel::initiate(EphemeralOnly, &[]).set_rs(wrong_pub);
 
         // Initiator sends msg1 with es DH against the wrong key.
         let mut msg1_buf = [0u8;
@@ -1354,7 +1355,7 @@ mod tests {
         let msg1 = msg1.to_vec();
 
         // Actual responder holds a different static key.
-        let r_hs = Channel::respond(SoftwareCryptoProvider, &[])
+        let r_hs = Channel::respond(EphemeralOnly, &[])
             .set_s(responder_static)
             .unwrap();
 
@@ -1373,16 +1374,16 @@ mod tests {
 
     #[tokio::test]
     async fn transport_keys_are_directional() {
-        let provider = SoftwareCryptoProvider;
+        let provider = EphemeralOnly;
 
-        let initiator_static = provider.generate_static_key_async().await.unwrap();
-        let responder_static = provider.generate_static_key_async().await.unwrap();
-        let responder_pub = provider.public_key(&responder_static).unwrap();
+        let initiator_static = provider.generate::<P256>().unwrap();
+        let responder_static = provider.generate::<P256>().unwrap();
+        let responder_pub = provider.public(&responder_static).unwrap();
         let psk = Psk::from_bytes([0xFF; 32]);
 
         // Complete handshake.
-        let i_hs = Channel::initiate(SoftwareCryptoProvider, &[]).set_rs(responder_pub);
-        let r_hs = Channel::respond(SoftwareCryptoProvider, &[])
+        let i_hs = Channel::initiate(EphemeralOnly, &[]).set_rs(responder_pub);
+        let r_hs = Channel::respond(EphemeralOnly, &[])
             .set_s(responder_static)
             .unwrap();
 
@@ -1463,9 +1464,9 @@ mod tests {
                 P256r1PrivateKey::from_bytes(responder_bytes).expect("valid test scalar");
             let responder_pub = responder_static.public();
 
-            let initiator_static = SoftwareCryptoProvider.generate_static_key_async().await.unwrap();
+            let initiator_static = EphemeralOnly.generate::<P256>().unwrap();
 
-            let i_hs = Channel::initiate(SoftwareCryptoProvider, &[]).set_rs(responder_pub);
+            let i_hs = Channel::initiate(EphemeralOnly, &[]).set_rs(responder_pub);
 
             let mut msg1_buf = [0u8;
                 noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: true, keyed: false, tokens: [E, Es, S, Ss, Psk],)];
@@ -1487,7 +1488,7 @@ mod tests {
                 .unwrap();
             let msg1 = msg1.to_vec();
 
-            let r_hs = Channel::respond(SoftwareCryptoProvider, &[])
+            let r_hs = Channel::respond(EphemeralOnly, &[])
                 .set_s(responder_static)
                 .unwrap();
 
@@ -1526,12 +1527,12 @@ mod tests {
 
     #[tokio::test]
     async fn ikpsk1_wrong_initiator_static_in_msg1() {
-        let provider = SoftwareCryptoProvider;
+        let provider = EphemeralOnly;
 
-        let initiator_static = provider.generate_static_key_async().await.unwrap();
-        let initiator_pub = provider.public_key(&initiator_static).unwrap();
-        let responder_static = provider.generate_static_key_async().await.unwrap();
-        let responder_pub = provider.public_key(&responder_static).unwrap();
+        let initiator_static = provider.generate::<P256>().unwrap();
+        let initiator_pub = provider.public(&initiator_static).unwrap();
+        let responder_static = provider.generate::<P256>().unwrap();
+        let responder_pub = provider.public(&responder_static).unwrap();
         let psk = Psk::from_bytes([0xCC; 32]);
 
         // Initiator sends msg1 with the WRONG static key.
@@ -1541,9 +1542,9 @@ mod tests {
         // the handshake completes — but the responder sees a different
         // initiator identity. The application layer must verify the
         // revealed static key matches the expected peer.
-        let wrong_static = provider.generate_static_key_async().await.unwrap();
+        let wrong_static = provider.generate::<P256>().unwrap();
 
-        let i_hs = Channel::initiate(SoftwareCryptoProvider, &[]).set_rs(responder_pub);
+        let i_hs = Channel::initiate(EphemeralOnly, &[]).set_rs(responder_pub);
 
         let mut msg1_buf = [0u8;
             noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: true, keyed: false, tokens: [E, Es, S, Ss, Psk],)];
@@ -1565,7 +1566,7 @@ mod tests {
             .unwrap();
         let msg1 = msg1.to_vec();
 
-        let r_hs = Channel::respond(SoftwareCryptoProvider, &[])
+        let r_hs = Channel::respond(EphemeralOnly, &[])
             .set_s(responder_static)
             .unwrap();
 
@@ -1610,14 +1611,14 @@ mod tests {
 
     #[tokio::test]
     async fn ikpsk1_corrupted_msg1_rejected() {
-        let provider = SoftwareCryptoProvider;
+        let provider = EphemeralOnly;
 
-        let initiator_static = provider.generate_static_key_async().await.unwrap();
-        let responder_static = provider.generate_static_key_async().await.unwrap();
-        let responder_pub = provider.public_key(&responder_static).unwrap();
+        let initiator_static = provider.generate::<P256>().unwrap();
+        let responder_static = provider.generate::<P256>().unwrap();
+        let responder_pub = provider.public(&responder_static).unwrap();
         let psk = Psk::from_bytes([0xDD; 32]);
 
-        let i_hs = Channel::initiate(SoftwareCryptoProvider, &[]).set_rs(responder_pub);
+        let i_hs = Channel::initiate(EphemeralOnly, &[]).set_rs(responder_pub);
 
         let mut msg1_buf = [0u8;
             noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: true, keyed: false, tokens: [E, Es, S, Ss, Psk],)];
@@ -1641,7 +1642,7 @@ mod tests {
         // Corrupt a byte in the ephemeral public key.
         corrupted[5] ^= 0xFF;
 
-        let r_hs = Channel::respond(SoftwareCryptoProvider, &[])
+        let r_hs = Channel::respond(EphemeralOnly, &[])
             .set_s(responder_static)
             .unwrap();
 
@@ -1663,15 +1664,15 @@ mod tests {
 
     #[tokio::test]
     async fn ikpsk1_corrupted_msg2_rejected() {
-        let provider = SoftwareCryptoProvider;
+        let provider = EphemeralOnly;
 
-        let initiator_static = provider.generate_static_key_async().await.unwrap();
-        let responder_static = provider.generate_static_key_async().await.unwrap();
-        let responder_pub = provider.public_key(&responder_static).unwrap();
+        let initiator_static = provider.generate::<P256>().unwrap();
+        let responder_static = provider.generate::<P256>().unwrap();
+        let responder_pub = provider.public(&responder_static).unwrap();
         let psk = Psk::from_bytes([0xDD; 32]);
 
-        let i_hs = Channel::initiate(SoftwareCryptoProvider, &[]).set_rs(responder_pub);
-        let r_hs = Channel::respond(SoftwareCryptoProvider, &[])
+        let i_hs = Channel::initiate(EphemeralOnly, &[]).set_rs(responder_pub);
+        let r_hs = Channel::respond(EphemeralOnly, &[])
             .set_s(responder_static)
             .unwrap();
 
@@ -1731,16 +1732,16 @@ mod tests {
 
     #[tokio::test]
     async fn transport_replayed_message_rejected() {
-        let provider = SoftwareCryptoProvider;
+        let provider = EphemeralOnly;
 
-        let initiator_static = provider.generate_static_key_async().await.unwrap();
-        let responder_static = provider.generate_static_key_async().await.unwrap();
-        let responder_pub = provider.public_key(&responder_static).unwrap();
+        let initiator_static = provider.generate::<P256>().unwrap();
+        let responder_static = provider.generate::<P256>().unwrap();
+        let responder_pub = provider.public(&responder_static).unwrap();
         let psk = Psk::from_bytes([0xEE; 32]);
 
         // Complete handshake.
-        let i_hs = Channel::initiate(SoftwareCryptoProvider, &[]).set_rs(responder_pub);
-        let r_hs = Channel::respond(SoftwareCryptoProvider, &[])
+        let i_hs = Channel::initiate(EphemeralOnly, &[]).set_rs(responder_pub);
+        let r_hs = Channel::respond(EphemeralOnly, &[])
             .set_s(responder_static)
             .unwrap();
 
@@ -1806,16 +1807,16 @@ mod tests {
 
     #[tokio::test]
     async fn transport_enforces_max_message_length() {
-        let provider = SoftwareCryptoProvider;
+        let provider = EphemeralOnly;
 
-        let initiator_static = provider.generate_static_key_async().await.unwrap();
-        let responder_static = provider.generate_static_key_async().await.unwrap();
-        let responder_pub = provider.public_key(&responder_static).unwrap();
+        let initiator_static = provider.generate::<P256>().unwrap();
+        let responder_static = provider.generate::<P256>().unwrap();
+        let responder_pub = provider.public(&responder_static).unwrap();
         let psk = Psk::from_bytes([0xFF; 32]);
 
         // Complete handshake.
-        let i_hs = Channel::initiate(SoftwareCryptoProvider, &[]).set_rs(responder_pub);
-        let r_hs = Channel::respond(SoftwareCryptoProvider, &[])
+        let i_hs = Channel::initiate(EphemeralOnly, &[]).set_rs(responder_pub);
+        let r_hs = Channel::respond(EphemeralOnly, &[])
             .set_s(responder_static)
             .unwrap();
 
@@ -1899,16 +1900,16 @@ mod tests {
 
     #[tokio::test]
     async fn transport_rekey_then_communicate() {
-        let provider = SoftwareCryptoProvider;
+        let provider = EphemeralOnly;
 
-        let initiator_static = provider.generate_static_key_async().await.unwrap();
-        let responder_static = provider.generate_static_key_async().await.unwrap();
-        let responder_pub = provider.public_key(&responder_static).unwrap();
+        let initiator_static = provider.generate::<P256>().unwrap();
+        let responder_static = provider.generate::<P256>().unwrap();
+        let responder_pub = provider.public(&responder_static).unwrap();
         let psk = Psk::from_bytes([0x11; 32]);
 
         // Complete handshake.
-        let i_hs = Channel::initiate(SoftwareCryptoProvider, &[]).set_rs(responder_pub);
-        let r_hs = Channel::respond(SoftwareCryptoProvider, &[])
+        let i_hs = Channel::initiate(EphemeralOnly, &[]).set_rs(responder_pub);
+        let r_hs = Channel::respond(EphemeralOnly, &[])
             .set_s(responder_static)
             .unwrap();
 
@@ -1980,16 +1981,16 @@ mod tests {
 
     #[tokio::test]
     async fn transport_rekey_desync_rejected() {
-        let provider = SoftwareCryptoProvider;
+        let provider = EphemeralOnly;
 
-        let initiator_static = provider.generate_static_key_async().await.unwrap();
-        let responder_static = provider.generate_static_key_async().await.unwrap();
-        let responder_pub = provider.public_key(&responder_static).unwrap();
+        let initiator_static = provider.generate::<P256>().unwrap();
+        let responder_static = provider.generate::<P256>().unwrap();
+        let responder_pub = provider.public(&responder_static).unwrap();
         let psk = Psk::from_bytes([0x22; 32]);
 
         // Complete handshake.
-        let i_hs = Channel::initiate(SoftwareCryptoProvider, &[]).set_rs(responder_pub);
-        let r_hs = Channel::respond(SoftwareCryptoProvider, &[])
+        let i_hs = Channel::initiate(EphemeralOnly, &[]).set_rs(responder_pub);
+        let r_hs = Channel::respond(EphemeralOnly, &[])
             .set_s(responder_static)
             .unwrap();
 
@@ -2061,22 +2062,22 @@ mod tests {
 
     #[tokio::test]
     async fn matching_prologue_succeeds() {
-        let provider = SoftwareCryptoProvider;
+        let provider = EphemeralOnly;
 
-        let responder_static = provider.generate_static_key_async().await.unwrap();
-        let responder_pub = provider.public_key(&responder_static).unwrap();
+        let responder_static = provider.generate::<P256>().unwrap();
+        let responder_pub = provider.public(&responder_static).unwrap();
 
         let prologue = b"hiss/v1";
 
         type NoiseSeal = Noise<N, P256, ChaChaPoly, Blake2b>;
 
-        let sealer = NoiseSeal::initiate(SoftwareCryptoProvider, prologue).set_rs(responder_pub);
+        let sealer = NoiseSeal::initiate(EphemeralOnly, prologue).set_rs(responder_pub);
         let mut msg_buf = [0u8;
             noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: false, keyed: false, tokens: [E, Es],)];
         let (msg, mut i_transport) = sealer.e(&mut msg_buf).await.unwrap().es().await.unwrap();
         let msg = msg.to_vec();
 
-        let opener = NoiseSeal::respond(SoftwareCryptoProvider, prologue)
+        let opener = NoiseSeal::respond(EphemeralOnly, prologue)
             .set_s(responder_static)
             .unwrap();
         let (_, recv) = opener.read(&msg).unwrap().e().await.unwrap();
@@ -2092,21 +2093,21 @@ mod tests {
 
     #[tokio::test]
     async fn mismatched_prologue_rejected() {
-        let provider = SoftwareCryptoProvider;
+        let provider = EphemeralOnly;
 
-        let responder_static = provider.generate_static_key_async().await.unwrap();
-        let responder_pub = provider.public_key(&responder_static).unwrap();
+        let responder_static = provider.generate::<P256>().unwrap();
+        let responder_pub = provider.public(&responder_static).unwrap();
 
         type NoiseSeal = Noise<N, P256, ChaChaPoly, Blake2b>;
 
         // Initiator uses prologue "v1", responder uses "v2".
-        let sealer = NoiseSeal::initiate(SoftwareCryptoProvider, b"v1").set_rs(responder_pub);
+        let sealer = NoiseSeal::initiate(EphemeralOnly, b"v1").set_rs(responder_pub);
         let mut msg_buf = [0u8;
             noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: false, keyed: false, tokens: [E, Es],)];
         let (msg, _) = sealer.e(&mut msg_buf).await.unwrap().es().await.unwrap();
         let msg = msg.to_vec();
 
-        let opener = NoiseSeal::respond(SoftwareCryptoProvider, b"v2")
+        let opener = NoiseSeal::respond(EphemeralOnly, b"v2")
             .set_s(responder_static)
             .unwrap();
         let (_, recv) = opener.read(&msg).unwrap().e().await.unwrap();
@@ -2164,11 +2165,11 @@ mod tests {
             transport::Transport<Channel>,
             transport::Transport<Channel>,
         ) {
-            let provider = SoftwareCryptoProvider;
-            let responder_pub = provider.public_key(&responder_static).unwrap();
+            let provider = EphemeralOnly;
+            let responder_pub = provider.public(&responder_static).unwrap();
 
-            let i_hs = Channel::initiate(SoftwareCryptoProvider, &[]).set_rs(responder_pub);
-            let r_hs = Channel::respond(SoftwareCryptoProvider, &[])
+            let i_hs = Channel::initiate(EphemeralOnly, &[]).set_rs(responder_pub);
+            let r_hs = Channel::respond(EphemeralOnly, &[])
                 .set_s(responder_static)
                 .unwrap();
 
@@ -2228,8 +2229,8 @@ mod tests {
                     .build()
                     .unwrap();
                 rt.block_on(async {
-                    let i_sk = SoftwareCryptoProvider.generate_static_key_async().await.unwrap();
-                    let r_sk = SoftwareCryptoProvider.generate_static_key_async().await.unwrap();
+                    let i_sk = EphemeralOnly.generate::<P256>().unwrap();
+                    let r_sk = EphemeralOnly.generate::<P256>().unwrap();
 
                     let (mut i_t, mut r_t) = full_ikpsk1_handshake(i_sk, r_sk, psk).await;
 
@@ -2262,8 +2263,8 @@ mod tests {
                     .build()
                     .unwrap();
                 rt.block_on(async {
-                    let i_sk = SoftwareCryptoProvider.generate_static_key_async().await.unwrap();
-                    let r_sk = SoftwareCryptoProvider.generate_static_key_async().await.unwrap();
+                    let i_sk = EphemeralOnly.generate::<P256>().unwrap();
+                    let r_sk = EphemeralOnly.generate::<P256>().unwrap();
 
                     let (mut i_t, mut r_t) = full_ikpsk1_handshake(i_sk, r_sk, psk).await;
 
@@ -2292,8 +2293,8 @@ mod tests {
                     .build()
                     .unwrap();
                 rt.block_on(async {
-                    let r_sk = SoftwareCryptoProvider.generate_static_key_async().await.unwrap();
-                    let r_hs = Channel::respond(SoftwareCryptoProvider, &[])
+                    let r_sk = EphemeralOnly.generate::<P256>().unwrap();
+                    let r_hs = Channel::respond(EphemeralOnly, &[])
                         .set_s(r_sk)
                         .unwrap();
 

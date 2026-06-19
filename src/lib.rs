@@ -36,6 +36,7 @@
 mod asn1;
 pub mod curve;
 pub mod noise;
+pub mod provider;
 pub mod psk;
 pub mod zeroize;
 

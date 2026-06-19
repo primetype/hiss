@@ -6,8 +6,8 @@
 
 use criterion::{Criterion, criterion_group, criterion_main};
 
-use hiss::curve::{CryptoKeys, CryptoProviderAsync};
-use hiss::curve::p256::SoftwareCryptoProvider;
+use hiss::provider::ProviderExt;
+use hiss::provider::EphemeralOnly;
 use hiss::noise::*;
 use hiss::psk::Psk;
 
@@ -28,22 +28,22 @@ fn bench_n_hiss(c: &mut Criterion) {
     c.bench_function("noise_N_hiss", |b| {
         b.iter(|| {
             rt.block_on(async {
-                let provider = SoftwareCryptoProvider;
+                let provider = EphemeralOnly;
 
-                let responder_static = provider.generate_static_key_async().await.unwrap();
-                let responder_pub = provider.public_key(&responder_static).unwrap();
+                let responder_static = provider.generate::<P256>().unwrap();
+                let responder_pub = provider.public(&responder_static).unwrap();
 
                 type NoiseSeal = Noise<N, P256, ChaChaPoly, Blake2b>;
 
                 // Initiator seals
                 let sealer =
-                    NoiseSeal::initiate(SoftwareCryptoProvider, &[]).set_rs(responder_pub);
+                    NoiseSeal::initiate(EphemeralOnly, &[]).set_rs(responder_pub);
                 let mut msg_buf = [0u8; 81];
                 let (msg, mut i_transport) =
                     sealer.e(&mut msg_buf).await.unwrap().es().await.unwrap();
 
                 // Responder opens
-                let opener = NoiseSeal::respond(SoftwareCryptoProvider, &[])
+                let opener = NoiseSeal::respond(EphemeralOnly, &[])
                     .set_s(responder_static)
                     .unwrap();
                 let (_, recv) = opener.read(msg).unwrap().e().await.unwrap();
@@ -111,17 +111,17 @@ fn bench_ikpsk1_hiss(c: &mut Criterion) {
     c.bench_function("noise_IKpsk1_hiss", |b| {
         b.iter(|| {
             rt.block_on(async {
-                let provider = SoftwareCryptoProvider;
+                let provider = EphemeralOnly;
 
-                let i_static = provider.generate_static_key_async().await.unwrap();
-                let r_static = provider.generate_static_key_async().await.unwrap();
-                let r_pub = provider.public_key(&r_static).unwrap();
+                let i_static = provider.generate::<P256>().unwrap();
+                let r_static = provider.generate::<P256>().unwrap();
+                let r_pub = provider.public(&r_static).unwrap();
                 let psk = Psk::from_bytes([0xAA; 32]);
 
                 type Proto = Noise<IKpsk1, P256, ChaChaPoly, Blake2b>;
 
                 // Message 1: -> e, es, s, ss, psk
-                let i_hs = Proto::initiate(SoftwareCryptoProvider, &[]).set_rs(r_pub);
+                let i_hs = Proto::initiate(EphemeralOnly, &[]).set_rs(r_pub);
                 let mut msg1_buf = [0u8; 162];
                 let (msg1, i_hs) = i_hs
                     .e(&mut msg1_buf)
@@ -142,7 +142,7 @@ fn bench_ikpsk1_hiss(c: &mut Criterion) {
                 let msg1 = msg1.to_vec();
 
                 // Responder reads msg1
-                let r_hs = Proto::respond(SoftwareCryptoProvider, &[])
+                let r_hs = Proto::respond(EphemeralOnly, &[])
                     .set_s(r_static)
                     .unwrap();
                 let (_, recv) = r_hs.read(&msg1).unwrap().e().await.unwrap();
@@ -243,18 +243,18 @@ fn bench_transport_hiss(c: &mut Criterion) {
 
     // Set up a completed N handshake, then benchmark transport only.
     let (mut sender, mut receiver) = rt.block_on(async {
-        let provider = SoftwareCryptoProvider;
+        let provider = EphemeralOnly;
 
-        let r_static = provider.generate_static_key_async().await.unwrap();
-        let r_pub = provider.public_key(&r_static).unwrap();
+        let r_static = provider.generate::<P256>().unwrap();
+        let r_pub = provider.public(&r_static).unwrap();
 
         type NoiseSeal = Noise<N, P256, ChaChaPoly, Blake2b>;
 
-        let sealer = NoiseSeal::initiate(SoftwareCryptoProvider, &[]).set_rs(r_pub);
+        let sealer = NoiseSeal::initiate(EphemeralOnly, &[]).set_rs(r_pub);
         let mut msg_buf = [0u8; 81];
         let (msg, i_transport) = sealer.e(&mut msg_buf).await.unwrap().es().await.unwrap();
 
-        let opener = NoiseSeal::respond(SoftwareCryptoProvider, &[])
+        let opener = NoiseSeal::respond(EphemeralOnly, &[])
             .set_s(r_static)
             .unwrap();
         let (_, recv) = opener.read(msg).unwrap().e().await.unwrap();
