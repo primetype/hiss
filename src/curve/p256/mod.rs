@@ -310,6 +310,20 @@ impl P256Signature {
                 s[0]
             )));
         }
+        // ECDSA `r`/`s` are positive. Minimal DER (enforced by the reader)
+        // encodes a positive value whose top bit is set with a leading
+        // 0x00 sign byte, so any content whose first byte has the high bit
+        // set is a negative integer and must be rejected.
+        if r[0] & 0x80 != 0 {
+            return Err(Error::InvalidSignatureAsn1(
+                "r: negative integer".to_string(),
+            ));
+        }
+        if s[0] & 0x80 != 0 {
+            return Err(Error::InvalidSignatureAsn1(
+                "s: negative integer".to_string(),
+            ));
+        }
         if !reader.is_empty() {
             return Err(Error::InvalidSignatureAsn1("trailing data".to_string()));
         }

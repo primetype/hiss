@@ -23,8 +23,11 @@ pub enum Asn1Error {
     #[error("data truncated")]
     Truncated,
     #[error("trailing data after structure")]
-    #[allow(dead_code)]
     TrailingData,
+    #[error("non-minimal length encoding (long-form or indefinite length)")]
+    NonMinimalLength,
+    #[error("non-minimal integer encoding (superfluous leading 0x00/0xff)")]
+    NonMinimalInteger,
     #[error("value too large: {0} bytes")]
     #[allow(dead_code)]
     TooLarge(usize),
@@ -82,6 +85,20 @@ impl<'a> ASN1Reader<'a> {
         self.0.is_empty()
     }
 
+    /// Enter a SEQUENCE that spans the **entire** remaining input.
+    ///
+    /// Strict DER for the one structure this codec decodes — a standalone
+    /// ECDSA signature — so:
+    ///
+    /// * the length must use the definite **short form** (a P-256
+    ///   signature's SEQUENCE body is far below the 128-byte short-form
+    ///   ceiling, so a long-form `0x81…` or indefinite `0x80` length is
+    ///   always a non-minimal/illegal encoding here → [`Asn1Error::NonMinimalLength`]);
+    /// * the body must be exactly the rest of the input — a length that
+    ///   overruns the buffer is [`Asn1Error::Truncated`], one that leaves
+    ///   bytes after the SEQUENCE is [`Asn1Error::TrailingData`].
+    ///
+    /// The returned reader is therefore bounded to the SEQUENCE body.
     pub fn sequence(self) -> Result<Self, Asn1Error> {
         let this = self.not_empty()?;
         if this.0[0] != 0x30 {
@@ -93,14 +110,30 @@ impl<'a> ASN1Reader<'a> {
         if this.0.len() < 2 {
             return Err(Asn1Error::Truncated);
         }
-        let remaining_length = this.0[1] as usize;
-        let remaining = &this.0[2..];
-        if remaining.len() < remaining_length {
+        if this.0[1] >= 0x80 {
+            return Err(Asn1Error::NonMinimalLength);
+        }
+        let length = this.0[1] as usize;
+        let body = &this.0[2..];
+        if body.len() < length {
             return Err(Asn1Error::Truncated);
         }
-        Ok(Self(remaining))
+        if body.len() > length {
+            return Err(Asn1Error::TrailingData);
+        }
+        Ok(Self(body))
     }
 
+    /// Read one DER INTEGER from the front, returning the remaining reader
+    /// and the integer's **content** octets.
+    ///
+    /// Strict DER: the length must use the definite **short form**
+    /// (P-256 `r`/`s` are at most 33 content octets → [`Asn1Error::NonMinimalLength`]
+    /// otherwise), there must be at least one content octet, and the
+    /// encoding must be **minimal** — a leading `0x00` (or `0xff`) that is
+    /// not required to carry the sign bit is rejected with
+    /// [`Asn1Error::NonMinimalInteger`] (X.690 §8.3.2). The sign and range
+    /// of the value itself are the caller's concern.
     pub fn integer(self) -> Result<(Self, &'a [u8]), Asn1Error> {
         let this = self.not_empty()?;
         if this.0[0] != 0x02 {
@@ -112,12 +145,28 @@ impl<'a> ASN1Reader<'a> {
         if this.0.len() < 2 {
             return Err(Asn1Error::Truncated);
         }
-        let integer_length = this.0[1] as usize;
-        if this.0.len() < 2 + integer_length {
+        if this.0[1] >= 0x80 {
+            return Err(Asn1Error::NonMinimalLength);
+        }
+        let length = this.0[1] as usize;
+        if length == 0 {
             return Err(Asn1Error::Truncated);
         }
-        let integer = &this.0[2..(2 + integer_length)];
-        let remaining = &this.0[(2 + integer_length)..];
+        if this.0.len() < 2 + length {
+            return Err(Asn1Error::Truncated);
+        }
+        let integer = &this.0[2..(2 + length)];
+        // X.690 §8.3.2: with more than one content octet, the first octet
+        // and bit 8 of the second must not be all-zero (superfluous
+        // leading 0x00) nor all-one (superfluous leading 0xff).
+        if length >= 2 {
+            let superfluous_zero = integer[0] == 0x00 && (integer[1] & 0x80) == 0;
+            let superfluous_ones = integer[0] == 0xff && (integer[1] & 0x80) != 0;
+            if superfluous_zero || superfluous_ones {
+                return Err(Asn1Error::NonMinimalInteger);
+            }
+        }
+        let remaining = &this.0[(2 + length)..];
         Ok((Self(remaining), integer))
     }
 }
@@ -163,5 +212,79 @@ mod tests {
         assert!(reader.is_empty());
         assert_eq!(r, R);
         assert_eq!(s, S);
+    }
+
+    #[test]
+    fn sequence_rejects_long_form_length() {
+        // 0x81 == long-form length; never minimal for a sub-128-byte body.
+        let der = &[0x30, 0x81, 0x06, 0x02, 0x01, 0x01, 0x02, 0x01, 0x02];
+        assert!(matches!(
+            ASN1Reader::new(der).sequence(),
+            Err(Asn1Error::NonMinimalLength)
+        ));
+    }
+
+    #[test]
+    fn sequence_rejects_trailing_data() {
+        // Body is one byte longer than the declared length.
+        let der = &[0x30, 0x03, 0x02, 0x01, 0x01, 0xff];
+        assert!(matches!(
+            ASN1Reader::new(der).sequence(),
+            Err(Asn1Error::TrailingData)
+        ));
+    }
+
+    #[test]
+    fn sequence_rejects_truncated_body() {
+        let der = &[0x30, 0x05, 0x02, 0x01, 0x01];
+        assert!(matches!(
+            ASN1Reader::new(der).sequence(),
+            Err(Asn1Error::Truncated)
+        ));
+    }
+
+    #[test]
+    fn integer_rejects_long_form_length() {
+        assert!(matches!(
+            ASN1Reader::new(&[0x02, 0x81, 0x01, 0x01]).integer(),
+            Err(Asn1Error::NonMinimalLength)
+        ));
+    }
+
+    #[test]
+    fn integer_rejects_empty_content() {
+        assert!(matches!(
+            ASN1Reader::new(&[0x02, 0x00]).integer(),
+            Err(Asn1Error::Truncated)
+        ));
+    }
+
+    #[test]
+    fn integer_rejects_superfluous_leading_zero() {
+        // 0x00 0x01: the 0x00 is not needed for the sign bit.
+        assert!(matches!(
+            ASN1Reader::new(&[0x02, 0x02, 0x00, 0x01]).integer(),
+            Err(Asn1Error::NonMinimalInteger)
+        ));
+    }
+
+    #[test]
+    fn integer_rejects_superfluous_leading_ones() {
+        // 0xff 0x80: non-minimal negative encoding.
+        assert!(matches!(
+            ASN1Reader::new(&[0x02, 0x02, 0xff, 0x80]).integer(),
+            Err(Asn1Error::NonMinimalInteger)
+        ));
+    }
+
+    #[test]
+    fn integer_accepts_required_sign_byte() {
+        // 0x00 0x80: the leading 0x00 IS required (0x80 has its top bit
+        // set), so this is the minimal encoding of a positive value.
+        let (reader, content) = ASN1Reader::new(&[0x02, 0x02, 0x00, 0x80])
+            .integer()
+            .unwrap();
+        assert!(reader.is_empty());
+        assert_eq!(content, &[0x00, 0x80]);
     }
 }
