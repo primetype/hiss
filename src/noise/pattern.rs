@@ -283,3 +283,50 @@ impl Pattern for IX {
 }
 
 assert_well_formed!(IX);
+
+// ── XK ──────────────────────────────────────────────────────────
+
+/// `XK` — interactive mutual authentication over **three messages**
+/// with strong **initiator-identity privacy**. The initiator knows the
+/// responder's static key up front (pre-message `<- s`) and
+/// authenticates the responder early via `es`. The initiator's own
+/// static key is transmitted **encrypted in msg3** (after `ee` has
+/// keyed the cipher), so it is hidden from a passive eavesdropper, and
+/// is authenticated via `se`.
+///
+/// Unlike [`IK`] (where the initiator's static rides in msg1), XK defers
+/// the initiator's static to a third flight, after both ephemerals are
+/// mixed — giving the initiator's identity full forward-secret
+/// confidentiality at the cost of an extra round trip.
+///
+/// ```text
+/// XK:
+///   <- s
+///   ...
+///   -> e, es
+///   <- e, ee
+///   -> s, se
+/// ```
+pub struct XK;
+
+impl Pattern for XK {
+    const NAME: &'static str = "XK";
+    const NUM_MESSAGES: usize = 3;
+    const HAS_PSK: bool = false;
+
+    // Pre-messages: <- s (responder's static key known to the initiator)
+    type PreMessages = Cons<Message<ToInitiator, Cons<S, Nil>>, Nil>;
+
+    // -> e, es
+    // <- e, ee
+    // -> s, se
+    type Messages = Cons<
+        Message<ToResponder, Cons<E, Cons<Es, Nil>>>,
+        Cons<
+            Message<ToInitiator, Cons<E, Cons<Ee, Nil>>>,
+            Cons<Message<ToResponder, Cons<S, Cons<Se, Nil>>>, Nil>,
+        >,
+    >;
+}
+
+assert_well_formed!(XK);

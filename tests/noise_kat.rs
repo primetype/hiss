@@ -413,6 +413,58 @@ async fn noise_kat_ix() {
     assert_eq!(&pt[..pn], TRANSPORT_R2I, "IX transport r->i plaintext");
 }
 
+#[tokio::test]
+async fn noise_kat_xk() {
+    let file = load_vectors();
+    let v = vector(&file, "Noise_XK_P256_ChaChaPoly_BLAKE2b");
+
+    let provider = EphemeralOnly::new(ScriptedRng::new(&[&INIT_EPHEMERAL]));
+    // XK pre-message `<- s`: the initiator pre-knows the responder static.
+    let hs = XK::initiate(provider, &[]).set_rs(public_key(&RESP_STATIC));
+
+    // msg1: -> e, es
+    let mut buf1 = [0u8; 256];
+    let (msg1, hs) = hs.e(&mut buf1).await.unwrap().es().await.unwrap();
+    assert_eq!(msg1.to_vec(), decode(&v.messages[0].ciphertext), "XK msg1");
+
+    // msg2: <- e, ee (read the frozen responder message)
+    let msg2 = decode(&v.messages[1].ciphertext);
+    let (_, recv) = hs.read(&msg2).unwrap().e().await.unwrap();
+    let hs = recv.ee().await.unwrap();
+
+    // msg3: -> s, se — the initiator's static is sent encrypted (after ee).
+    let mut buf3 = [0u8; 256];
+    let (msg3, mut transport) = hs
+        .s(&mut buf3, private_key(&INIT_STATIC))
+        .await
+        .unwrap()
+        .se()
+        .await
+        .unwrap();
+    assert_eq!(msg3.to_vec(), decode(&v.messages[2].ciphertext), "XK msg3");
+
+    assert_eq!(
+        transport.session_id().as_ref(),
+        decode(&v.handshake_hash),
+        "XK handshake hash"
+    );
+
+    // transport: initiator -> responder (we produce it)
+    let mut ct = [0u8; 256];
+    let n = transport.send(TRANSPORT_I2R, &mut ct).unwrap();
+    assert_eq!(
+        &ct[..n],
+        decode(&v.transport[0].ciphertext),
+        "XK transport i->r"
+    );
+
+    // transport: responder -> initiator (we decrypt the frozen ciphertext)
+    let r2i = decode(&v.transport[1].ciphertext);
+    let mut pt = [0u8; 256];
+    let pn = transport.receive(&r2i, &mut pt).unwrap();
+    assert_eq!(&pt[..pn], TRANSPORT_R2I, "XK transport r->i plaintext");
+}
+
 // ── Generator (reference: snow) ──────────────────────────────────
 
 #[cfg(test)]
@@ -584,6 +636,116 @@ mod generate {
         }
     }
 
+    /// Captured bytes from a three-message handshake run.
+    struct ThreeMessageRun {
+        msg1: Vec<u8>,
+        msg2: Vec<u8>,
+        msg3: Vec<u8>,
+        hash: Vec<u8>,
+        i2r: Vec<u8>,
+        r2i: Vec<u8>,
+    }
+
+    /// Run a three-message pattern through snow (msg1 ->, msg2 <-, msg3 ->)
+    /// and capture every handshake message, the handshake hash, and both
+    /// transport directions.
+    fn three_message(
+        mut init: snow::HandshakeState,
+        mut resp: snow::HandshakeState,
+    ) -> ThreeMessageRun {
+        let mut b1 = [0u8; 512];
+        let n1 = init.write_message(&[], &mut b1).unwrap();
+        let msg1 = b1[..n1].to_vec();
+        let mut rb = [0u8; 512];
+        resp.read_message(&msg1, &mut rb).unwrap();
+
+        let mut b2 = [0u8; 512];
+        let n2 = resp.write_message(&[], &mut b2).unwrap();
+        let msg2 = b2[..n2].to_vec();
+        let mut ib = [0u8; 512];
+        init.read_message(&msg2, &mut ib).unwrap();
+
+        let mut b3 = [0u8; 512];
+        let n3 = init.write_message(&[], &mut b3).unwrap();
+        let msg3 = b3[..n3].to_vec();
+        let mut rb3 = [0u8; 512];
+        resp.read_message(&msg3, &mut rb3).unwrap();
+
+        let hash = init.get_handshake_hash().to_vec();
+        assert_eq!(hash, resp.get_handshake_hash(), "snow hashes diverged");
+
+        let mut it = init.into_transport_mode().unwrap();
+        let mut rt = resp.into_transport_mode().unwrap();
+
+        let mut c = [0u8; 512];
+        let cn = it.write_message(TRANSPORT_I2R, &mut c).unwrap();
+        let i2r = c[..cn].to_vec();
+        let mut c2 = [0u8; 512];
+        let cn2 = rt.write_message(TRANSPORT_R2I, &mut c2).unwrap();
+        let r2i = c2[..cn2].to_vec();
+
+        ThreeMessageRun {
+            msg1,
+            msg2,
+            msg3,
+            hash,
+            i2r,
+            r2i,
+        }
+    }
+
+    fn three_message_vector(
+        protocol_name: &str,
+        init_static: Option<String>,
+        psk: Option<String>,
+        init: snow::HandshakeState,
+        resp: snow::HandshakeState,
+    ) -> Vector {
+        let ThreeMessageRun {
+            msg1,
+            msg2,
+            msg3,
+            hash,
+            i2r,
+            r2i,
+        } = three_message(init, resp);
+        Vector {
+            protocol_name: protocol_name.to_string(),
+            init_static,
+            init_ephemeral: hh(&INIT_EPHEMERAL),
+            resp_static: hh(&RESP_STATIC),
+            resp_ephemeral: Some(hh(&RESP_EPHEMERAL)),
+            psk,
+            messages: vec![
+                HandshakeMessage {
+                    payload: String::new(),
+                    ciphertext: hh(&msg1),
+                },
+                HandshakeMessage {
+                    payload: String::new(),
+                    ciphertext: hh(&msg2),
+                },
+                HandshakeMessage {
+                    payload: String::new(),
+                    ciphertext: hh(&msg3),
+                },
+            ],
+            handshake_hash: hh(&hash),
+            transport: vec![
+                TransportMessage {
+                    sender: "initiator".to_string(),
+                    payload: hh(TRANSPORT_I2R),
+                    ciphertext: hh(&i2r),
+                },
+                TransportMessage {
+                    sender: "responder".to_string(),
+                    payload: hh(TRANSPORT_R2I),
+                    ciphertext: hh(&r2i),
+                },
+            ],
+        }
+    }
+
     fn vector_n() -> Vector {
         let proto = "Noise_N_P256_ChaChaPoly_BLAKE2b";
         let init = snow::Builder::new(proto.parse().unwrap())
@@ -725,6 +887,29 @@ mod generate {
         two_message_vector(proto, Some(hh(&INIT_STATIC)), None, init, resp)
     }
 
+    fn vector_xk() -> Vector {
+        let proto = "Noise_XK_P256_ChaChaPoly_BLAKE2b";
+        // XK: pre-message `<- s` — the initiator pre-knows the responder's
+        // static (remote_public_key) and carries its own static, sent
+        // encrypted in msg3. The responder carries its own static (pre-known
+        // to the peer) and does NOT pre-know the initiator's static.
+        let init = snow::Builder::new(proto.parse().unwrap())
+            .local_private_key(&INIT_STATIC)
+            .unwrap()
+            .remote_public_key(&resp_pub_bytes())
+            .unwrap()
+            .fixed_ephemeral_key_for_testing_only(&INIT_EPHEMERAL)
+            .build_initiator()
+            .unwrap();
+        let resp = snow::Builder::new(proto.parse().unwrap())
+            .local_private_key(&RESP_STATIC)
+            .unwrap()
+            .fixed_ephemeral_key_for_testing_only(&RESP_EPHEMERAL)
+            .build_responder()
+            .unwrap();
+        three_message_vector(proto, Some(hh(&INIT_STATIC)), None, init, resp)
+    }
+
     /// Regenerate the frozen vectors from snow. Ignored: run manually with
     /// `cargo test --test noise_kat generate_noise_kat_vectors -- --ignored`.
     #[test]
@@ -734,8 +919,8 @@ mod generate {
             note: "Noise KAT vectors for P256/ChaChaPoly/BLAKE2b, generated \
                    from snow with fixed keys + pinned ephemerals. One-way \
                    patterns freeze msg1 + the initiator->responder transport; \
-                   the interactive patterns (IKpsk1, IK, NK, IX) freeze both \
-                   messages + both transport directions. \
+                   the interactive patterns (IKpsk1, IK, NK, IX, XK) freeze every \
+                   handshake message + both transport directions. \
                    Provenance: agreement with snow (no spec P-256 vectors exist)."
                 .to_string(),
             vectors: vec![
@@ -746,6 +931,7 @@ mod generate {
                 vector_ik(),
                 vector_nk(),
                 vector_ix(),
+                vector_xk(),
             ],
         };
         let json = serde_json::to_string_pretty(&file).unwrap();

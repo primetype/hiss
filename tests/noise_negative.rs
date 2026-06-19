@@ -45,6 +45,9 @@ const NK_MSG1: usize = 81; // NK msg1: e + es (keys cipher) + tag
 const NK_MSG2: usize = 81; // NK msg2: e + ee + tag
 const IX_MSG1: usize = 130; // IX msg1: e + s (both plaintext, no DH yet)
 const IX_MSG2: usize = 162; // IX msg2: e + ee/se key cipher + encrypted s + es + tag
+const XK_MSG1: usize = 81; // XK msg1: e + es (keys cipher) + tag
+const XK_MSG2: usize = 81; // XK msg2: e + ee (keyed) + tag
+const XK_MSG3: usize = 97; // XK msg3: encrypted s (keyed) + se + tag
 
 /// Transform applied to a handshake message before the peer reads it.
 type Xform<'a> = dyn Fn(usize, Vec<u8>) -> Vec<u8> + 'a;
@@ -354,6 +357,56 @@ async fn run_ix(xform: &Xform<'_>) -> Result<(), ()> {
     Ok(())
 }
 
+async fn run_xk(xform: &Xform<'_>) -> Result<(), ()> {
+    // XK pre-message `<- s`: the initiator pre-knows the responder static
+    // (`set_rs`); the responder holds its own static (`set_s`).
+    let i = XK::initiate(
+        EphemeralOnly::new(ScriptedRng::new(&[&INIT_EPHEMERAL])),
+        &[],
+    )
+    .set_rs(public_key(&RESP_STATIC));
+
+    // msg1: -> e, es
+    let mut b1 = [0u8; 256];
+    let (msg1, i) = i.e(&mut b1).await.unwrap().es().await.unwrap();
+    let msg1 = xform(0, msg1.to_vec());
+
+    // Responder reads msg1 (-> e, es).
+    let r = XK::respond(
+        EphemeralOnly::new(ScriptedRng::new(&[&RESP_EPHEMERAL])),
+        &[],
+    )
+    .set_s(private_key(&RESP_STATIC))
+    .map_err(|_| ())?;
+    let (_, recv) = r.read(&msg1).map_err(|_| ())?.e().await.map_err(|_| ())?;
+    let r = recv.es().await.map_err(|_| ())?;
+
+    // msg2: <- e, ee — genuine.
+    let mut b2 = [0u8; 256];
+    let (msg2, r) = r.e(&mut b2).await.unwrap().ee().await.unwrap();
+    let msg2 = xform(1, msg2.to_vec());
+
+    // Initiator reads msg2 (<- e, ee).
+    let (_, recv) = i.read(&msg2).map_err(|_| ())?.e().await.map_err(|_| ())?;
+    let i = recv.ee().await.map_err(|_| ())?;
+
+    // msg3: -> s, se — the initiator's static is sent encrypted (after ee).
+    let mut b3 = [0u8; 256];
+    let (msg3, _i_transport) = i
+        .s(&mut b3, private_key(&INIT_STATIC))
+        .await
+        .unwrap()
+        .se()
+        .await
+        .unwrap();
+    let msg3 = xform(2, msg3.to_vec());
+
+    // Responder reads msg3; the `s` reveals the initiator static.
+    let (_, recv) = r.read(&msg3).map_err(|_| ())?.s().await.map_err(|_| ())?;
+    recv.se().await.map_err(|_| ())?;
+    Ok(())
+}
+
 // ── Sweep helpers ────────────────────────────────────────────────
 
 /// Assert that the genuine handshake completes, then that flipping any
@@ -445,6 +498,21 @@ async fn ix_msg1_tamper_truncation_sweep() {
 #[tokio::test]
 async fn ix_msg2_tamper_truncation_sweep() {
     sweep("IX msg2", 1, IX_MSG2, |xf| async move { run_ix(&*xf).await }).await;
+}
+
+#[tokio::test]
+async fn xk_msg1_tamper_truncation_sweep() {
+    sweep("XK msg1", 0, XK_MSG1, |xf| async move { run_xk(&*xf).await }).await;
+}
+
+#[tokio::test]
+async fn xk_msg2_tamper_truncation_sweep() {
+    sweep("XK msg2", 1, XK_MSG2, |xf| async move { run_xk(&*xf).await }).await;
+}
+
+#[tokio::test]
+async fn xk_msg3_tamper_truncation_sweep() {
+    sweep("XK msg3", 2, XK_MSG3, |xf| async move { run_xk(&*xf).await }).await;
 }
 
 // ── Wrong PSK ────────────────────────────────────────────────────
