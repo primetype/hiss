@@ -5,8 +5,8 @@
 //! between Edwards and Montgomery forms, for Diffie–Hellman key
 //! exchange.
 //!
-//! This module implements the [`Curve`] and [`CryptoProviderAsync`] traits,
-//! following the same pattern as the [`p256`](super::p256) module.
+//! This module implements the [`Curve`] trait for Ed25519; the provider
+//! backends that perform its operations live in [`crate::provider`].
 //!
 //! # Backends
 //!
@@ -14,9 +14,10 @@
 //!   pure-Rust implementation using `cryptoxide`. Suitable for tests,
 //!   WASM, and any platform without native Ed25519 support.
 //!
-//! * **Apple CryptoKit** (future, iOS/macOS) — delegates to
-//!   `Curve25519.Signing` via FFI. Key stored in the Data Protection
-//!   Keychain with `ThisDeviceOnly` access.
+//! * **Apple** (iOS/macOS) — Ed25519 is still **software**-signed (the
+//!   Secure Enclave has no Ed25519 support), but the 32-byte seed is
+//!   sealed at rest to the device's Secure Enclave P-256 key. See
+//!   [`AppleSecureEnclave`](crate::provider::AppleSecureEnclave).
 //!
 //! Both backends share the same [`Ed25519PublicKey`] and
 //! [`Ed25519Signature`] types, and both produce RFC 8032-compliant
@@ -63,7 +64,7 @@ pub enum Error {
 /// Zero-sized type implementing [`Curve`] that ties together the
 /// concrete [`Ed25519PublicKey`], [`Ed25519Signature`], and
 /// [`SharedSecret`] types. Used as a type parameter for
-/// [`CryptoProviderAsync`].
+/// [`CryptoProviderAsync`](crate::provider::CryptoProviderAsync).
 pub struct Ed25519;
 
 impl Curve for Ed25519 {
@@ -176,9 +177,10 @@ impl fmt::Debug for Ed25519Signature {
 /// when signing. Both the seed and cached keypair are zeroised on
 /// drop.
 ///
-/// This is the software backend — always available. On Apple
-/// platforms, the CryptoKit backend is preferred for production
-/// use (key lifecycle managed by the OS).
+/// This is the software backend — always available, and the only
+/// Ed25519 backend; on Apple platforms its seed is sealed at rest to
+/// the Secure Enclave P-256 key (see
+/// [`AppleSecureEnclave`](crate::provider::AppleSecureEnclave)).
 pub struct SoftwareEd25519PrivateKey {
     /// The 32-byte seed.
     seed: [u8; 32],

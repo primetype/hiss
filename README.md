@@ -51,21 +51,20 @@ key. The streaming `SyncHandshake` adapter owns any `std::io::Read`/`Write` (a T
 socket, an in-memory buffer, …) and advances the handshake over it.
 
 ```rust
-use hiss::curve::p256::SoftwareCryptoProvider;
-use hiss::curve::{CryptoKeys, CryptoProvider};
+use hiss::provider::{EphemeralOnly, ProviderExt};
 use hiss::noise::{Blake2b, ChaChaPoly, Initiator, N, Noise, P256, Responder, SyncHandshake};
 
 // Spell out the protocol once as a type alias.
 type Seal = Noise<N, P256, ChaChaPoly, Blake2b>;
 
 // The recipient owns a static P-256 key; its public half is known to the sender.
-let provider = SoftwareCryptoProvider;
-let recipient_static = provider.generate_static_key()?;
-let recipient_pub = provider.public_key(&recipient_static)?;
+let provider = EphemeralOnly::new();
+let recipient_static = provider.generate::<P256>()?;
+let recipient_pub = provider.public(&recipient_static)?;
 
 // ── Initiator: run the handshake, then seal a payload ───────────────────────
 let handshake = SyncHandshake::<Seal, Initiator, _, _, _, _>::initiate(
-    SoftwareCryptoProvider,
+    provider,
     &[],                 // prologue
     Vec::<u8>::new(),    // writer: anything implementing std::io::Write
 )
@@ -79,7 +78,7 @@ let n = sender.send(payload, &mut sealed)?;
 
 // ── Responder: read the handshake, then open the payload ────────────────────
 let handshake = SyncHandshake::<Seal, Responder, _, _, _, _>::respond(
-    SoftwareCryptoProvider,
+    provider,
     &[],                                  // prologue (must match)
     std::io::Cursor::new(wire),           // reader: anything implementing std::io::Read
 )
@@ -126,7 +125,7 @@ touching the Noise core.
 
 ## Platforms
 
-- **All platforms:** the software backend (`SoftwareCryptoProvider`) and the blocking
+- **All platforms:** the software backend (`EphemeralOnly`) and the blocking
   `std::io` handshake adapter.
 - **macOS / iOS:** the Apple Secure Enclave backend. Its blocking Security-framework calls
   are offloaded to a Tokio blocking thread pool for the async provider path.

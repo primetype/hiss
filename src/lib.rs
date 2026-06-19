@@ -11,10 +11,15 @@
 //! crate provides the building blocks for an authenticated, encrypted
 //! transport:
 //!
-//! * **[`curve`]** — Elliptic curve operations (ECDSA signing, ECDH
-//!   key exchange) on NIST P-256 (secp256r1). Includes both a
-//!   pure-software implementation (via `eccoxide`) and a macOS
-//!   Secure Enclave backend.
+//! * **[`curve`]** — Elliptic-curve math and key/handle types: ECDSA
+//!   signing and ECDH on NIST P-256 (secp256r1) and Ed25519, plus the
+//!   [`Curve`](curve::Curve) trait tying them to the type-level protocol.
+//!
+//! * **[`provider`]** — the backends that *perform* a curve's
+//!   operations: [`EphemeralOnly`](provider::EphemeralOnly) (pure
+//!   software, via `eccoxide`/`cryptoxide`) and, on Apple platforms,
+//!   [`AppleSecureEnclave`](provider::AppleSecureEnclave) (P-256 in the
+//!   Secure Enclave; software Ed25519 with a hardware-sealed seed).
 //!
 //! * **[`noise`]** — Compile-time Noise protocol descriptor. Encodes
 //!   the handshake pattern, curve, cipher, and hash as zero-sized

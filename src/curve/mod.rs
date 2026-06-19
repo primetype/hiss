@@ -8,13 +8,13 @@
 //! implement it so that generic code can be parameterised over curves
 //! without runtime dispatch.
 //!
-//! # CryptoProviderAsync trait
+//! # Providers
 //!
-//! [`CryptoProviderAsync<C>`] abstracts over *how* a curve's operations
-//! are performed. The same curve may be backed by a pure-software
-//! implementation or by hardware (Secure Enclave, StrongBox). The
-//! trait is async because hardware-backed operations may require
-//! user presence (biometric).
+//! *How* a curve's operations are performed lives in [`crate::provider`]:
+//! the [`CryptoProvider`](crate::provider::CryptoProvider) /
+//! [`CryptoProviderAsync`](crate::provider::CryptoProviderAsync) trait
+//! family, and the backends that implement it — pure software, or
+//! hardware such as the Apple Secure Enclave.
 //!
 //! # P-256 backends
 //!
@@ -24,14 +24,16 @@
 //!   pure-Rust implementation using `eccoxide`. Suitable for tests,
 //!   WASM, and any platform without hardware key storage.
 //!
-//! * **macOS Secure Enclave** ([`p256::apple::P256r1PrivateKey`],
-//!   `cfg(target_os = "macos")`) — delegates to Apple's Security
-//!   framework. Private keys never leave the Secure Enclave; signing
-//!   and ECDH are performed in hardware.
+//! * **Apple Secure Enclave**
+//!   ([`AppleSecureEnclave`](crate::provider::AppleSecureEnclave),
+//!   `cfg(any(target_os = "macos", target_os = "ios"))`) — delegates to
+//!   Apple's Security framework. Private keys never leave the Secure
+//!   Enclave; signing and ECDH are performed in hardware.
 //!
 //! Both backends share the same [`p256::P256r1PublicKey`] and
-//! [`p256::P256Signature`] types, and their DH results are
-//! compatible (X9.63 KDF with SHA-256).
+//! [`p256::P256Signature`] types, and their DH results are compatible —
+//! the raw 32-byte x-coordinate of the shared point, as the Noise spec
+//! requires (no KDF).
 
 
 pub mod ed25519;

@@ -169,7 +169,8 @@ impl P256r1PrivateKey {
     /// Load a previously persisted Secure Enclave key from the Keychain.
     ///
     /// Queries the Keychain for a key matching `label` (stored under
-    /// `kSecAttrLabel` by [`generate_secure_enclave`]). Returns `None`
+    /// `kSecAttrLabel` by
+    /// [`generate_secure_enclave`](Self::generate_secure_enclave)). Returns `None`
     /// if no key is found.
     ///
     /// Phase 18.1 (`2026/05/12`): the data-protection Keychain selector

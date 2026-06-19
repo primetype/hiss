@@ -149,12 +149,13 @@
 //!
 //! # Async crypto provider
 //!
-//! Token methods are `async` because the [`CryptoProviderAsync`] trait is
+//! Token methods are `async` because the
+//! [`CryptoProviderAsync`](crate::provider::CryptoProviderAsync) trait is
 //! async-native. This allows pluggable crypto backends:
 //!
 //! - **Software** (`eccoxide`/`cryptoxide`) — resolves immediately.
-//! - **Secure Enclave** (Apple CryptoKit) — suspends until hardware
-//!   completes; may prompt for biometric authentication.
+//! - **Secure Enclave** (Apple Security framework) — suspends until the
+//!   hardware completes; may prompt for biometric authentication.
 //! - **KMS / HSM / USB hardware key** — suspends until the external
 //!   device responds.
 //! - **WebCrypto** (WASM) — suspends until the browser promise

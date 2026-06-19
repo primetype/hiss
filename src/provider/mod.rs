@@ -307,7 +307,8 @@ impl SecretKey for SoftwareEd25519PrivateKey {
 /// so a single multi-curve provider value resolves without fully-qualified
 /// trait syntax:
 ///
-/// * [`generate`](ProviderExt::generate) / [`generate_ephemeral`] name the
+/// * [`generate`](ProviderExt::generate) /
+///   [`generate_ephemeral`](ProviderExt::generate_ephemeral) name the
 ///   curve with a turbofish — `provider.generate::<P256>()`.
 /// * [`public`](ProviderExt::public) infers the curve from the key argument,
 ///   which carries it via [`SecretKey`] — `provider.public(&sk)`.

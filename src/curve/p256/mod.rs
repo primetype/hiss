@@ -7,13 +7,13 @@
 //!   (`0x02`/`0x03`) encodings; always stores uncompressed
 //!   internally for consistency.
 //!
-//! * [`P256r1PrivateKey`] — 32-byte scalar (software backend,
-//!   re-exported from [`software`]). See also
-//!   [`apple::P256r1PrivateKey`] on macOS / iOS.
+//! * [`P256r1PrivateKey`] — 32-byte scalar (software backend). The
+//!   hardware-backed Secure Enclave key lives in
+//!   [`crate::provider::apple`] on macOS / iOS.
 //!
 //! * [`P256Signature`] — 64-byte raw `(r, s)` ECDSA signature.
-//!   Can be converted to/from the ASN.1 DER encoding used by
-//!   Apple's Security framework via [`P256Signature::try_from_asn1`].
+//!   Converts to/from the ASN.1 DER encoding used by Apple's Security
+//!   framework.
 //!
 //! # ECDH
 //!

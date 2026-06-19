@@ -120,7 +120,8 @@ impl P256r1PrivateKey {
     /// nonce-reuse / weak-RNG failure modes of randomized ECDSA. The `s`
     /// value is low-S normalized, so each signature has one canonical
     /// encoding. Returns `Result` only for parity with the
-    /// [`CryptoProviderAsync`] trait; signing does not fail in practice.
+    /// [`CryptoProviderAsync`](crate::provider::CryptoProviderAsync)
+    /// trait; signing does not fail in practice.
     pub fn sign(&self, data: impl AsRef<[u8]>) -> Result<P256Signature, Error> {
         Ok(super::ecdsa_sign_rfc6979(&self.0, data.as_ref()))
     }
