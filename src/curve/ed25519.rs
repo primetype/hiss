@@ -53,8 +53,10 @@ pub enum Error {
     InvalidPublicKeyLength(usize),
     #[error("invalid signature length: expected 64 bytes, got {0}")]
     InvalidSignatureLength(usize),
-    #[error("RNG failure: {0}")]
-    Rng(String),
+    /// A platform entropy/key operation failed (Apple `SecRandom` seed path).
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    #[error("{0}")]
+    Platform(String),
 }
 
 // ── Curve marker ───────────────────────────────────────────────
@@ -194,20 +196,10 @@ impl SoftwareEd25519PrivateKey {
     /// The caller supplies the RNG, which must be cryptographically
     /// secure. This makes generation compatible with platform-provided
     /// CSPRNGs and allows reproducible tests with a seeded RNG.
-    pub fn generate<R: RngCore + CryptoRng>(mut rng: R) -> Result<Self, Error> {
+    pub fn generate<R: RngCore + CryptoRng>(mut rng: R) -> Self {
         let mut seed = [0u8; 32];
         rng.fill_bytes(&mut seed);
-        Ok(Self::from_seed(seed))
-    }
-
-    /// Generate a new random key pair using the operating system's CSPRNG.
-    ///
-    /// Convenience wrapper over [`generate`](Self::generate) for callers
-    /// that do not need to supply their own RNG.
-    pub fn generate_os() -> Result<Self, Error> {
-        let mut seed = [0u8; 32];
-        getrandom::fill(&mut seed).map_err(|e| Error::Rng(e.to_string()))?;
-        Ok(Self::from_seed(seed))
+        Self::from_seed(seed)
     }
 
     /// Construct from a known 32-byte seed.
@@ -277,12 +269,13 @@ impl fmt::Debug for SoftwareEd25519PrivateKey {
 mod tests {
     use super::*;
     use crate::provider::{CryptoProviderAsync, EphemeralOnly, ProviderExt};
+    use rand::{SeedableRng, rngs::StdRng};
 
     // ── Direct API tests ─────────────────────────────────────────
 
     #[test]
     fn generate_and_sign_verify() {
-        let sk = SoftwareEd25519PrivateKey::generate(rand::rng()).unwrap();
+        let sk = SoftwareEd25519PrivateKey::generate(rand::rng());
         let pk = sk.public_key();
         let msg = b"Hello hiss";
 
@@ -292,7 +285,7 @@ mod tests {
 
     #[test]
     fn deterministic_signatures() {
-        let sk = SoftwareEd25519PrivateKey::generate(rand::rng()).unwrap();
+        let sk = SoftwareEd25519PrivateKey::generate(rand::rng());
         let msg = b"determinism matters";
 
         let sig1 = sk.sign(msg);
@@ -305,7 +298,7 @@ mod tests {
 
     #[test]
     fn wrong_message_fails_verification() {
-        let sk = SoftwareEd25519PrivateKey::generate(rand::rng()).unwrap();
+        let sk = SoftwareEd25519PrivateKey::generate(rand::rng());
         let pk = sk.public_key();
 
         let sig = sk.sign(b"correct message");
@@ -314,8 +307,8 @@ mod tests {
 
     #[test]
     fn wrong_key_fails_verification() {
-        let sk1 = SoftwareEd25519PrivateKey::generate(rand::rng()).unwrap();
-        let sk2 = SoftwareEd25519PrivateKey::generate(rand::rng()).unwrap();
+        let sk1 = SoftwareEd25519PrivateKey::generate(rand::rng());
+        let sk2 = SoftwareEd25519PrivateKey::generate(rand::rng());
         let pk2 = sk2.public_key();
 
         let sig = sk1.sign(b"signed by sk1");
@@ -324,7 +317,7 @@ mod tests {
 
     #[test]
     fn corrupted_signature_fails() {
-        let sk = SoftwareEd25519PrivateKey::generate(rand::rng()).unwrap();
+        let sk = SoftwareEd25519PrivateKey::generate(rand::rng());
         let pk = sk.public_key();
         let sig = sk.sign(b"test");
 
@@ -337,7 +330,7 @@ mod tests {
 
     #[test]
     fn zero_signature_fails() {
-        let sk = SoftwareEd25519PrivateKey::generate(rand::rng()).unwrap();
+        let sk = SoftwareEd25519PrivateKey::generate(rand::rng());
         let pk = sk.public_key();
 
         let zero_sig = Ed25519Signature::try_from_bytes(&[0u8; 64]).unwrap();
@@ -346,7 +339,7 @@ mod tests {
 
     #[test]
     fn public_key_round_trip() {
-        let sk = SoftwareEd25519PrivateKey::generate(rand::rng()).unwrap();
+        let sk = SoftwareEd25519PrivateKey::generate(rand::rng());
         let pk = sk.public_key();
 
         let pk2 = Ed25519PublicKey::from_bytes(pk.as_bytes()).unwrap();
@@ -396,9 +389,9 @@ mod tests {
 
     #[test]
     fn dh_is_symmetric() {
-        let sk1 = SoftwareEd25519PrivateKey::generate(rand::rng()).unwrap();
+        let sk1 = SoftwareEd25519PrivateKey::generate(rand::rng());
         let pk1 = sk1.public_key();
-        let sk2 = SoftwareEd25519PrivateKey::generate(rand::rng()).unwrap();
+        let sk2 = SoftwareEd25519PrivateKey::generate(rand::rng());
         let pk2 = sk2.public_key();
 
         let ss1 = sk1.dh(&pk2);
@@ -408,12 +401,10 @@ mod tests {
 
     #[test]
     fn dh_different_peers_produce_different_secrets() {
-        let sk = SoftwareEd25519PrivateKey::generate(rand::rng()).unwrap();
+        let sk = SoftwareEd25519PrivateKey::generate(rand::rng());
         let peer1 = SoftwareEd25519PrivateKey::generate(rand::rng())
-            .unwrap()
             .public_key();
         let peer2 = SoftwareEd25519PrivateKey::generate(rand::rng())
-            .unwrap()
             .public_key();
 
         let ss1 = sk.dh(&peer1);
@@ -425,14 +416,14 @@ mod tests {
 
     #[tokio::test]
     async fn provider_sign_and_dh() {
-        let provider = EphemeralOnly;
+        let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
 
-        let sk1 = CryptoProviderAsync::<Ed25519>::generate_static_key_async(&provider)
+        let sk1 = CryptoProviderAsync::<Ed25519>::generate_static_key_async(&mut provider)
             .await
             .unwrap();
         let pk1 = provider.public(&sk1).unwrap();
 
-        let sk2 = CryptoProviderAsync::<Ed25519>::generate_ephemeral_key_async(&provider)
+        let sk2 = CryptoProviderAsync::<Ed25519>::generate_ephemeral_key_async(&mut provider)
             .await
             .unwrap();
         let pk2 = provider.public(&sk2).unwrap();

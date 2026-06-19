@@ -1,9 +1,9 @@
 //! Pure-software P-256 private key implementation.
 //!
 //! Uses `eccoxide` for elliptic curve arithmetic. Key generation draws
-//! randomness from the operating system's CSPRNG by default, or from a
-//! caller-supplied RNG via [`P256r1PrivateKey::generate_with`]. Signing
-//! is deterministic (RFC 6979) and uses no randomness.
+//! randomness from a caller-supplied CSPRNG via
+//! [`P256r1PrivateKey::generate`] (the crate has no built-in entropy
+//! source). Signing is deterministic (RFC 6979) and uses no randomness.
 //!
 //! The 32 bytes held by [`P256r1PrivateKey`] are the canonical
 //! big-endian encoding of the secp256r1 private scalar `d`, which is
@@ -50,24 +50,14 @@ impl P256r1PrivateKey {
         &self.0
     }
 
-    #[inline]
-    pub fn generate_ephemeral() -> Result<Self, Error> {
-        Self::generate()
-    }
-
-    #[inline]
-    pub fn generate() -> Result<Self, Error> {
-        let mut bytes = [0; Self::SIZE];
-        for _ in 0..Self::MAX_SCALAR_RETRIES {
-            getrandom::fill(&mut bytes).map_err(|e| Error::Rng(e.to_string()))?;
-            if Self::scalar_of(&bytes).is_some() {
-                return Ok(Self(bytes));
-            }
-        }
-        Err(Error::Rng("failed to sample a valid scalar".into()))
-    }
-
-    pub fn generate_with<RNG>(mut rng: RNG) -> Result<Self, Error>
+    /// Generate a private key from a caller-supplied CSPRNG.
+    ///
+    /// The caller owns the entropy source — pass `rand::rng()` in
+    /// production, or a seeded RNG for deterministic tests. A `&mut R`
+    /// is itself `RngCore + CryptoRng`, so a borrowed RNG works too.
+    /// Rejection-samples into `[1, n-1]`; only a broken RNG can exhaust
+    /// the retries.
+    pub fn generate<RNG>(mut rng: RNG) -> Result<Self, Error>
     where
         RNG: RngCore + CryptoRng,
     {
@@ -78,7 +68,7 @@ impl P256r1PrivateKey {
                 return Ok(Self(bytes));
             }
         }
-        Err(Error::Rng("failed to sample a valid scalar".into()))
+        Err(Error::ScalarSamplingFailed)
     }
 
     /// Parse `bytes` as a canonical scalar in `[1, n-1]`.
@@ -186,6 +176,7 @@ mod tests {
     use super::*;
     use crate::curve::p256::P256;
     use crate::provider::{CryptoProviderAsync, EphemeralOnly, ProviderExt};
+    use rand::{SeedableRng, rngs::StdRng};
     use proptest::prelude::*;
 
     fn arbitrary_secret_key() -> impl Strategy<Value = P256r1PrivateKey> {
@@ -253,14 +244,14 @@ mod tests {
     /// [`CryptoProviderAsync`] trait — sign/verify and ECDH.
     #[tokio::test]
     async fn provider_sign_and_dh() {
-        let provider = EphemeralOnly;
+        let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
 
-        let sk1 = CryptoProviderAsync::<P256>::generate_static_key_async(&provider)
+        let sk1 = CryptoProviderAsync::<P256>::generate_static_key_async(&mut provider)
             .await
             .unwrap();
         let pk1 = provider.public(&sk1).unwrap();
 
-        let sk2 = CryptoProviderAsync::<P256>::generate_ephemeral_key_async(&provider)
+        let sk2 = CryptoProviderAsync::<P256>::generate_ephemeral_key_async(&mut provider)
             .await
             .unwrap();
         let pk2 = provider.public(&sk2).unwrap();

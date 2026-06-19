@@ -13,6 +13,7 @@
 
 use hiss::provider::ProviderExt;
 use hiss::provider::EphemeralOnly;
+use rand::{SeedableRng, rngs::StdRng};
 use hiss::noise::*;
 use hiss::psk::Psk;
 
@@ -22,7 +23,7 @@ const PROTOCOL: &str = "Noise_IKpsk1_P256_ChaChaPoly_BLAKE2b";
 
 #[tokio::test]
 async fn ikpsk1_hiss_initiator_snow_responder() {
-    let provider = EphemeralOnly;
+    let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
 
     // Generate keys for both sides.
     let initiator_static = provider.generate::<P256>().unwrap();
@@ -49,7 +50,7 @@ async fn ikpsk1_hiss_initiator_snow_responder() {
     // ── Our initiator setup ──────────────────────────────────
     type Channel = Noise<IKpsk1, P256, ChaChaPoly, Blake2b>;
 
-    let i_hs = Channel::initiate(EphemeralOnly, &[]).set_rs(responder_pub);
+    let i_hs = Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
 
     // ── Message 1: -> e, es, s, ss, psk (our initiator sends) ──
     let mut msg1_buf = [0u8; 162];
@@ -118,7 +119,7 @@ async fn ikpsk1_hiss_initiator_snow_responder() {
 
 #[tokio::test]
 async fn ikpsk1_snow_initiator_hiss_responder() {
-    let provider = EphemeralOnly;
+    let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
 
     // Generate keys for our responder.
     let responder_static = provider.generate::<P256>().unwrap();
@@ -143,7 +144,7 @@ async fn ikpsk1_snow_initiator_hiss_responder() {
     // ── Our responder setup ──────────────────────────────────
     type Channel = Noise<IKpsk1, P256, ChaChaPoly, Blake2b>;
 
-    let r_hs = Channel::respond(EphemeralOnly, &[])
+    let r_hs = Channel::respond(EphemeralOnly::new(StdRng::from_os_rng()), &[])
         .set_s(responder_static)
         .unwrap();
 
@@ -234,7 +235,7 @@ async fn n_hiss_initiator_snow_responder() {
     // ── Our initiator seals ──────────────────────────────────
     type NoiseSeal = Noise<N, P256, ChaChaPoly, Blake2b>;
 
-    let sealer = NoiseSeal::initiate(EphemeralOnly, &[]).set_rs(responder_pub);
+    let sealer = NoiseSeal::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
 
     let mut msg_buf = [0u8; 81];
     let (msg, mut transport) = sealer.e(&mut msg_buf).await.unwrap().es().await.unwrap();
@@ -264,7 +265,7 @@ async fn n_hiss_initiator_snow_responder() {
 
 #[tokio::test]
 async fn kpsk0_hiss_initiator_snow_responder() {
-    let provider = EphemeralOnly;
+    let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
 
     let alice_static = provider.generate::<P256>().unwrap();
     let alice_pub = provider.public(&alice_static).unwrap();
@@ -291,7 +292,7 @@ async fn kpsk0_hiss_initiator_snow_responder() {
     // ── Our initiator seals ──────────────────────────────────
     type NoiseKpsk0 = Noise<Kpsk0, P256, ChaChaPoly, Blake2b>;
 
-    let sealer = NoiseKpsk0::initiate(EphemeralOnly, &[])
+    let sealer = NoiseKpsk0::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[])
         .set_s(alice_static)
         .unwrap()
         .set_rs(bob_pub);
@@ -354,7 +355,7 @@ async fn n_with_prologue_hiss_initiator_snow_responder() {
     // ── Our initiator seals with prologue ───────────────────────
     type NoiseSeal = Noise<N, P256, ChaChaPoly, Blake2b>;
 
-    let sealer = NoiseSeal::initiate(EphemeralOnly, prologue).set_rs(responder_pub);
+    let sealer = NoiseSeal::initiate(EphemeralOnly::new(StdRng::from_os_rng()), prologue).set_rs(responder_pub);
 
     let mut msg_buf = [0u8; 81];
     let (msg, mut transport) = sealer.e(&mut msg_buf).await.unwrap().es().await.unwrap();
@@ -382,7 +383,7 @@ async fn n_with_prologue_hiss_initiator_snow_responder() {
 
 #[tokio::test]
 async fn ikpsk1_with_prologue_hiss_initiator_snow_responder() {
-    let provider = EphemeralOnly;
+    let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
     let prologue = b"hiss/v1/ikpsk1";
 
     let initiator_static = provider.generate::<P256>().unwrap();
@@ -404,7 +405,7 @@ async fn ikpsk1_with_prologue_hiss_initiator_snow_responder() {
 
     type Channel = Noise<IKpsk1, P256, ChaChaPoly, Blake2b>;
 
-    let i_hs = Channel::initiate(EphemeralOnly, prologue).set_rs(responder_pub);
+    let i_hs = Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), prologue).set_rs(responder_pub);
 
     // msg1: -> e, es, s, ss, psk
     let mut msg1_buf = [0u8; 162];
@@ -469,7 +470,7 @@ async fn n_rekey_hiss_initiator_snow_responder() {
 
     type NoiseSeal = Noise<N, P256, ChaChaPoly, Blake2b>;
 
-    let sealer = NoiseSeal::initiate(EphemeralOnly, &[]).set_rs(responder_pub);
+    let sealer = NoiseSeal::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
 
     let mut msg_buf = [0u8; 81];
     let (msg, mut transport) = sealer.e(&mut msg_buf).await.unwrap().es().await.unwrap();
@@ -499,7 +500,7 @@ async fn n_rekey_hiss_initiator_snow_responder() {
 
 #[tokio::test]
 async fn ikpsk1_rekey_hiss_initiator_snow_responder() {
-    let provider = EphemeralOnly;
+    let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
 
     let initiator_static = provider.generate::<P256>().unwrap();
     let psk = Psk::from_bytes([0xDD; 32]);
@@ -518,7 +519,7 @@ async fn ikpsk1_rekey_hiss_initiator_snow_responder() {
 
     type Channel = Noise<IKpsk1, P256, ChaChaPoly, Blake2b>;
 
-    let i_hs = Channel::initiate(EphemeralOnly, &[]).set_rs(responder_pub);
+    let i_hs = Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
 
     // Complete handshake.
     // msg1: -> e, es, s, ss, psk
@@ -587,7 +588,7 @@ async fn ikpsk1_rekey_hiss_initiator_snow_responder() {
 
 #[tokio::test]
 async fn k_hiss_initiator_snow_responder() {
-    let provider = EphemeralOnly;
+    let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
 
     let alice_static = provider.generate::<P256>().unwrap();
     let alice_pub = provider.public(&alice_static).unwrap();
@@ -610,7 +611,7 @@ async fn k_hiss_initiator_snow_responder() {
     // ── Our initiator seals ──────────────────────────────────
     type NoiseK = Noise<K, P256, ChaChaPoly, Blake2b>;
 
-    let sealer = NoiseK::initiate(EphemeralOnly, &[])
+    let sealer = NoiseK::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[])
         .set_s(alice_static)
         .unwrap()
         .set_rs(bob_pub);

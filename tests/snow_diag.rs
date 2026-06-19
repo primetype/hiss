@@ -83,9 +83,10 @@ fn eccoxide_pubkey_matches_snow_p256() {
 async fn manual_n_replay_matches_snow() {
     use hiss::provider::ProviderExt;
     use hiss::provider::EphemeralOnly;
+    use rand::{SeedableRng, rngs::StdRng};
     use hiss::curve::p256::P256;
 
-    let provider = EphemeralOnly;
+    let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
 
     let our_static = provider.generate::<P256>().unwrap();
     let our_static_pub = provider.public(&our_static).unwrap();

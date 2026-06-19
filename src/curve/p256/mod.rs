@@ -84,8 +84,8 @@ pub enum Error {
     InvalidSignatureLength,
     #[error("invalid ASN.1 encoded signature: {0}")]
     InvalidSignatureAsn1(String),
-    #[error("RNG failure: {0}")]
-    Rng(String),
+    #[error("the RNG repeatedly failed to produce a valid P-256 scalar")]
+    ScalarSamplingFailed,
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     #[error("{0}")]
     Platform(String),
@@ -667,7 +667,7 @@ mod tests {
     #[test]
     fn pk_from_bytes_compressed_02() {
         // Generate a valid key pair and re-encode as compressed 0x02.
-        let sk = software::P256r1PrivateKey::generate().unwrap();
+        let sk = software::P256r1PrivateKey::generate(rand::rng()).unwrap();
         let pk = sk.public();
         let uncompressed = pk.to_bytes();
 
@@ -687,7 +687,7 @@ mod tests {
 
     #[test]
     fn to_compressed_round_trips() {
-        let sk = software::P256r1PrivateKey::generate().unwrap();
+        let sk = software::P256r1PrivateKey::generate(rand::rng()).unwrap();
         let pk = sk.public();
         let compressed = pk.to_compressed();
 
@@ -715,7 +715,7 @@ mod tests {
 
     #[test]
     fn verify_wrong_message_fails() {
-        let sk = software::P256r1PrivateKey::generate().unwrap();
+        let sk = software::P256r1PrivateKey::generate(rand::rng()).unwrap();
         let pk = sk.public();
         let sig = sk.sign(b"correct message").unwrap();
 
@@ -724,8 +724,8 @@ mod tests {
 
     #[test]
     fn verify_wrong_key_fails() {
-        let sk1 = software::P256r1PrivateKey::generate().unwrap();
-        let sk2 = software::P256r1PrivateKey::generate().unwrap();
+        let sk1 = software::P256r1PrivateKey::generate(rand::rng()).unwrap();
+        let sk2 = software::P256r1PrivateKey::generate(rand::rng()).unwrap();
         let pk2 = sk2.public();
 
         let sig = sk1.sign(b"signed by sk1").unwrap();
@@ -734,7 +734,7 @@ mod tests {
 
     #[test]
     fn verify_corrupted_signature_fails() {
-        let sk = software::P256r1PrivateKey::generate().unwrap();
+        let sk = software::P256r1PrivateKey::generate(rand::rng()).unwrap();
         let pk = sk.public();
         let sig = sk.sign(b"test").unwrap();
 
@@ -749,7 +749,7 @@ mod tests {
 
     #[test]
     fn verify_zero_signature_fails() {
-        let sk = software::P256r1PrivateKey::generate().unwrap();
+        let sk = software::P256r1PrivateKey::generate(rand::rng()).unwrap();
         let pk = sk.public();
 
         let zero_sig = P256Signature::try_from_bytes([0u8; 64]).unwrap();
@@ -760,9 +760,9 @@ mod tests {
 
     #[test]
     fn dh_different_peers_produce_different_secrets() {
-        let sk = software::P256r1PrivateKey::generate().unwrap();
-        let peer1 = software::P256r1PrivateKey::generate().unwrap().public();
-        let peer2 = software::P256r1PrivateKey::generate().unwrap().public();
+        let sk = software::P256r1PrivateKey::generate(rand::rng()).unwrap();
+        let peer1 = software::P256r1PrivateKey::generate(rand::rng()).unwrap().public();
+        let peer2 = software::P256r1PrivateKey::generate(rand::rng()).unwrap().public();
 
         let ss1 = sk.dh(&peer1).unwrap();
         let ss2 = sk.dh(&peer2).unwrap();
@@ -772,9 +772,9 @@ mod tests {
     #[test]
     fn dh_is_not_commutative_with_different_keys() {
         // dh(sk1, pk2) == dh(sk2, pk1) — ECDH symmetry.
-        let sk1 = software::P256r1PrivateKey::generate().unwrap();
+        let sk1 = software::P256r1PrivateKey::generate(rand::rng()).unwrap();
         let pk1 = sk1.public();
-        let sk2 = software::P256r1PrivateKey::generate().unwrap();
+        let sk2 = software::P256r1PrivateKey::generate(rand::rng()).unwrap();
         let pk2 = sk2.public();
 
         let ss1 = sk1.dh(&pk2).unwrap();

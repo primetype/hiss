@@ -15,14 +15,6 @@ use std::fmt;
 #[derive(Clone)]
 pub struct Psk([u8; Self::SIZE]);
 
-/// Errors that can occur while generating a [`Psk`].
-#[derive(Debug, thiserror::Error)]
-pub enum PskError {
-    /// The operating system CSPRNG failed to provide entropy.
-    #[error("RNG failure: {0}")]
-    Rng(String),
-}
-
 impl Psk {
     /// PSK length in bytes.
     pub const SIZE: usize = 32;
@@ -33,25 +25,12 @@ impl Psk {
         Self(bytes)
     }
 
-    /// Generate a random PSK using the operating system's CSPRNG.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`PskError::Rng`] if the OS entropy source fails, rather
-    /// than panicking — a library should not abort the host process on an
-    /// entropy error.
-    #[inline]
-    pub fn generate() -> Result<Self, PskError> {
-        let mut bytes = [0u8; Self::SIZE];
-        getrandom::fill(&mut bytes).map_err(|e| PskError::Rng(e.to_string()))?;
-        Ok(Self(bytes))
-    }
-
     /// Generate a random PSK from a caller-supplied CSPRNG.
     ///
-    /// Useful for deterministic tests or for plugging in a specific
-    /// entropy source.
-    pub fn generate_with<R: RngCore + CryptoRng>(mut rng: R) -> Self {
+    /// The caller owns the entropy source — pass `rand::rng()` in
+    /// production, or a seeded RNG for deterministic tests. A `&mut R`
+    /// is itself `RngCore + CryptoRng`, so a borrowed RNG works too.
+    pub fn generate<R: RngCore + CryptoRng>(mut rng: R) -> Self {
         let mut bytes = [0u8; Self::SIZE];
         rng.fill_bytes(&mut bytes);
         Self(bytes)
@@ -103,7 +82,7 @@ mod tests {
 
     #[test]
     fn generate_produces_non_zero() {
-        let psk = Psk::generate().unwrap();
+        let psk = Psk::generate(rand::rng());
         // Vanishingly unlikely to be all zeros from a CSPRNG.
         assert_ne!(*psk.as_bytes(), [0u8; 32]);
     }
@@ -118,7 +97,7 @@ mod tests {
 
     #[test]
     fn clone_preserves_bytes() {
-        let psk = Psk::generate().unwrap();
+        let psk = Psk::generate(rand::rng());
         let cloned = psk.clone();
         assert_eq!(psk.as_bytes(), cloned.as_bytes());
     }

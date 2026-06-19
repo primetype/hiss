@@ -21,6 +21,8 @@
 
 use std::future::Future;
 
+use rand_core::{CryptoRng, RngCore};
+
 use crate::curve::Curve;
 use crate::curve::SharedSecret;
 use crate::curve::ed25519::{
@@ -79,10 +81,13 @@ pub trait CryptoKeys<C: Curve> {
 /// implements both has no name clash.
 pub trait CryptoProvider<C: Curve>: CryptoKeys<C> {
     /// Generate a long-term static key pair, synchronously.
-    fn generate_static_key(&self) -> Result<Self::PrivateKey, Self::Error>;
+    ///
+    /// Takes `&mut self`: a backend that owns its CSPRNG advances it
+    /// here; hardware/deterministic backends ignore the receiver.
+    fn generate_static_key(&mut self) -> Result<Self::PrivateKey, Self::Error>;
 
     /// Generate an ephemeral key pair for a single handshake, synchronously.
-    fn generate_ephemeral_key(&self) -> Result<Self::PrivateKey, Self::Error>;
+    fn generate_ephemeral_key(&mut self) -> Result<Self::PrivateKey, Self::Error>;
 
     /// ECDSA sign a message, synchronously (hash applied internally).
     fn sign(&self, key: &Self::PrivateKey, message: &[u8]) -> Result<C::Signature, Self::Error>;
@@ -112,12 +117,12 @@ pub trait CryptoProvider<C: Curve>: CryptoKeys<C> {
 pub trait CryptoProviderAsync<C: Curve>: CryptoKeys<C> {
     /// Generate a long-term static key pair.
     fn generate_static_key_async(
-        &self,
+        &mut self,
     ) -> impl Future<Output = Result<Self::PrivateKey, Self::Error>> + Send;
 
     /// Generate an ephemeral key pair for a single Noise handshake.
     fn generate_ephemeral_key_async(
-        &self,
+        &mut self,
     ) -> impl Future<Output = Result<Self::PrivateKey, Self::Error>> + Send;
 
     /// ECDSA sign a message (hash is applied internally).
@@ -149,12 +154,19 @@ pub trait CryptoProviderAsync<C: Curve>: CryptoKeys<C> {
 /// their bytes, if wanted, is the caller's job. For hardware-backed,
 /// persistent keys on Apple platforms use
 /// [`AppleSecureEnclave`](apple::AppleSecureEnclave).
-#[derive(Clone, Copy, Default)]
-pub struct EphemeralOnly;
+///
+/// Owns a caller-supplied CSPRNG `R` (`CryptoRng + RngCore`): pass
+/// `rand::rng()` in production or a seeded RNG for deterministic tests.
+/// The crate pulls in no entropy source of its own — `R` is the only
+/// one. `Clone`/`Send`/`Sync` are inherited from `R`.
+#[derive(Clone)]
+pub struct EphemeralOnly<R> {
+    rng: R,
+}
 
 // P-256 (eccoxide, software) ----------------------------------------
 
-impl CryptoKeys<P256> for EphemeralOnly {
+impl<R> CryptoKeys<P256> for EphemeralOnly<R> {
     type Error = crate::curve::p256::Error;
     type PrivateKey = P256r1PrivateKey;
 
@@ -163,13 +175,13 @@ impl CryptoKeys<P256> for EphemeralOnly {
     }
 }
 
-impl CryptoProvider<P256> for EphemeralOnly {
-    fn generate_static_key(&self) -> Result<Self::PrivateKey, Self::Error> {
-        P256r1PrivateKey::generate()
+impl<R: CryptoRng + RngCore> CryptoProvider<P256> for EphemeralOnly<R> {
+    fn generate_static_key(&mut self) -> Result<Self::PrivateKey, Self::Error> {
+        P256r1PrivateKey::generate(&mut self.rng)
     }
 
-    fn generate_ephemeral_key(&self) -> Result<Self::PrivateKey, Self::Error> {
-        P256r1PrivateKey::generate()
+    fn generate_ephemeral_key(&mut self) -> Result<Self::PrivateKey, Self::Error> {
+        P256r1PrivateKey::generate(&mut self.rng)
     }
 
     fn sign(&self, key: &Self::PrivateKey, message: &[u8]) -> Result<P256Signature, Self::Error> {
@@ -185,13 +197,13 @@ impl CryptoProvider<P256> for EphemeralOnly {
     }
 }
 
-impl CryptoProviderAsync<P256> for EphemeralOnly {
-    async fn generate_static_key_async(&self) -> Result<Self::PrivateKey, Self::Error> {
-        P256r1PrivateKey::generate()
+impl<R: CryptoRng + RngCore + Send + Sync> CryptoProviderAsync<P256> for EphemeralOnly<R> {
+    async fn generate_static_key_async(&mut self) -> Result<Self::PrivateKey, Self::Error> {
+        P256r1PrivateKey::generate(&mut self.rng)
     }
 
-    async fn generate_ephemeral_key_async(&self) -> Result<Self::PrivateKey, Self::Error> {
-        P256r1PrivateKey::generate()
+    async fn generate_ephemeral_key_async(&mut self) -> Result<Self::PrivateKey, Self::Error> {
+        P256r1PrivateKey::generate(&mut self.rng)
     }
 
     async fn sign_async(
@@ -213,7 +225,7 @@ impl CryptoProviderAsync<P256> for EphemeralOnly {
 
 // Ed25519 (cryptoxide, software) ------------------------------------
 
-impl CryptoKeys<Ed25519> for EphemeralOnly {
+impl<R> CryptoKeys<Ed25519> for EphemeralOnly<R> {
     type Error = crate::curve::ed25519::Error;
     type PrivateKey = SoftwareEd25519PrivateKey;
 
@@ -222,13 +234,13 @@ impl CryptoKeys<Ed25519> for EphemeralOnly {
     }
 }
 
-impl CryptoProvider<Ed25519> for EphemeralOnly {
-    fn generate_static_key(&self) -> Result<Self::PrivateKey, Self::Error> {
-        SoftwareEd25519PrivateKey::generate_os()
+impl<R: CryptoRng + RngCore> CryptoProvider<Ed25519> for EphemeralOnly<R> {
+    fn generate_static_key(&mut self) -> Result<Self::PrivateKey, Self::Error> {
+        Ok(SoftwareEd25519PrivateKey::generate(&mut self.rng))
     }
 
-    fn generate_ephemeral_key(&self) -> Result<Self::PrivateKey, Self::Error> {
-        SoftwareEd25519PrivateKey::generate_os()
+    fn generate_ephemeral_key(&mut self) -> Result<Self::PrivateKey, Self::Error> {
+        Ok(SoftwareEd25519PrivateKey::generate(&mut self.rng))
     }
 
     fn sign(
@@ -248,13 +260,13 @@ impl CryptoProvider<Ed25519> for EphemeralOnly {
     }
 }
 
-impl CryptoProviderAsync<Ed25519> for EphemeralOnly {
-    async fn generate_static_key_async(&self) -> Result<Self::PrivateKey, Self::Error> {
-        SoftwareEd25519PrivateKey::generate_os()
+impl<R: CryptoRng + RngCore + Send + Sync> CryptoProviderAsync<Ed25519> for EphemeralOnly<R> {
+    async fn generate_static_key_async(&mut self) -> Result<Self::PrivateKey, Self::Error> {
+        Ok(SoftwareEd25519PrivateKey::generate(&mut self.rng))
     }
 
-    async fn generate_ephemeral_key_async(&self) -> Result<Self::PrivateKey, Self::Error> {
-        SoftwareEd25519PrivateKey::generate_os()
+    async fn generate_ephemeral_key_async(&mut self) -> Result<Self::PrivateKey, Self::Error> {
+        Ok(SoftwareEd25519PrivateKey::generate(&mut self.rng))
     }
 
     async fn sign_async(
@@ -274,10 +286,10 @@ impl CryptoProviderAsync<Ed25519> for EphemeralOnly {
     }
 }
 
-impl EphemeralOnly {
-    /// Construct the software provider. It holds no state.
-    pub fn new() -> Self {
-        Self
+impl<R> EphemeralOnly<R> {
+    /// Construct the software provider around a caller-supplied CSPRNG.
+    pub fn new(rng: R) -> Self {
+        Self { rng }
     }
 }
 
@@ -318,14 +330,14 @@ impl SecretKey for SoftwareEd25519PrivateKey {
 pub trait ProviderExt {
     /// Generate a long-term static key for curve `C`.
     fn generate<C: Curve>(
-        &self,
+        &mut self,
     ) -> Result<<Self as CryptoKeys<C>>::PrivateKey, <Self as CryptoKeys<C>>::Error>
     where
         Self: CryptoProvider<C>;
 
     /// Generate an ephemeral key for curve `C`.
     fn generate_ephemeral<C: Curve>(
-        &self,
+        &mut self,
     ) -> Result<<Self as CryptoKeys<C>>::PrivateKey, <Self as CryptoKeys<C>>::Error>
     where
         Self: CryptoProvider<C>;
@@ -341,7 +353,7 @@ pub trait ProviderExt {
 
 impl<P> ProviderExt for P {
     fn generate<C: Curve>(
-        &self,
+        &mut self,
     ) -> Result<<Self as CryptoKeys<C>>::PrivateKey, <Self as CryptoKeys<C>>::Error>
     where
         Self: CryptoProvider<C>,
@@ -350,7 +362,7 @@ impl<P> ProviderExt for P {
     }
 
     fn generate_ephemeral<C: Curve>(
-        &self,
+        &mut self,
     ) -> Result<<Self as CryptoKeys<C>>::PrivateKey, <Self as CryptoKeys<C>>::Error>
     where
         Self: CryptoProvider<C>,

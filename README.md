@@ -57,14 +57,16 @@ use hiss::noise::{Blake2b, ChaChaPoly, Initiator, N, Noise, P256, Responder, Syn
 // Spell out the protocol once as a type alias.
 type Seal = Noise<N, P256, ChaChaPoly, Blake2b>;
 
-// The recipient owns a static P-256 key; its public half is known to the sender.
-let provider = EphemeralOnly::new();
+// Each party owns a software provider holding its own CSPRNG — `rand::rng()`
+// here; pass a seeded RNG instead for deterministic tests. The recipient's
+// static P-256 key has its public half known to the sender.
+let mut provider = EphemeralOnly::new(rand::rng());
 let recipient_static = provider.generate::<P256>()?;
 let recipient_pub = provider.public(&recipient_static)?;
 
 // ── Initiator: run the handshake, then seal a payload ───────────────────────
 let handshake = SyncHandshake::<Seal, Initiator, _, _, _, _>::initiate(
-    provider,
+    EphemeralOnly::new(rand::rng()),
     &[],                 // prologue
     Vec::<u8>::new(),    // writer: anything implementing std::io::Write
 )
@@ -78,7 +80,7 @@ let n = sender.send(payload, &mut sealed)?;
 
 // ── Responder: read the handshake, then open the payload ────────────────────
 let handshake = SyncHandshake::<Seal, Responder, _, _, _, _>::respond(
-    provider,
+    provider,                             // the recipient drives the responder side
     &[],                                  // prologue (must match)
     std::io::Cursor::new(wire),           // reader: anything implementing std::io::Read
 )

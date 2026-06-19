@@ -566,12 +566,12 @@ impl CryptoKeys<P256> for AppleSecureEnclave {
 }
 
 impl CryptoProviderAsync<P256> for AppleSecureEnclave {
-    async fn generate_static_key_async(&self) -> Result<Self::PrivateKey, Self::Error> {
+    async fn generate_static_key_async(&mut self) -> Result<Self::PrivateKey, Self::Error> {
         let label = self.p256_label();
         offload(move || P256r1PrivateKey::generate_secure_enclave(&label)).await
     }
 
-    async fn generate_ephemeral_key_async(&self) -> Result<Self::PrivateKey, Self::Error> {
+    async fn generate_ephemeral_key_async(&mut self) -> Result<Self::PrivateKey, Self::Error> {
         offload(P256r1PrivateKey::generate_ephemeral).await
     }
 
@@ -603,11 +603,11 @@ impl CryptoProviderAsync<P256> for AppleSecureEnclave {
 // is what makes Secure Enclave keys usable with the blocking `std::io`
 // handshake, exactly as Apple's libraries expose them.
 impl CryptoProvider<P256> for AppleSecureEnclave {
-    fn generate_static_key(&self) -> Result<Self::PrivateKey, Self::Error> {
+    fn generate_static_key(&mut self) -> Result<Self::PrivateKey, Self::Error> {
         P256r1PrivateKey::generate_secure_enclave(&self.p256_label())
     }
 
-    fn generate_ephemeral_key(&self) -> Result<Self::PrivateKey, Self::Error> {
+    fn generate_ephemeral_key(&mut self) -> Result<Self::PrivateKey, Self::Error> {
         P256r1PrivateKey::generate_ephemeral()
     }
 
@@ -630,10 +630,30 @@ impl CryptoProvider<P256> for AppleSecureEnclave {
 
 // ── Ed25519 (software — the enclave has no Ed25519 support) ───────────
 //
-// The Secure Enclave never touches Ed25519: these are the same software
-// (`cryptoxide`) operations as `EphemeralOnly`. Persistence of the seed
-// at rest is handled separately by the sealed-seed lifecycle above
-// (`store_seed` / `load_seed`).
+// The Secure Enclave never touches Ed25519: these are software
+// (`cryptoxide`) operations. Unlike `EphemeralOnly`, the seed's entropy
+// comes from Apple's `SecRandomCopyBytes` (hardware-grade) rather than a
+// caller-supplied RNG — so `AppleSecureEnclave` needs no `R` parameter.
+// Persistence of the seed at rest is handled separately by the
+// sealed-seed lifecycle above (`store_seed` / `load_seed`).
+
+/// Generate a software Ed25519 key seeded from Apple's `SecRandomCopyBytes`.
+fn apple_ed25519_generate() -> Result<SoftwareEd25519PrivateKey, crate::curve::ed25519::Error> {
+    let mut seed = [0u8; 32];
+    let status = unsafe {
+        security_framework_sys::random::SecRandomCopyBytes(
+            security_framework_sys::random::kSecRandomDefault,
+            seed.len(),
+            seed.as_mut_ptr().cast(),
+        )
+    };
+    if status != 0 {
+        return Err(crate::curve::ed25519::Error::Platform(format!(
+            "SecRandomCopyBytes failed with status {status}"
+        )));
+    }
+    Ok(SoftwareEd25519PrivateKey::from_seed(seed))
+}
 
 impl CryptoKeys<Ed25519> for AppleSecureEnclave {
     type Error = crate::curve::ed25519::Error;
@@ -645,12 +665,12 @@ impl CryptoKeys<Ed25519> for AppleSecureEnclave {
 }
 
 impl CryptoProvider<Ed25519> for AppleSecureEnclave {
-    fn generate_static_key(&self) -> Result<Self::PrivateKey, Self::Error> {
-        SoftwareEd25519PrivateKey::generate_os()
+    fn generate_static_key(&mut self) -> Result<Self::PrivateKey, Self::Error> {
+        apple_ed25519_generate()
     }
 
-    fn generate_ephemeral_key(&self) -> Result<Self::PrivateKey, Self::Error> {
-        SoftwareEd25519PrivateKey::generate_os()
+    fn generate_ephemeral_key(&mut self) -> Result<Self::PrivateKey, Self::Error> {
+        apple_ed25519_generate()
     }
 
     fn sign(
@@ -671,12 +691,12 @@ impl CryptoProvider<Ed25519> for AppleSecureEnclave {
 }
 
 impl CryptoProviderAsync<Ed25519> for AppleSecureEnclave {
-    async fn generate_static_key_async(&self) -> Result<Self::PrivateKey, Self::Error> {
-        SoftwareEd25519PrivateKey::generate_os()
+    async fn generate_static_key_async(&mut self) -> Result<Self::PrivateKey, Self::Error> {
+        apple_ed25519_generate()
     }
 
-    async fn generate_ephemeral_key_async(&self) -> Result<Self::PrivateKey, Self::Error> {
-        SoftwareEd25519PrivateKey::generate_os()
+    async fn generate_ephemeral_key_async(&mut self) -> Result<Self::PrivateKey, Self::Error> {
+        apple_ed25519_generate()
     }
 
     async fn sign_async(
@@ -737,7 +757,7 @@ mod tests {
         let sk1 = P256r1PrivateKey::generate_ephemeral().unwrap();
         let pk1 = sk1.public().unwrap();
 
-        let sk2 = SoftwareP256r1PrivateKey::generate_ephemeral().unwrap();
+        let sk2 = SoftwareP256r1PrivateKey::generate(rand::rng()).unwrap();
         let pk2 = sk2.public();
 
         let apple_dh = sk1.dh(&pk2).unwrap();
@@ -751,14 +771,14 @@ mod tests {
     /// two ephemeral keys, agree, and confirm the DH matches both ways.
     #[tokio::test]
     async fn crypto_provider_offloaded_dh_roundtrip() {
-        let provider = AppleSecureEnclave::new("uk.co.example.hiss-test");
+        let mut provider = AppleSecureEnclave::new("uk.co.example.hiss-test");
 
         // Fully-qualified P-256: the provider also implements the trait
         // for Ed25519, so the curve can't be inferred from the call alone.
-        let a = CryptoProviderAsync::<P256>::generate_ephemeral_key_async(&provider)
+        let a = CryptoProviderAsync::<P256>::generate_ephemeral_key_async(&mut provider)
             .await
             .unwrap();
-        let b = CryptoProviderAsync::<P256>::generate_ephemeral_key_async(&provider)
+        let b = CryptoProviderAsync::<P256>::generate_ephemeral_key_async(&mut provider)
             .await
             .unwrap();
         let a_pub = provider.public(&a).unwrap();
@@ -803,14 +823,12 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires codesigned test binary + Secure Enclave hardware"]
     async fn ed25519_seed_keychain_round_trip() {
-        let provider = AppleSecureEnclave::new("uk.co.example.hiss-test");
+        let mut provider = AppleSecureEnclave::new("uk.co.example.hiss-test");
 
         // Establish the SE P-256 identity (the seal recipient).
         let _identity = provider.generate::<P256>().unwrap();
 
-        let seed: [u8; 32] = *SoftwareEd25519PrivateKey::generate(rand::rng())
-            .expect("generate Ed25519 seed")
-            .seed();
+        let seed: [u8; 32] = *SoftwareEd25519PrivateKey::generate(rand::rng()).seed();
 
         assert!(provider.load_seed().await.unwrap().is_none());
 

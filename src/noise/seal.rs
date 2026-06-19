@@ -149,14 +149,15 @@ mod tests {
     use super::*;
     use crate::curve::p256::P256r1PrivateKey;
     use crate::provider::EphemeralOnly;
+    use rand::{SeedableRng, rngs::StdRng};
 
     #[tokio::test]
     async fn seal_open_round_trip() {
-        let device_key = P256r1PrivateKey::generate().unwrap();
+        let device_key = P256r1PrivateKey::generate(rand::rng()).unwrap();
         let device_pub = device_key.public();
         let payload: [u8; 32] = [0x42; 32];
 
-        let sealed = seal_32(EphemeralOnly, &device_pub, &payload)
+        let sealed = seal_32(EphemeralOnly::new(StdRng::from_os_rng()), &device_pub, &payload)
             .await
             .unwrap();
         assert_eq!(sealed.len(), SEALED_SIZE);
@@ -169,7 +170,7 @@ mod tests {
             "sealed envelope must not contain cleartext payload",
         );
 
-        let opened = open_32(EphemeralOnly, device_key, &sealed)
+        let opened = open_32(EphemeralOnly::new(StdRng::from_os_rng()), device_key, &sealed)
             .await
             .unwrap();
         assert_eq!(opened, payload);
@@ -177,15 +178,15 @@ mod tests {
 
     #[tokio::test]
     async fn open_with_wrong_key_fails() {
-        let device_key = P256r1PrivateKey::generate().unwrap();
+        let device_key = P256r1PrivateKey::generate(rand::rng()).unwrap();
         let device_pub = device_key.public();
         let payload: [u8; 32] = [0x99; 32];
-        let sealed = seal_32(EphemeralOnly, &device_pub, &payload)
+        let sealed = seal_32(EphemeralOnly::new(StdRng::from_os_rng()), &device_pub, &payload)
             .await
             .unwrap();
 
-        let other_key = P256r1PrivateKey::generate().unwrap();
-        let result = open_32(EphemeralOnly, other_key, &sealed).await;
+        let other_key = P256r1PrivateKey::generate(rand::rng()).unwrap();
+        let result = open_32(EphemeralOnly::new(StdRng::from_os_rng()), other_key, &sealed).await;
         assert!(
             matches!(result, Err(SealError::Open(_))),
             "opening with wrong key must fail",
@@ -194,14 +195,14 @@ mod tests {
 
     #[tokio::test]
     async fn fresh_ephemeral_per_seal() {
-        let device_key = P256r1PrivateKey::generate().unwrap();
+        let device_key = P256r1PrivateKey::generate(rand::rng()).unwrap();
         let device_pub = device_key.public();
         let payload: [u8; 32] = [0xAB; 32];
 
-        let sealed_a = seal_32(EphemeralOnly, &device_pub, &payload)
+        let sealed_a = seal_32(EphemeralOnly::new(StdRng::from_os_rng()), &device_pub, &payload)
             .await
             .unwrap();
-        let sealed_b = seal_32(EphemeralOnly, &device_pub, &payload)
+        let sealed_b = seal_32(EphemeralOnly::new(StdRng::from_os_rng()), &device_pub, &payload)
             .await
             .unwrap();
 

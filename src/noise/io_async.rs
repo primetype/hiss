@@ -966,6 +966,7 @@ async_recv_token! {
 mod tests {
     use super::*;
     use crate::provider::EphemeralOnly;
+    use rand::{SeedableRng, rngs::StdRng};
     use crate::provider::{CryptoProviderAsync, ProviderExt};
     use crate::noise::{Blake2b, ChaChaPoly, IKpsk1, Initiator, K, N, Noise, P256, Responder};
     use crate::noise_message_size;
@@ -982,12 +983,12 @@ mod tests {
     /// `Cursor<Vec<u8>>` is a tokio `AsyncRead`.
     #[tokio::test]
     async fn n_async_seal_open_roundtrip() {
-        let provider = EphemeralOnly;
+        let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
         let recipient_static = provider.generate::<P256>().unwrap();
         let recipient_pub = provider.public(&recipient_static).unwrap();
 
         let sealer = AsyncHandshake::<Seal, Initiator, _, _, _, _>::initiate(
-            EphemeralOnly,
+            EphemeralOnly::new(StdRng::from_os_rng()),
             &[],
             Vec::<u8>::new(),
         )
@@ -1001,7 +1002,7 @@ mod tests {
         let sealed_len = send_transport.send(&payload, &mut sealed).unwrap();
 
         let opener = AsyncHandshake::<Seal, Responder, _, _, _, _>::respond(
-            EphemeralOnly,
+            EphemeralOnly::new(StdRng::from_os_rng()),
             &[],
             Cursor::new(wire),
         )
@@ -1028,12 +1029,12 @@ mod tests {
     /// fail (DH mismatch → payload-tag verification fails).
     #[tokio::test]
     async fn n_async_tampered_ephemeral_rejected() {
-        let provider = EphemeralOnly;
+        let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
         let recipient_static = provider.generate::<P256>().unwrap();
         let recipient_pub = provider.public(&recipient_static).unwrap();
 
         let sealer = AsyncHandshake::<Seal, Initiator, _, _, _, _>::initiate(
-            EphemeralOnly,
+            EphemeralOnly::new(StdRng::from_os_rng()),
             &[],
             Vec::<u8>::new(),
         )
@@ -1042,7 +1043,7 @@ mod tests {
         wire[1] ^= 0xFF; // flip a byte in the ephemeral public key
 
         let opener = AsyncHandshake::<Seal, Responder, _, _, _, _>::respond(
-            EphemeralOnly,
+            EphemeralOnly::new(StdRng::from_os_rng()),
             &[],
             Cursor::new(wire),
         )
@@ -1064,8 +1065,8 @@ mod tests {
     async fn n_async_seal_open_with_secure_enclave_provider() {
         use crate::provider::apple::AppleSecureEnclave;
 
-        let provider = AppleSecureEnclave::new("uk.co.example.hiss-test");
-        let recipient_static = CryptoProviderAsync::<P256>::generate_ephemeral_key_async(&provider)
+        let mut provider = AppleSecureEnclave::new("uk.co.example.hiss-test");
+        let recipient_static = CryptoProviderAsync::<P256>::generate_ephemeral_key_async(&mut provider)
             .await
             .unwrap();
         let recipient_pub = provider.public(&recipient_static).unwrap();
@@ -1112,7 +1113,7 @@ mod tests {
     /// `tokio::io::duplex` pipe. Any divergence surfaces as a tag failure.
     #[tokio::test]
     async fn ikpsk1_async_initiator_vs_buffer_core() {
-        let provider = EphemeralOnly;
+        let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
         let initiator_static = provider.generate::<P256>().unwrap();
         let initiator_pub = provider.public(&initiator_static).unwrap();
         let responder_static = provider.generate::<P256>().unwrap();
@@ -1123,7 +1124,7 @@ mod tests {
 
         // io_async initiator drives msg1 (-> e, es, s, ss, psk).
         let i_hs = AsyncHandshake::<Channel, Initiator, _, _, _, _>::initiate(
-            EphemeralOnly,
+            EphemeralOnly::new(StdRng::from_os_rng()),
             &[],
             io_stream,
         )
@@ -1148,7 +1149,7 @@ mod tests {
         peer.read_exact(&mut msg1).await.unwrap();
 
         // buffer-core responder consumes msg1 and produces msg2.
-        let r_hs = Channel::respond(EphemeralOnly, &[])
+        let r_hs = Channel::respond(EphemeralOnly::new(StdRng::from_os_rng()), &[])
             .set_s(responder_static)
             .unwrap();
         let (_e, recv) = r_hs.read(&msg1).unwrap().e().await.unwrap();
@@ -1185,7 +1186,7 @@ mod tests {
     /// path to the snow-verified core.
     #[tokio::test]
     async fn ikpsk1_async_responder_vs_buffer_core() {
-        let provider = EphemeralOnly;
+        let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
         let initiator_static = provider.generate::<P256>().unwrap();
         let initiator_pub = provider.public(&initiator_static).unwrap();
         let responder_static = provider.generate::<P256>().unwrap();
@@ -1193,7 +1194,7 @@ mod tests {
         let psk = Psk::from_bytes([0xBB; 32]);
 
         // buffer-core initiator builds msg1.
-        let i_hs = Channel::initiate(EphemeralOnly, &[]).set_rs(responder_pub);
+        let i_hs = Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
         let mut msg1_buf = [0u8;
             noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: true, keyed: false, tokens: [E, Es, S, Ss, Psk],)];
         let (msg1, i_hs) = i_hs
@@ -1220,7 +1221,7 @@ mod tests {
 
         // io_async responder consumes msg1, then sends msg2.
         let r_hs = AsyncHandshake::<Channel, Responder, _, _, _, _>::respond(
-            EphemeralOnly,
+            EphemeralOnly::new(StdRng::from_os_rng()),
             &[],
             io_stream,
         )
@@ -1257,7 +1258,7 @@ mod tests {
     /// setters and the `ss` token end-to-end.
     #[tokio::test]
     async fn k_async_round_trip() {
-        let provider = EphemeralOnly;
+        let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
         let alice_static = provider.generate::<P256>().unwrap();
         let alice_pub = provider.public(&alice_static).unwrap();
         let bob_static = provider.generate::<P256>().unwrap();
@@ -1266,7 +1267,7 @@ mod tests {
 
         // initiator: pre -> s (alice), <- s (bob); msg1 -> e, es, ss.
         let sealer = AsyncHandshake::<NoiseK, Initiator, _, _, _, _>::initiate(
-            EphemeralOnly,
+            EphemeralOnly::new(StdRng::from_os_rng()),
             &[],
             Vec::<u8>::new(),
         )
@@ -1290,7 +1291,7 @@ mod tests {
 
         // responder: pre -> s (alice via set_rs), <- s (bob via set_s).
         let opener = AsyncHandshake::<NoiseK, Responder, _, _, _, _>::respond(
-            EphemeralOnly,
+            EphemeralOnly::new(StdRng::from_os_rng()),
             &[],
             Cursor::new(wire),
         )
