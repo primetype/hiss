@@ -66,3 +66,23 @@ impl RngCore for ScriptedRng {
 // Marker only (no methods): the scripted stream stands in for a CSPRNG in
 // deterministic tests, never in production.
 impl CryptoRng for ScriptedRng {}
+
+// ── Fixed-key minting (P-256) ────────────────────────────────────
+
+use hiss::noise::{Curve, P256};
+use hiss::provider::{CryptoKeys, EphemeralOnly, ProviderExt};
+
+/// Mint a P-256 private key from fixed scalar bytes via the public
+/// provider API (the scripted block is a valid scalar, accepted on the
+/// first rejection-sampling draw).
+pub fn private_key(seed: &[u8; 32]) -> <EphemeralOnly<ScriptedRng> as CryptoKeys<P256>>::PrivateKey {
+    let mut p = EphemeralOnly::new(ScriptedRng::new(&[seed]));
+    p.generate::<P256>().unwrap()
+}
+
+/// The public key for a fixed private scalar.
+pub fn public_key(seed: &[u8; 32]) -> <P256 as Curve>::PublicKey {
+    let mut p = EphemeralOnly::new(ScriptedRng::new(&[seed]));
+    let sk = p.generate::<P256>().unwrap();
+    p.public(&sk).unwrap()
+}

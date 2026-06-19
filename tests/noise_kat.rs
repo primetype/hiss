@@ -18,10 +18,10 @@
 //! agreement with a standards body.
 
 mod common;
-use common::ScriptedRng;
+use common::{ScriptedRng, private_key, public_key};
 
 use hiss::noise::*;
-use hiss::provider::{EphemeralOnly, ProviderExt};
+use hiss::provider::EphemeralOnly;
 use hiss::psk::Psk;
 use serde::{Deserialize, Serialize};
 
@@ -80,21 +80,6 @@ struct TransportMessage {
 }
 
 // ── Helpers ──────────────────────────────────────────────────────
-
-/// Mint a P-256 private key from fixed scalar bytes via the public
-/// provider API (the scripted byte block is a valid scalar, accepted on
-/// the first rejection-sampling draw).
-fn private_key(seed: &[u8; 32]) -> <EphemeralOnly<ScriptedRng> as hiss::provider::CryptoKeys<P256>>::PrivateKey {
-    let mut p = EphemeralOnly::new(ScriptedRng::new(&[seed]));
-    p.generate::<P256>().unwrap()
-}
-
-/// The public key for a fixed private scalar.
-fn public_key(seed: &[u8; 32]) -> <P256 as hiss::noise::Curve>::PublicKey {
-    let mut p = EphemeralOnly::new(ScriptedRng::new(&[seed]));
-    let sk = p.generate::<P256>().unwrap();
-    p.public(&sk).unwrap()
-}
 
 fn load_vectors() -> VectorFile {
     let raw = std::fs::read_to_string(VECTORS_PATH).unwrap_or_else(|e| {
