@@ -110,7 +110,7 @@ async fn noise_kat_n() {
     let v = vector(&file, "Noise_N_P256_ChaChaPoly_BLAKE2b");
 
     let provider = EphemeralOnly::new(ScriptedRng::new(&[&INIT_EPHEMERAL]));
-    let hs = Noise::<N, P256, ChaChaPoly, Blake2b>::initiate(provider, &[])
+    let hs = N::initiate(provider, &[])
         .set_rs(public_key(&RESP_STATIC));
 
     let mut buf = [0u8; 256];
@@ -134,7 +134,7 @@ async fn noise_kat_k() {
     let v = vector(&file, "Noise_K_P256_ChaChaPoly_BLAKE2b");
 
     let provider = EphemeralOnly::new(ScriptedRng::new(&[&INIT_EPHEMERAL]));
-    let hs = Noise::<K, P256, ChaChaPoly, Blake2b>::initiate(provider, &[])
+    let hs = K::initiate(provider, &[])
         .set_s(private_key(&INIT_STATIC))
         .unwrap()
         .set_rs(public_key(&RESP_STATIC));
@@ -170,7 +170,7 @@ async fn noise_kat_kpsk0() {
 
     let psk = Psk::from_bytes(PSK_BYTES);
     let provider = EphemeralOnly::new(ScriptedRng::new(&[&INIT_EPHEMERAL]));
-    let hs = Noise::<Kpsk0, P256, ChaChaPoly, Blake2b>::initiate(provider, &[])
+    let hs = Kpsk0::initiate(provider, &[])
         .set_s(private_key(&INIT_STATIC))
         .unwrap()
         .set_rs(public_key(&RESP_STATIC));
@@ -213,7 +213,7 @@ async fn noise_kat_ikpsk1() {
 
     let psk = Psk::from_bytes(PSK_BYTES);
     let provider = EphemeralOnly::new(ScriptedRng::new(&[&INIT_EPHEMERAL]));
-    let hs = Noise::<IKpsk1, P256, ChaChaPoly, Blake2b>::initiate(provider, &[])
+    let hs = IKpsk1::initiate(provider, &[])
         .set_rs(public_key(&RESP_STATIC));
 
     // msg1: -> e, es, s, ss, psk

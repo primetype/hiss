@@ -115,7 +115,7 @@ where
 ///
 /// Type parameters:
 /// * `N` — the protocol descriptor (e.g.
-///   `Noise<IKpsk1, P256, ChaChaPoly, Blake2b>`)
+///   `IKpsk1`)
 /// * `R` — role ([`Initiator`] or
 ///   [`Responder`])
 /// * `PreMsgs` — remaining pre-message Cons-list. Starts as
@@ -152,7 +152,7 @@ where
     /// Begin a new handshake for the given protocol and role.
     ///
     /// The protocol descriptor `N` (e.g.
-    /// `Noise<IKpsk1, P256, ChaChaPoly, Blake2b>`) determines the
+    /// `IKpsk1`) determines the
     /// pattern, curve, cipher, and hash. The pre-message Cons-list
     /// from the pattern becomes the `PreMsgs` type parameter —
     /// pre-message keys must be provided (via `set_s` or
@@ -168,7 +168,7 @@ where
     /// # Example
     ///
     /// ```ignore
-    /// type Channel = Noise<IKpsk1, P256, ChaChaPoly, Blake2b>;
+    /// type Channel = IKpsk1;
     ///
     /// let hs = HandshakeState::<Channel, Initiator, _, _, _>::new(provider, &[])
     ///     .set_rs(responder_pub);

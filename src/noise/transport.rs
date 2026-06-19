@@ -10,13 +10,13 @@ use crate::curve::Curve;
 /// A completed Noise transport.
 ///
 /// Parameterised over the [`Protocol`] descriptor that produced it —
-/// e.g. `Transport<Noise<IKpsk1, P256, ChaChaPoly, Blake2b>>`. The
+/// e.g. `Transport<IKpsk1>`. The
 /// protocol identity is carried at the type level with zero runtime
 /// cost, allowing consumers to name the transport using their protocol
 /// type alias:
 ///
 /// ```ignore
-/// type MyProtocol = Noise<IKpsk1, P256, ChaChaPoly, Blake2b>;
+/// type MyProtocol = IKpsk1;
 /// let transport: Transport<MyProtocol> = /* handshake */;
 /// ```
 ///

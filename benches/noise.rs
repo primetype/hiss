@@ -34,7 +34,7 @@ fn bench_n_hiss(c: &mut Criterion) {
                 let responder_static = provider.generate::<P256>().unwrap();
                 let responder_pub = provider.public(&responder_static).unwrap();
 
-                type NoiseSeal = Noise<N, P256, ChaChaPoly, Blake2b>;
+                type NoiseSeal = N;
 
                 // Initiator seals
                 let sealer =
@@ -119,7 +119,7 @@ fn bench_ikpsk1_hiss(c: &mut Criterion) {
                 let r_pub = provider.public(&r_static).unwrap();
                 let psk = Psk::from_bytes([0xAA; 32]);
 
-                type Proto = Noise<IKpsk1, P256, ChaChaPoly, Blake2b>;
+                type Proto = IKpsk1;
 
                 // Message 1: -> e, es, s, ss, psk
                 let i_hs = Proto::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(r_pub);
@@ -249,7 +249,7 @@ fn bench_transport_hiss(c: &mut Criterion) {
         let r_static = provider.generate::<P256>().unwrap();
         let r_pub = provider.public(&r_static).unwrap();
 
-        type NoiseSeal = Noise<N, P256, ChaChaPoly, Blake2b>;
+        type NoiseSeal = N;
 
         let sealer = NoiseSeal::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(r_pub);
         let mut msg_buf = [0u8; 81];

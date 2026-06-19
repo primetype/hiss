@@ -31,7 +31,7 @@
 
 use crate::provider::CryptoProviderAsync;
 use crate::curve::p256::{P256, P256r1PublicKey};
-use crate::noise::{Blake2b, ChaChaPoly, HandshakeError, N, Noise, Transport};
+use crate::noise::{HandshakeError, N, Transport};
 
 /// Size of the cleartext payload sealed by [`seal_32`] / [`open_32`].
 pub const SEAL_PAYLOAD_SIZE: usize = 32;
@@ -43,7 +43,7 @@ pub const NOISE_N_MSG1_SIZE: usize = 81;
 ///
 /// `Noise_N_P256_ChaChaPoly_BLAKE2b` — the one-way sealing descriptor
 /// used by [`seal_32`] / [`open_32`].
-pub type NoiseSeal = Noise<N, P256, ChaChaPoly, Blake2b>;
+pub type NoiseSeal = N;
 
 /// Size of the transport ciphertext (payload + AEAD tag).
 const SEALED_TRANSPORT_SIZE: usize = SEAL_PAYLOAD_SIZE + Transport::<NoiseSeal>::OVERHEAD;

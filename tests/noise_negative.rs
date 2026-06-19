@@ -61,7 +61,7 @@ fn flip(mut m: Vec<u8>, byte: usize) -> Vec<u8> {
 // surfaces as `Err(())`.
 
 async fn run_n(xform: &Xform<'_>) -> Result<(), ()> {
-    let i = Noise::<N, P256, ChaChaPoly, Blake2b>::initiate(
+    let i = N::initiate(
         EphemeralOnly::new(ScriptedRng::new(&[&INIT_EPHEMERAL])),
         &[],
     )
@@ -70,7 +70,7 @@ async fn run_n(xform: &Xform<'_>) -> Result<(), ()> {
     let (msg1, _t) = i.e(&mut buf).await.unwrap().es().await.unwrap();
     let msg1 = xform(0, msg1.to_vec());
 
-    let r = Noise::<N, P256, ChaChaPoly, Blake2b>::respond(
+    let r = N::respond(
         EphemeralOnly::new(StdRng::seed_from_u64(1)),
         &[],
     )
@@ -82,7 +82,7 @@ async fn run_n(xform: &Xform<'_>) -> Result<(), ()> {
 }
 
 async fn run_k(xform: &Xform<'_>) -> Result<(), ()> {
-    let i = Noise::<K, P256, ChaChaPoly, Blake2b>::initiate(
+    let i = K::initiate(
         EphemeralOnly::new(ScriptedRng::new(&[&INIT_EPHEMERAL])),
         &[],
     )
@@ -102,7 +102,7 @@ async fn run_k(xform: &Xform<'_>) -> Result<(), ()> {
         .unwrap();
     let msg1 = xform(0, msg1.to_vec());
 
-    let r = Noise::<K, P256, ChaChaPoly, Blake2b>::respond(
+    let r = K::respond(
         EphemeralOnly::new(StdRng::seed_from_u64(2)),
         &[],
     )
@@ -116,7 +116,7 @@ async fn run_k(xform: &Xform<'_>) -> Result<(), ()> {
 
 async fn run_kpsk0(xform: &Xform<'_>) -> Result<(), ()> {
     let psk = Psk::from_bytes(PSK_BYTES);
-    let i = Noise::<Kpsk0, P256, ChaChaPoly, Blake2b>::initiate(
+    let i = Kpsk0::initiate(
         EphemeralOnly::new(ScriptedRng::new(&[&INIT_EPHEMERAL])),
         &[],
     )
@@ -139,7 +139,7 @@ async fn run_kpsk0(xform: &Xform<'_>) -> Result<(), ()> {
         .unwrap();
     let msg1 = xform(0, msg1.to_vec());
 
-    let r = Noise::<Kpsk0, P256, ChaChaPoly, Blake2b>::respond(
+    let r = Kpsk0::respond(
         EphemeralOnly::new(StdRng::seed_from_u64(3)),
         &[],
     )
@@ -154,7 +154,7 @@ async fn run_kpsk0(xform: &Xform<'_>) -> Result<(), ()> {
 
 async fn run_ikpsk1(xform: &Xform<'_>) -> Result<(), ()> {
     let psk = Psk::from_bytes(PSK_BYTES);
-    let i = Noise::<IKpsk1, P256, ChaChaPoly, Blake2b>::initiate(
+    let i = IKpsk1::initiate(
         EphemeralOnly::new(ScriptedRng::new(&[&INIT_EPHEMERAL])),
         &[],
     )
@@ -179,7 +179,7 @@ async fn run_ikpsk1(xform: &Xform<'_>) -> Result<(), ()> {
     let msg1 = xform(0, msg1.to_vec());
 
     // Responder reads msg1.
-    let r = Noise::<IKpsk1, P256, ChaChaPoly, Blake2b>::respond(
+    let r = IKpsk1::respond(
         EphemeralOnly::new(ScriptedRng::new(&[&RESP_EPHEMERAL])),
         &[],
     )
@@ -283,7 +283,7 @@ async fn kpsk0_wrong_psk_rejected() {
     let good = Psk::from_bytes(PSK_BYTES);
     let bad = Psk::from_bytes([0x00; 32]);
 
-    let i = Noise::<Kpsk0, P256, ChaChaPoly, Blake2b>::initiate(
+    let i = Kpsk0::initiate(
         EphemeralOnly::new(ScriptedRng::new(&[&INIT_EPHEMERAL])),
         &[],
     )
@@ -306,7 +306,7 @@ async fn kpsk0_wrong_psk_rejected() {
         .unwrap();
     let msg1 = msg1.to_vec();
 
-    let r = Noise::<Kpsk0, P256, ChaChaPoly, Blake2b>::respond(
+    let r = Kpsk0::respond(
         EphemeralOnly::new(StdRng::seed_from_u64(9)),
         &[],
     )
@@ -323,7 +323,7 @@ async fn kpsk0_wrong_psk_rejected() {
 
 // ── Transport: tamper sweep + nonce sequencing ───────────────────
 
-type ChannelN = Noise<N, P256, ChaChaPoly, Blake2b>;
+type ChannelN = N;
 type NTransport = Transport<ChannelN>;
 
 /// Complete an N handshake hiss↔hiss and return both transport states.

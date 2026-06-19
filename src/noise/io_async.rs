@@ -9,15 +9,18 @@
 //!
 //! ```ignore
 //! use hiss::noise::*;
-//! type Seal = Noise<N, P256, ChaChaPoly, Blake2b>;
+//!
+//! // `N` is the default-suite alias; the
+//! // `async_initiator`/`async_responder` constructors fix the role, so
+//! // there is no `AsyncHandshake::<…, …, _, _, _, _>` turbofish.
 //!
 //! // initiator — `stream: impl tokio::io::AsyncWrite + Unpin`
-//! let i = AsyncHandshake::<Seal, Initiator, _, _, _, _>::initiate(provider, &[], stream)
+//! let i = N::async_initiator(provider, &[], stream)
 //!     .set_rs(recipient_pub);
 //! let mut sealed = i.e().await?.es().await?;   // msg1 streamed + flushed; `sealed` owns the stream
 //!
 //! // responder — `stream: impl tokio::io::AsyncRead + Unpin`
-//! let r = AsyncHandshake::<Seal, Responder, _, _, _, _>::respond(provider, &[], stream)
+//! let r = N::async_responder(provider, &[], stream)
 //!     .set_s(recipient_static)?;
 //! let (their_e, recv) = r.recv().e().await?;   // each token reads exactly its bytes off the wire
 //! let mut opened = recv.es().await?;
@@ -65,7 +68,7 @@ use std::marker::PhantomData;
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-use super::Protocol;
+use super::{Noise, Protocol};
 use super::buffers::{RecvBuffer, SendBuffer};
 use super::cipher::Cipher;
 use super::error::HandshakeError;
@@ -355,6 +358,42 @@ where
             stream,
             _marker: PhantomData,
         }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  Ergonomic protocol-level constructors (no turbofish)
+// ═══════════════════════════════════════════════════════════════
+
+impl<P: Pattern, Cu: Curve, Ci: Cipher, H: Hash> Noise<P, Cu, Ci, H> {
+    /// Begin an async handshake as the **initiator** over `stream`,
+    /// without naming the six [`AsyncHandshake`] type parameters.
+    ///
+    /// Paired with a protocol alias (e.g.
+    /// [`IKpsk1`](crate::noise::IKpsk1)) this removes the
+    /// turbofish entirely.
+    pub fn async_initiator<CP, Io>(
+        provider: CP,
+        prologue: &[u8],
+        stream: Io,
+    ) -> AsyncHandshake<Self, Initiator, P::PreMessages, P::Messages, CP, Io>
+    where
+        CP: CryptoProviderAsync<Cu>,
+    {
+        AsyncHandshake::initiate(provider, prologue, stream)
+    }
+
+    /// Begin an async handshake as the **responder** over `stream`,
+    /// without naming the six [`AsyncHandshake`] type parameters.
+    pub fn async_responder<CP, Io>(
+        provider: CP,
+        prologue: &[u8],
+        stream: Io,
+    ) -> AsyncHandshake<Self, Responder, P::PreMessages, P::Messages, CP, Io>
+    where
+        CP: CryptoProviderAsync<Cu>,
+    {
+        AsyncHandshake::respond(provider, prologue, stream)
     }
 }
 
@@ -968,14 +1007,14 @@ mod tests {
     use crate::provider::EphemeralOnly;
     use rand::{SeedableRng, rngs::StdRng};
     use crate::provider::{CryptoProviderAsync, ProviderExt};
-    use crate::noise::{Blake2b, ChaChaPoly, IKpsk1, Initiator, K, N, Noise, P256, Responder};
+    use crate::noise::{ChaChaPoly, IKpsk1, Initiator, K, N, P256, Responder};
     use crate::noise_message_size;
     use crate::psk::Psk;
     use std::io::Cursor;
 
-    type Seal = Noise<N, P256, ChaChaPoly, Blake2b>;
-    type Channel = Noise<IKpsk1, P256, ChaChaPoly, Blake2b>;
-    type NoiseK = Noise<K, P256, ChaChaPoly, Blake2b>;
+    type Seal = N;
+    type Channel = IKpsk1;
+    type NoiseK = K;
 
     /// Full Noise N seal/open over `tokio::io`, with a real transport
     /// round-trip — proves wire correctness end-to-end (any wrong byte
@@ -1015,6 +1054,50 @@ mod tests {
             send_transport.session_id(),
             recv_transport.transport().session_id()
         );
+
+        let mut opened = [0u8; 32];
+        let opened_len = recv_transport
+            .transport()
+            .receive(&sealed[..sealed_len], &mut opened)
+            .unwrap();
+        assert_eq!(opened_len, 32);
+        assert_eq!(opened, payload);
+    }
+
+    /// The N round-trip built through the alias + role-fixing async
+    /// constructors (`N::async_initiator` / `async_responder`) —
+    /// no turbofish.
+    #[tokio::test]
+    async fn n_async_constructors_roundtrip() {
+        use crate::noise::N;
+
+        let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
+        let recipient_static = provider.generate::<P256>().unwrap();
+        let recipient_pub = provider.public(&recipient_static).unwrap();
+
+        let sealer = N::async_initiator(
+            EphemeralOnly::new(StdRng::from_os_rng()),
+            &[],
+            Vec::<u8>::new(),
+        )
+        .set_rs(recipient_pub);
+        let (mut send_transport, wire) =
+            sealer.e().await.unwrap().es().await.unwrap().into_parts();
+        assert_eq!(wire.len(), 81);
+
+        let payload = [0x42u8; 32];
+        let mut sealed = [0u8; 48];
+        let sealed_len = send_transport.send(&payload, &mut sealed).unwrap();
+
+        let opener = N::async_responder(
+            EphemeralOnly::new(StdRng::from_os_rng()),
+            &[],
+            Cursor::new(wire),
+        )
+        .set_s(recipient_static)
+        .unwrap();
+        let (_e, recv) = opener.recv().e().await.unwrap();
+        let mut recv_transport = recv.es().await.unwrap();
 
         let mut opened = [0u8; 32];
         let opened_len = recv_transport

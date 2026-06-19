@@ -8,15 +8,18 @@
 //!
 //! ```ignore
 //! use hiss::noise::*;
-//! type Seal = Noise<N, P256, ChaChaPoly, Blake2b>;
+//!
+//! // `N` is the default-suite alias; the
+//! // `sync_initiator`/`sync_responder` constructors fix the role, so
+//! // there is no `SyncHandshake::<…, …, _, _, _, _>` turbofish.
 //!
 //! // initiator — `stream: impl std::io::Write`
-//! let i = SyncHandshake::<Seal, Initiator, _, _, _, _>::initiate(provider, &[], stream)
+//! let i = N::sync_initiator(provider, &[], stream)
 //!     .set_rs(recipient_pub);
 //! let mut sealed = i.e()?.es()?;          // msg1 streamed to the wire; `sealed` owns the stream
 //!
 //! // responder — `stream: impl std::io::Read`
-//! let r = SyncHandshake::<Seal, Responder, _, _, _, _>::respond(provider, &[], stream)
+//! let r = N::sync_responder(provider, &[], stream)
 //!     .set_s(recipient_static)?;
 //! let (their_e, recv) = r.recv().e()?;    // each token reads exactly its bytes off the wire
 //! let mut opened = recv.es()?;
@@ -65,7 +68,7 @@
 use std::io::{Read, Write};
 use std::marker::PhantomData;
 
-use super::Protocol;
+use super::{Noise, Protocol};
 use super::buffers::{RecvBuffer, SendBuffer};
 use super::cipher::Cipher;
 use super::error::HandshakeError;
@@ -537,6 +540,46 @@ where
             stream,
             _marker: PhantomData,
         }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  Ergonomic protocol-level constructors (no turbofish)
+// ═══════════════════════════════════════════════════════════════
+
+impl<P: Pattern, Cu: Curve, Ci: Cipher, H: Hash> Noise<P, Cu, Ci, H> {
+    /// Begin a blocking handshake as the **initiator** over `stream`,
+    /// without naming the six [`SyncHandshake`] type parameters.
+    ///
+    /// Paired with a protocol alias (e.g.
+    /// [`IKpsk1`](crate::noise::IKpsk1)) this removes the
+    /// turbofish entirely:
+    ///
+    /// ```ignore
+    /// let hs = IKpsk1::sync_initiator(provider, &[], stream).set_rs(peer);
+    /// ```
+    pub fn sync_initiator<CP, Io>(
+        provider: CP,
+        prologue: &[u8],
+        stream: Io,
+    ) -> SyncHandshake<Self, Initiator, P::PreMessages, P::Messages, CP, Io>
+    where
+        CP: CryptoProvider<Cu>,
+    {
+        SyncHandshake::initiate(provider, prologue, stream)
+    }
+
+    /// Begin a blocking handshake as the **responder** over `stream`,
+    /// without naming the six [`SyncHandshake`] type parameters.
+    pub fn sync_responder<CP, Io>(
+        provider: CP,
+        prologue: &[u8],
+        stream: Io,
+    ) -> SyncHandshake<Self, Responder, P::PreMessages, P::Messages, CP, Io>
+    where
+        CP: CryptoProvider<Cu>,
+    {
+        SyncHandshake::respond(provider, prologue, stream)
     }
 }
 
@@ -1148,7 +1191,7 @@ mod tests {
     use crate::provider::EphemeralOnly;
     use rand::{SeedableRng, rngs::StdRng};
     use crate::provider::ProviderExt;
-    use crate::noise::{Blake2b, ChaChaPoly, IKpsk1, Initiator, K, N, Noise, P256, Responder};
+    use crate::noise::{ChaChaPoly, IKpsk1, Initiator, K, N, P256, Responder};
     use crate::noise_message_size;
     use crate::psk::Psk;
     use std::cell::RefCell;
@@ -1156,9 +1199,9 @@ mod tests {
     use std::io::Cursor;
     use std::rc::Rc;
 
-    type Seal = Noise<N, P256, ChaChaPoly, Blake2b>;
-    type Channel = Noise<IKpsk1, P256, ChaChaPoly, Blake2b>;
-    type NoiseK = Noise<K, P256, ChaChaPoly, Blake2b>;
+    type Seal = N;
+    type Channel = IKpsk1;
+    type NoiseK = K;
 
     /// A single-threaded in-memory bidirectional byte pipe. Reads pull
     /// from one shared queue, writes push to the other; the peer endpoint
@@ -1232,6 +1275,50 @@ mod tests {
             send_transport.session_id(),
             recv_transport.transport().session_id()
         );
+
+        let mut opened = [0u8; 32];
+        let opened_len = recv_transport
+            .transport()
+            .receive(&sealed[..sealed_len], &mut opened)
+            .unwrap();
+        assert_eq!(opened_len, 32);
+        assert_eq!(opened, payload);
+    }
+
+    /// The same N seal/open round-trip as `n_sync_seal_open_roundtrip`,
+    /// but built through the ergonomic alias + role-fixing constructors
+    /// (`N::sync_initiator` / `sync_responder`) — no turbofish, no
+    /// `SyncHandshake::<…, …, _, _, _, _>` spelling.
+    #[test]
+    fn n_sync_constructors_roundtrip() {
+        use crate::noise::N;
+
+        let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
+        let recipient_static = provider.generate::<P256>().unwrap();
+        let recipient_pub = provider.public(&recipient_static).unwrap();
+
+        let sealer = N::sync_initiator(
+            EphemeralOnly::new(StdRng::from_os_rng()),
+            &[],
+            Vec::<u8>::new(),
+        )
+        .set_rs(recipient_pub);
+        let (mut send_transport, wire) = sealer.e().unwrap().es().unwrap().into_parts();
+        assert_eq!(wire.len(), 81);
+
+        let payload = [0x42u8; 32];
+        let mut sealed = [0u8; 48];
+        let sealed_len = send_transport.send(&payload, &mut sealed).unwrap();
+
+        let opener = N::sync_responder(
+            EphemeralOnly::new(StdRng::from_os_rng()),
+            &[],
+            Cursor::new(wire),
+        )
+        .set_s(recipient_static)
+        .unwrap();
+        let (_e, recv) = opener.recv().e().unwrap();
+        let mut recv_transport = recv.es().unwrap();
 
         let mut opened = [0u8; 32];
         let opened_len = recv_transport

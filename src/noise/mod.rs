@@ -30,7 +30,7 @@
 //! ```
 //! use hiss::noise::*;
 //!
-//! type Channel = Noise<IKpsk1, P256, ChaChaPoly, Blake2b>;
+//! type Channel = IKpsk1;
 //!
 //! let proto = Channel::new();
 //! assert_eq!(proto.to_string(), "Noise_IKpsk1_P256_ChaChaPoly_BLAKE2b");
@@ -41,7 +41,7 @@
 //!
 //! ```
 //! # use hiss::noise::*;
-//! # type Channel = Noise<IKpsk1, P256, ChaChaPoly, Blake2b>;
+//! # type Channel = IKpsk1;
 //! assert_eq!(Channel::PUBLIC_KEY_SIZE, 65);   // P-256 SEC1 uncompressed
 //! assert_eq!(Channel::TAG_SIZE, 16);           // Poly1305
 //! assert_eq!(Channel::HASH_LEN, 64);           // BLAKE2b
@@ -166,7 +166,7 @@
 //! ```ignore
 //! use hiss::noise::*;
 //!
-//! type Channel = Noise<IKpsk1, P256, ChaChaPoly, Blake2b>;
+//! type Channel = IKpsk1;
 //!
 //! // ── Initiator ───────────────────────────────────────────
 //! let hs = Channel::initiate(provider, &[])
@@ -211,6 +211,7 @@
 //! [`CryptoProviderAsync`]: crate::provider::CryptoProviderAsync
 
 pub(crate) mod buffers;
+pub mod alias;
 pub mod cipher;
 pub mod cipher_state;
 pub mod curve;
@@ -233,6 +234,7 @@ pub mod symmetric_state;
 pub mod tokens;
 pub mod transport;
 
+pub use self::alias::{IKpsk1, K, Kpsk0, N};
 pub use self::cipher::{ChaChaPoly, Cipher};
 pub use self::cipher_state::CipherState;
 pub use self::curve::{Curve, P256};
@@ -243,7 +245,10 @@ pub use self::io_async::{AsyncHandshake, AsyncReceiving, AsyncSending, AsyncTran
 pub use self::io_sync::{SyncHandshake, SyncReceiving, SyncSending, SyncTransport};
 // Protocol re-exported from this module (defined below on Noise).
 pub use self::hash::{Blake2b, Hash};
-pub use self::pattern::{IKpsk1, K, Kpsk0, N, Pattern};
+// Pattern markers stay namespaced under `noise::pattern::{N, K, Kpsk0, IKpsk1}`;
+// the bare `noise::{N, K, …}` names above are the ready-made default-suite
+// protocol aliases. Only the `Pattern` trait is re-exported at the root.
+pub use self::pattern::Pattern;
 pub use self::role::{Initiator, Responder, Role};
 pub use self::session_id::SessionId;
 pub use self::symmetric_state::SymmetricState;
@@ -337,7 +342,7 @@ impl<P: Pattern, Cu: Curve, Ci: Cipher, H: Hash> Noise<P, Cu, Ci, H> {
     /// # Example
     ///
     /// ```ignore
-    /// type Channel = Noise<IKpsk1, P256, ChaChaPoly, Blake2b>;
+    /// type Channel = IKpsk1;
     ///
     /// let hs = Channel::initiate(provider, &[])
     ///     .set_rs(responder_pub);
@@ -357,7 +362,7 @@ impl<P: Pattern, Cu: Curve, Ci: Cipher, H: Hash> Noise<P, Cu, Ci, H> {
     /// # Example
     ///
     /// ```ignore
-    /// type Channel = Noise<IKpsk1, P256, ChaChaPoly, Blake2b>;
+    /// type Channel = IKpsk1;
     ///
     /// let hs = Channel::respond(provider, &[])
     ///     .set_s(our_static)?;
@@ -379,10 +384,10 @@ mod tests {
     use rand::{SeedableRng, rngs::StdRng};
     use crate::noise_message_size;
     use crate::psk::Psk;
-    type Channel = Noise<IKpsk1, P256, ChaChaPoly, Blake2b>;
-    type NoiseSeal = Noise<N, P256, ChaChaPoly, Blake2b>;
-    type NoiseK = Noise<K, P256, ChaChaPoly, Blake2b>;
-    type NoiseKpsk0 = Noise<Kpsk0, P256, ChaChaPoly, Blake2b>;
+    type Channel = IKpsk1;
+    type NoiseSeal = N;
+    type NoiseK = K;
+    type NoiseKpsk0 = Kpsk0;
 
     #[test]
     fn descriptor_string() {
@@ -2067,7 +2072,7 @@ mod tests {
 
         let prologue = b"hiss/v1";
 
-        type NoiseSeal = Noise<N, P256, ChaChaPoly, Blake2b>;
+        type NoiseSeal = N;
 
         let sealer = NoiseSeal::initiate(EphemeralOnly::new(StdRng::from_os_rng()), prologue).set_rs(responder_pub);
         let mut msg_buf = [0u8;
@@ -2096,7 +2101,7 @@ mod tests {
         let responder_static = provider.generate::<P256>().unwrap();
         let responder_pub = provider.public(&responder_static).unwrap();
 
-        type NoiseSeal = Noise<N, P256, ChaChaPoly, Blake2b>;
+        type NoiseSeal = N;
 
         // Initiator uses prologue "v1", responder uses "v2".
         let sealer = NoiseSeal::initiate(EphemeralOnly::new(StdRng::from_os_rng()), b"v1").set_rs(responder_pub);

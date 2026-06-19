@@ -1,0 +1,39 @@
+//! Ready-made protocol aliases for the default suite.
+//!
+//! Each alias fixes the curve, cipher, and hash to the crate's default
+//! suite — **P-256 / ChaCha20-Poly1305 / BLAKE2b** — and is named after
+//! its handshake pattern. Reached through the [`noise`](crate::noise)
+//! namespace they read cleanly, with no `Noise` stutter:
+//! `noise::IKpsk1::sync_initiator(…)`.
+//!
+//! The building-block **pattern markers** live one level down, in
+//! [`noise::pattern`](super::pattern) — so `noise::IKpsk1` is the
+//! ready-to-use protocol and `noise::pattern::IKpsk1` is the marker.
+//! A non-default suite names the full [`Noise<P, Cu, Ci, H>`](super::Noise)
+//! with a `pattern::` marker.
+//!
+//! ```
+//! use hiss::noise;
+//!
+//! type _Channel = noise::IKpsk1;          // ready-made default-suite protocol
+//! type _Marker = noise::pattern::IKpsk1;  // the building-block pattern marker
+//! ```
+//!
+//! [`Noise::sync_initiator`]: super::Noise::sync_initiator
+//! [`Noise::sync_responder`]: super::Noise::sync_responder
+
+use super::pattern;
+use super::{Blake2b, ChaChaPoly, Noise, P256};
+
+/// `Noise_N_P256_ChaChaPoly_BLAKE2b` — one-way seal to a known recipient.
+pub type N = Noise<pattern::N, P256, ChaChaPoly, Blake2b>;
+
+/// `Noise_K_P256_ChaChaPoly_BLAKE2b` — one-way, sender-authenticated.
+pub type K = Noise<pattern::K, P256, ChaChaPoly, Blake2b>;
+
+/// `Noise_Kpsk0_P256_ChaChaPoly_BLAKE2b` — `K` with a pre-shared key.
+pub type Kpsk0 = Noise<pattern::Kpsk0, P256, ChaChaPoly, Blake2b>;
+
+/// `Noise_IKpsk1_P256_ChaChaPoly_BLAKE2b` — interactive mutual
+/// authentication with a pre-shared key.
+pub type IKpsk1 = Noise<pattern::IKpsk1, P256, ChaChaPoly, Blake2b>;
