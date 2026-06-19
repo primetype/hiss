@@ -4,10 +4,14 @@ use super::cipher_state::MAX_MESSAGE_LEN;
 
 /// Errors that can occur during a Noise handshake.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum HandshakeError {
     /// A cryptographic operation failed (e.g. DH, key generation).
+    ///
+    /// The underlying curve/provider error is preserved as the
+    /// [`source`](std::error::Error::source).
     #[error("crypto operation failed: {0}")]
-    Crypto(String),
+    Crypto(#[source] Box<dyn std::error::Error + Send + Sync>),
 
     /// The incoming message is shorter than expected.
     #[error("incoming message too short — expected more data")]
@@ -43,7 +47,7 @@ pub enum HandshakeError {
 
     /// A public key could not be deserialised from the wire.
     #[error("invalid public key: {0}")]
-    InvalidPublicKey(String),
+    InvalidPublicKey(#[source] Box<dyn std::error::Error + Send + Sync>),
 
     /// The incoming message has the wrong length.
     #[error("unexpected message length: expected {expected} bytes, got {actual}")]

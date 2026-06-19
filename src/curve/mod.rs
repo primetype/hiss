@@ -62,7 +62,10 @@ pub trait Curve {
     const PRIVATE_KEY_SIZE: usize;
 
     /// Error type for curve operations (e.g. invalid key encoding).
-    type Error: std::error::Error + Send + Sync;
+    ///
+    /// `'static` so it can be preserved as a boxed `dyn Error` source
+    /// (e.g. [`HandshakeError::Crypto`](crate::noise::HandshakeError::Crypto)).
+    type Error: std::error::Error + Send + Sync + 'static;
 
     /// The public key type for this curve.
     type PublicKey: Clone;

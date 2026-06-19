@@ -15,6 +15,7 @@
 //! `ASN1Writer` (test-only) builds a DER blob from scratch.
 
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum Asn1Error {
     #[error("unexpected end of data")]
     UnexpectedEnd,

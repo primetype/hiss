@@ -341,6 +341,7 @@ pub struct AppleSecureEnclave {
 /// ([`store_seed`](AppleSecureEnclave::store_seed) /
 /// [`load_seed`](AppleSecureEnclave::load_seed)).
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum SeedError {
     /// The Secure Enclave P-256 identity key (the seal recipient) is
     /// absent. Establish it first via

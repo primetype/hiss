@@ -105,11 +105,11 @@ where
     let e = inner
         .provider
         .generate_ephemeral_key()
-        .map_err(|e| HandshakeError::Crypto(e.to_string()))?;
+        .map_err(|e| HandshakeError::Crypto(Box::new(e)))?;
     let e_pub = inner
         .provider
         .public_key(&e)
-        .map_err(|e| HandshakeError::Crypto(e.to_string()))?;
+        .map_err(|e| HandshakeError::Crypto(Box::new(e)))?;
     buffer.write(e_pub.as_ref());
     inner.symmetric.mix_hash(e_pub.as_ref());
     if inner.has_psk {
@@ -142,7 +142,7 @@ where
     let ss = inner
         .provider
         .dh(e, rs)
-        .map_err(|e| HandshakeError::Crypto(e.to_string()))?;
+        .map_err(|e| HandshakeError::Crypto(Box::new(e)))?;
     inner.symmetric.mix_key(ss.as_ref());
     Ok(())
 }
@@ -166,7 +166,7 @@ where
     let ss = inner
         .provider
         .dh(s, re)
-        .map_err(|e| HandshakeError::Crypto(e.to_string()))?;
+        .map_err(|e| HandshakeError::Crypto(Box::new(e)))?;
     inner.symmetric.mix_key(ss.as_ref());
     Ok(())
 }
@@ -193,7 +193,7 @@ where
     let ss = inner
         .provider
         .dh(e, re)
-        .map_err(|e| HandshakeError::Crypto(e.to_string()))?;
+        .map_err(|e| HandshakeError::Crypto(Box::new(e)))?;
     inner.symmetric.mix_key(ss.as_ref());
     Ok(())
 }
@@ -217,7 +217,7 @@ where
     let ss = inner
         .provider
         .dh(s, re)
-        .map_err(|e| HandshakeError::Crypto(e.to_string()))?;
+        .map_err(|e| HandshakeError::Crypto(Box::new(e)))?;
     inner.symmetric.mix_key(ss.as_ref());
     Ok(())
 }
@@ -244,7 +244,7 @@ where
     let ss = inner
         .provider
         .dh(e, rs)
-        .map_err(|e| HandshakeError::Crypto(e.to_string()))?;
+        .map_err(|e| HandshakeError::Crypto(Box::new(e)))?;
     inner.symmetric.mix_key(ss.as_ref());
     Ok(())
 }
@@ -268,7 +268,7 @@ where
     let ss = inner
         .provider
         .dh(s, rs)
-        .map_err(|e| HandshakeError::Crypto(e.to_string()))?;
+        .map_err(|e| HandshakeError::Crypto(Box::new(e)))?;
     inner.symmetric.mix_key(ss.as_ref());
     Ok(())
 }
@@ -584,7 +584,7 @@ where
             .inner
             .provider
             .public_key(&static_key)
-            .map_err(|e| HandshakeError::Crypto(e.to_string()))?;
+            .map_err(|e| HandshakeError::Crypto(Box::new(e)))?;
         self.inner.symmetric.mix_hash(s_pub.as_ref());
         self.inner.s_pub = Some(s_pub);
         self.inner.s = Some(static_key);
@@ -613,7 +613,7 @@ where
             .inner
             .provider
             .public_key(&static_key)
-            .map_err(|e| HandshakeError::Crypto(e.to_string()))?;
+            .map_err(|e| HandshakeError::Crypto(Box::new(e)))?;
         self.inner.symmetric.mix_hash(s_pub.as_ref());
         self.inner.s_pub = Some(s_pub);
         self.inner.s = Some(static_key);

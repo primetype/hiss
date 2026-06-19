@@ -47,7 +47,10 @@ pub use apple::{AppleSecureEnclave, SeedError};
 /// holder) is bounded on this base trait alone.
 pub trait CryptoKeys<C: Curve> {
     /// Error type for this backend's operations.
-    type Error: std::error::Error + Send + Sync;
+    ///
+    /// `'static` so it can be preserved as a boxed `dyn Error` source
+    /// (e.g. [`HandshakeError::Crypto`](crate::noise::HandshakeError::Crypto)).
+    type Error: std::error::Error + Send + Sync + 'static;
 
     /// Opaque private key handle.
     ///

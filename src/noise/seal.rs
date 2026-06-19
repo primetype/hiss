@@ -31,7 +31,7 @@
 
 use crate::provider::CryptoProviderAsync;
 use crate::curve::p256::{P256, P256r1PublicKey};
-use crate::noise::{Blake2b, ChaChaPoly, N, Noise, Transport};
+use crate::noise::{Blake2b, ChaChaPoly, HandshakeError, N, Noise, Transport};
 
 /// Size of the cleartext payload sealed by [`seal_32`] / [`open_32`].
 pub const SEAL_PAYLOAD_SIZE: usize = 32;
@@ -54,13 +54,14 @@ pub const SEALED_SIZE: usize = NOISE_N_MSG1_SIZE + SEALED_TRANSPORT_SIZE;
 
 /// Errors that can occur while sealing or opening a 32-byte payload.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum SealError {
     /// The Noise N seal sequence failed.
     #[error("Noise N seal failed: {0}")]
-    Seal(String),
+    Seal(#[source] Box<HandshakeError>),
     /// The Noise N open sequence failed.
     #[error("Noise N open failed: {0}")]
-    Open(String),
+    Open(#[source] Box<HandshakeError>),
 }
 
 /// Seal a 32-byte payload to `recipient_pub` using
@@ -76,7 +77,6 @@ pub async fn seal_32<P>(
 ) -> Result<[u8; SEALED_SIZE], SealError>
 where
     P: CryptoProviderAsync<P256>,
-    P::Error: std::fmt::Display,
 {
     let sealer = NoiseSeal::initiate(provider, &[]).set_rs(*recipient_pub);
 
@@ -84,15 +84,15 @@ where
     let (msg, mut transport) = sealer
         .e(&mut msg_buf)
         .await
-        .map_err(|e| SealError::Seal(e.to_string()))?
+        .map_err(|e| SealError::Seal(Box::new(e)))?
         .es()
         .await
-        .map_err(|e| SealError::Seal(e.to_string()))?;
+        .map_err(|e| SealError::Seal(Box::new(e)))?;
 
     let mut sealed_transport = [0u8; SEALED_TRANSPORT_SIZE];
     let sealed_len = transport
         .send(payload, &mut sealed_transport)
-        .map_err(|e| SealError::Seal(e.to_string()))?;
+        .map_err(|e| SealError::Seal(Box::new(e)))?;
 
     let mut blob = [0u8; SEALED_SIZE];
     blob[..NOISE_N_MSG1_SIZE].copy_from_slice(msg);
@@ -115,31 +115,30 @@ pub async fn open_32<P>(
 ) -> Result<[u8; SEAL_PAYLOAD_SIZE], SealError>
 where
     P: CryptoProviderAsync<P256>,
-    P::Error: std::fmt::Display,
 {
     let msg1 = &sealed[..NOISE_N_MSG1_SIZE];
     let ciphertext = &sealed[NOISE_N_MSG1_SIZE..];
 
     let opener = NoiseSeal::respond(provider, &[])
         .set_s(recipient_key)
-        .map_err(|e| SealError::Open(e.to_string()))?;
+        .map_err(|e| SealError::Open(Box::new(e)))?;
 
     let (_, recv) = opener
         .read(msg1)
-        .map_err(|e| SealError::Open(e.to_string()))?
+        .map_err(|e| SealError::Open(Box::new(e)))?
         .e()
         .await
-        .map_err(|e| SealError::Open(e.to_string()))?;
+        .map_err(|e| SealError::Open(Box::new(e)))?;
 
     let mut transport = recv
         .es()
         .await
-        .map_err(|e| SealError::Open(e.to_string()))?;
+        .map_err(|e| SealError::Open(Box::new(e)))?;
 
     let mut payload = [0u8; SEAL_PAYLOAD_SIZE];
     transport
         .receive(ciphertext, &mut payload)
-        .map_err(|e| SealError::Open(e.to_string()))?;
+        .map_err(|e| SealError::Open(Box::new(e)))?;
 
     Ok(payload)
 }

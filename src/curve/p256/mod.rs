@@ -40,6 +40,10 @@ use std::fmt;
 
 pub use self::software::P256r1PrivateKey;
 
+/// Re-exported so it can surface as the [`source`](std::error::Error::source)
+/// of [`Error::InvalidSignatureEncoding`] (strict-DER signature decoding).
+pub use crate::asn1::Asn1Error;
+
 // ── Curve marker ────────────────────────────────────────────────
 
 /// NIST P-256 (secp256r1) curve marker.
@@ -70,6 +74,7 @@ impl Curve for P256 {
 // ── Errors ──────────────────────────────────────────────────────
 
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum Error {
     #[error("invalid field element")]
     InvalidFieldElement,
@@ -85,8 +90,16 @@ pub enum Error {
     InvalidPublicKeyLength,
     #[error("invalid signature length")]
     InvalidSignatureLength,
-    #[error("invalid ASN.1 encoded signature: {0}")]
-    InvalidSignatureAsn1(String),
+    /// The signature's ASN.1/DER structure is invalid (strict DER).
+    #[error(transparent)]
+    InvalidSignatureEncoding(#[from] crate::asn1::Asn1Error),
+    /// A signature component (`r` or `s`) is not a canonical 32-byte
+    /// P-256 scalar (too long, or 33 bytes without a leading `0x00`).
+    #[error("ECDSA signature component is not a canonical 32-byte P-256 scalar")]
+    SignatureComponentTooLarge,
+    /// A signature component (`r` or `s`) encodes a negative integer.
+    #[error("ECDSA signature component is a negative integer")]
+    SignatureComponentNegative,
     #[error("the RNG repeatedly failed to produce a valid P-256 scalar")]
     ScalarSamplingFailed,
     #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -295,40 +308,25 @@ impl P256Signature {
     #[cfg(any(target_os = "macos", target_os = "ios", test))]
     pub(crate) fn try_from_asn1(bytes: impl AsRef<[u8]>) -> Result<Self, Error> {
         let reader = ASN1Reader::new(bytes.as_ref());
-        let reader = reader.sequence().map_err(asn1_err)?;
-        let (reader, r) = reader.integer().map_err(asn1_err)?;
-        let (reader, s) = reader.integer().map_err(asn1_err)?;
+        let reader = reader.sequence()?;
+        let (reader, r) = reader.integer()?;
+        let (reader, s) = reader.integer()?;
 
         if !(r.len() <= 32 || (r.len() == 33 && r[0] == 0)) {
-            return Err(Error::InvalidSignatureAsn1(format!(
-                "r: expected length of 32 or 33 (got {}), first byte 0x{:02x}",
-                r.len(),
-                r[0]
-            )));
+            return Err(Error::SignatureComponentTooLarge);
         }
         if !(s.len() <= 32 || (s.len() == 33 && s[0] == 0)) {
-            return Err(Error::InvalidSignatureAsn1(format!(
-                "s: expected length of 32 or 33 (got {}), first byte 0x{:02x}",
-                s.len(),
-                s[0]
-            )));
+            return Err(Error::SignatureComponentTooLarge);
         }
         // ECDSA `r`/`s` are positive. Minimal DER (enforced by the reader)
         // encodes a positive value whose top bit is set with a leading
         // 0x00 sign byte, so any content whose first byte has the high bit
         // set is a negative integer and must be rejected.
-        if r[0] & 0x80 != 0 {
-            return Err(Error::InvalidSignatureAsn1(
-                "r: negative integer".to_string(),
-            ));
-        }
-        if s[0] & 0x80 != 0 {
-            return Err(Error::InvalidSignatureAsn1(
-                "s: negative integer".to_string(),
-            ));
+        if r[0] & 0x80 != 0 || s[0] & 0x80 != 0 {
+            return Err(Error::SignatureComponentNegative);
         }
         if !reader.is_empty() {
-            return Err(Error::InvalidSignatureAsn1("trailing data".to_string()));
+            return Err(Asn1Error::TrailingData.into());
         }
 
         let r = if r.len() == 33 { &r[1..] } else { r };
@@ -515,11 +513,6 @@ pub(crate) fn ecdsa_sign_rfc6979_inner(
 /// Deterministic ECDSA signature (RFC 6979 nonce, low-S normalized).
 pub(crate) fn ecdsa_sign_rfc6979(d_bytes: &[u8; 32], message: &[u8]) -> P256Signature {
     P256Signature(ecdsa_sign_rfc6979_inner(d_bytes, message, true))
-}
-
-#[cfg(any(target_os = "macos", target_os = "ios", test))]
-fn asn1_err(e: crate::asn1::Asn1Error) -> Error {
-    Error::InvalidSignatureAsn1(e.to_string())
 }
 
 // ── Tests ───────────────────────────────────────────────────────

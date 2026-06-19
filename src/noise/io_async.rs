@@ -402,7 +402,7 @@ where
             .inner
             .provider
             .public_key(&static_key)
-            .map_err(|e| HandshakeError::Crypto(e.to_string()))?;
+            .map_err(|e| HandshakeError::Crypto(Box::new(e)))?;
         self.inner.symmetric.mix_hash(s_pub.as_ref());
         self.inner.s_pub = Some(s_pub);
         self.inner.s = Some(static_key);
@@ -431,7 +431,7 @@ where
             .inner
             .provider
             .public_key(&static_key)
-            .map_err(|e| HandshakeError::Crypto(e.to_string()))?;
+            .map_err(|e| HandshakeError::Crypto(Box::new(e)))?;
         self.inner.symmetric.mix_hash(s_pub.as_ref());
         self.inner.s_pub = Some(s_pub);
         self.inner.s = Some(static_key);

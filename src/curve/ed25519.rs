@@ -48,6 +48,7 @@ use super::{Curve, SharedSecret};
 // ── Errors ─────────────────────────────────────────────────────
 
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum Error {
     #[error("invalid public key length: expected 32 bytes, got {0}")]
     InvalidPublicKeyLength(usize),
