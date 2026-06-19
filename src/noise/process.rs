@@ -27,7 +27,7 @@ use super::hash::Hash;
 use super::role::{Initiator, Responder, Role};
 use super::tokens::*;
 use super::transport::Transport;
-use crate::curve::Curve;
+use crate::curve::{Curve, DhCurve};
 use crate::provider::{CryptoKeys, CryptoProviderAsync};
 use std::marker::PhantomData;
 
@@ -169,7 +169,7 @@ pub(crate) async fn send_e<Cu, Ci, H, CP>(
     buffer: &mut SendBuffer<'_>,
 ) -> Result<Cu::PublicKey, HandshakeError>
 where
-    Cu: Curve,
+    Cu: DhCurve,
     Cu::PublicKey: AsRef<[u8]>,
     Ci: Cipher,
     H: Hash,
@@ -276,7 +276,7 @@ pub(crate) async fn do_ee<Cu, Ci, H, CP>(
     inner: &mut HandshakeInner<Cu, Ci, H, CP>,
 ) -> Result<(), HandshakeError>
 where
-    Cu: Curve,
+    Cu: DhCurve,
     Cu::SharedSecret: AsRef<[u8]>,
     Ci: Cipher,
     H: Hash,
@@ -303,7 +303,7 @@ pub(crate) async fn do_es_initiator<Cu, Ci, H, CP>(
     inner: &mut HandshakeInner<Cu, Ci, H, CP>,
 ) -> Result<(), HandshakeError>
 where
-    Cu: Curve,
+    Cu: DhCurve,
     Cu::SharedSecret: AsRef<[u8]>,
     Ci: Cipher,
     H: Hash,
@@ -330,7 +330,7 @@ pub(crate) async fn do_es_responder<Cu, Ci, H, CP>(
     inner: &mut HandshakeInner<Cu, Ci, H, CP>,
 ) -> Result<(), HandshakeError>
 where
-    Cu: Curve,
+    Cu: DhCurve,
     Cu::SharedSecret: AsRef<[u8]>,
     Ci: Cipher,
     H: Hash,
@@ -354,7 +354,7 @@ pub(crate) async fn do_se_initiator<Cu, Ci, H, CP>(
     inner: &mut HandshakeInner<Cu, Ci, H, CP>,
 ) -> Result<(), HandshakeError>
 where
-    Cu: Curve,
+    Cu: DhCurve,
     Cu::SharedSecret: AsRef<[u8]>,
     Ci: Cipher,
     H: Hash,
@@ -378,7 +378,7 @@ pub(crate) async fn do_se_responder<Cu, Ci, H, CP>(
     inner: &mut HandshakeInner<Cu, Ci, H, CP>,
 ) -> Result<(), HandshakeError>
 where
-    Cu: Curve,
+    Cu: DhCurve,
     Cu::SharedSecret: AsRef<[u8]>,
     Ci: Cipher,
     H: Hash,
@@ -405,7 +405,7 @@ pub(crate) async fn do_ss<Cu, Ci, H, CP>(
     inner: &mut HandshakeInner<Cu, Ci, H, CP>,
 ) -> Result<(), HandshakeError>
 where
-    Cu: Curve,
+    Cu: DhCurve,
     Cu::SharedSecret: AsRef<[u8]>,
     Ci: Cipher,
     H: Hash,
@@ -717,19 +717,19 @@ recv_reveal_token! {
 // ═══════════════════════════════════════════════════════════════
 
 send_token! {
-    role: Initiator, token: Ee, method: ee(), bounds: [<N::Curve as Curve>::SharedSecret: AsRef<[u8]>,],
+    role: Initiator, token: Ee, method: ee(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
     body: |inner, _buf| { do_ee(inner).await?; }
 }
 send_token! {
-    role: Responder, token: Ee, method: ee(), bounds: [<N::Curve as Curve>::SharedSecret: AsRef<[u8]>,],
+    role: Responder, token: Ee, method: ee(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
     body: |inner, _buf| { do_ee(inner).await?; }
 }
 recv_token! {
-    role: Initiator, token: Ee, method: ee(), bounds: [<N::Curve as Curve>::SharedSecret: AsRef<[u8]>,],
+    role: Initiator, token: Ee, method: ee(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
     body: |inner, _buf| { do_ee(inner).await?; }
 }
 recv_token! {
-    role: Responder, token: Ee, method: ee(), bounds: [<N::Curve as Curve>::SharedSecret: AsRef<[u8]>,],
+    role: Responder, token: Ee, method: ee(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
     body: |inner, _buf| { do_ee(inner).await?; }
 }
 
@@ -739,21 +739,21 @@ recv_token! {
 
 // Initiator Es: DH(e, rs). Remote static key read from state (set via set_rs pre-message).
 send_token! {
-    role: Initiator, token: Es, method: es(), bounds: [<N::Curve as Curve>::SharedSecret: AsRef<[u8]>,],
+    role: Initiator, token: Es, method: es(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
     body: |inner, _buf| { do_es_initiator(inner).await?; }
 }
 recv_token! {
-    role: Initiator, token: Es, method: es(), bounds: [<N::Curve as Curve>::SharedSecret: AsRef<[u8]>,],
+    role: Initiator, token: Es, method: es(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
     body: |inner, _buf| { do_es_initiator(inner).await?; }
 }
 
 // Responder Es: DH(s, re). Keys already in state.
 send_token! {
-    role: Responder, token: Es, method: es(), bounds: [<N::Curve as Curve>::SharedSecret: AsRef<[u8]>,],
+    role: Responder, token: Es, method: es(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
     body: |inner, _buf| { do_es_responder(inner).await?; }
 }
 recv_token! {
-    role: Responder, token: Es, method: es(), bounds: [<N::Curve as Curve>::SharedSecret: AsRef<[u8]>,],
+    role: Responder, token: Es, method: es(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
     body: |inner, _buf| { do_es_responder(inner).await?; }
 }
 
@@ -763,21 +763,21 @@ recv_token! {
 
 // Initiator Se: DH(s, re). Keys already in state.
 send_token! {
-    role: Initiator, token: Se, method: se(), bounds: [<N::Curve as Curve>::SharedSecret: AsRef<[u8]>,],
+    role: Initiator, token: Se, method: se(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
     body: |inner, _buf| { do_se_initiator(inner).await?; }
 }
 recv_token! {
-    role: Initiator, token: Se, method: se(), bounds: [<N::Curve as Curve>::SharedSecret: AsRef<[u8]>,],
+    role: Initiator, token: Se, method: se(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
     body: |inner, _buf| { do_se_initiator(inner).await?; }
 }
 
 // Responder Se: DH(e, rs). Keys already in state.
 send_token! {
-    role: Responder, token: Se, method: se(), bounds: [<N::Curve as Curve>::SharedSecret: AsRef<[u8]>,],
+    role: Responder, token: Se, method: se(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
     body: |inner, _buf| { do_se_responder(inner).await?; }
 }
 recv_token! {
-    role: Responder, token: Se, method: se(), bounds: [<N::Curve as Curve>::SharedSecret: AsRef<[u8]>,],
+    role: Responder, token: Se, method: se(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
     body: |inner, _buf| { do_se_responder(inner).await?; }
 }
 
@@ -786,19 +786,19 @@ recv_token! {
 // ═══════════════════════════════════════════════════════════════
 
 send_token! {
-    role: Initiator, token: Ss, method: ss(), bounds: [<N::Curve as Curve>::SharedSecret: AsRef<[u8]>,],
+    role: Initiator, token: Ss, method: ss(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
     body: |inner, _buf| { do_ss(inner).await?; }
 }
 send_token! {
-    role: Responder, token: Ss, method: ss(), bounds: [<N::Curve as Curve>::SharedSecret: AsRef<[u8]>,],
+    role: Responder, token: Ss, method: ss(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
     body: |inner, _buf| { do_ss(inner).await?; }
 }
 recv_token! {
-    role: Initiator, token: Ss, method: ss(), bounds: [<N::Curve as Curve>::SharedSecret: AsRef<[u8]>,],
+    role: Initiator, token: Ss, method: ss(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
     body: |inner, _buf| { do_ss(inner).await?; }
 }
 recv_token! {
-    role: Responder, token: Ss, method: ss(), bounds: [<N::Curve as Curve>::SharedSecret: AsRef<[u8]>,],
+    role: Responder, token: Ss, method: ss(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
     body: |inner, _buf| { do_ss(inner).await?; }
 }
 

@@ -82,7 +82,7 @@ use super::process::{
 use super::role::{Initiator, Responder, Role};
 use super::tokens::*;
 use super::transport::Transport;
-use crate::curve::Curve;
+use crate::curve::{Curve, DhCurve};
 use crate::provider::{CryptoKeys, CryptoProviderAsync};
 
 /// Largest single contiguous write/read a token produces: an encrypted
@@ -102,7 +102,7 @@ async fn async_stream_e<Cu, Ci, H, CP, Io>(
     stream: &mut Io,
 ) -> Result<(), HandshakeError>
 where
-    Cu: Curve,
+    Cu: DhCurve,
     Cu::PublicKey: AsRef<[u8]>,
     Ci: Cipher,
     H: Hash,
@@ -365,7 +365,7 @@ where
 //  Ergonomic protocol-level constructors (no turbofish)
 // ═══════════════════════════════════════════════════════════════
 
-impl<P: Pattern, Cu: Curve, Ci: Cipher, H: Hash> Noise<P, Cu, Ci, H> {
+impl<P: Pattern, Cu: DhCurve, Ci: Cipher, H: Hash> Noise<P, Cu, Ci, H> {
     /// Begin an async handshake as the **initiator** over `stream`,
     /// without naming the six [`AsyncHandshake`] type parameters.
     ///
@@ -901,19 +901,19 @@ async_recv_reveal_token! {
 // ═══════════════════════════════════════════════════════════════
 
 async_send_token! {
-    role: Initiator, token: Ee, method: ee(), bounds: [<N::Curve as Curve>::SharedSecret: AsRef<[u8]>,],
+    role: Initiator, token: Ee, method: ee(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
     body: |inner, _stream| { do_ee(inner).await?; }
 }
 async_send_token! {
-    role: Responder, token: Ee, method: ee(), bounds: [<N::Curve as Curve>::SharedSecret: AsRef<[u8]>,],
+    role: Responder, token: Ee, method: ee(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
     body: |inner, _stream| { do_ee(inner).await?; }
 }
 async_recv_token! {
-    role: Initiator, token: Ee, method: ee(), bounds: [<N::Curve as Curve>::SharedSecret: AsRef<[u8]>,],
+    role: Initiator, token: Ee, method: ee(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
     body: |inner, _stream| { do_ee(inner).await?; }
 }
 async_recv_token! {
-    role: Responder, token: Ee, method: ee(), bounds: [<N::Curve as Curve>::SharedSecret: AsRef<[u8]>,],
+    role: Responder, token: Ee, method: ee(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
     body: |inner, _stream| { do_ee(inner).await?; }
 }
 
@@ -922,19 +922,19 @@ async_recv_token! {
 // ═══════════════════════════════════════════════════════════════
 
 async_send_token! {
-    role: Initiator, token: Es, method: es(), bounds: [<N::Curve as Curve>::SharedSecret: AsRef<[u8]>,],
+    role: Initiator, token: Es, method: es(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
     body: |inner, _stream| { do_es_initiator(inner).await?; }
 }
 async_recv_token! {
-    role: Initiator, token: Es, method: es(), bounds: [<N::Curve as Curve>::SharedSecret: AsRef<[u8]>,],
+    role: Initiator, token: Es, method: es(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
     body: |inner, _stream| { do_es_initiator(inner).await?; }
 }
 async_send_token! {
-    role: Responder, token: Es, method: es(), bounds: [<N::Curve as Curve>::SharedSecret: AsRef<[u8]>,],
+    role: Responder, token: Es, method: es(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
     body: |inner, _stream| { do_es_responder(inner).await?; }
 }
 async_recv_token! {
-    role: Responder, token: Es, method: es(), bounds: [<N::Curve as Curve>::SharedSecret: AsRef<[u8]>,],
+    role: Responder, token: Es, method: es(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
     body: |inner, _stream| { do_es_responder(inner).await?; }
 }
 
@@ -943,19 +943,19 @@ async_recv_token! {
 // ═══════════════════════════════════════════════════════════════
 
 async_send_token! {
-    role: Initiator, token: Se, method: se(), bounds: [<N::Curve as Curve>::SharedSecret: AsRef<[u8]>,],
+    role: Initiator, token: Se, method: se(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
     body: |inner, _stream| { do_se_initiator(inner).await?; }
 }
 async_recv_token! {
-    role: Initiator, token: Se, method: se(), bounds: [<N::Curve as Curve>::SharedSecret: AsRef<[u8]>,],
+    role: Initiator, token: Se, method: se(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
     body: |inner, _stream| { do_se_initiator(inner).await?; }
 }
 async_send_token! {
-    role: Responder, token: Se, method: se(), bounds: [<N::Curve as Curve>::SharedSecret: AsRef<[u8]>,],
+    role: Responder, token: Se, method: se(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
     body: |inner, _stream| { do_se_responder(inner).await?; }
 }
 async_recv_token! {
-    role: Responder, token: Se, method: se(), bounds: [<N::Curve as Curve>::SharedSecret: AsRef<[u8]>,],
+    role: Responder, token: Se, method: se(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
     body: |inner, _stream| { do_se_responder(inner).await?; }
 }
 
@@ -964,19 +964,19 @@ async_recv_token! {
 // ═══════════════════════════════════════════════════════════════
 
 async_send_token! {
-    role: Initiator, token: Ss, method: ss(), bounds: [<N::Curve as Curve>::SharedSecret: AsRef<[u8]>,],
+    role: Initiator, token: Ss, method: ss(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
     body: |inner, _stream| { do_ss(inner).await?; }
 }
 async_send_token! {
-    role: Responder, token: Ss, method: ss(), bounds: [<N::Curve as Curve>::SharedSecret: AsRef<[u8]>,],
+    role: Responder, token: Ss, method: ss(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
     body: |inner, _stream| { do_ss(inner).await?; }
 }
 async_recv_token! {
-    role: Initiator, token: Ss, method: ss(), bounds: [<N::Curve as Curve>::SharedSecret: AsRef<[u8]>,],
+    role: Initiator, token: Ss, method: ss(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
     body: |inner, _stream| { do_ss(inner).await?; }
 }
 async_recv_token! {
-    role: Responder, token: Ss, method: ss(), bounds: [<N::Curve as Curve>::SharedSecret: AsRef<[u8]>,],
+    role: Responder, token: Ss, method: ss(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
     body: |inner, _stream| { do_ss(inner).await?; }
 }
 

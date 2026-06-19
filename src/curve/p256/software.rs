@@ -175,7 +175,7 @@ impl Drop for P256r1PrivateKey {
 mod tests {
     use super::*;
     use crate::curve::p256::P256;
-    use crate::provider::{CryptoProviderAsync, EphemeralOnly, ProviderExt};
+    use crate::provider::{CryptoProviderAsync, EphemeralOnly, ProviderExt, SigningProviderAsync};
     use rand::{SeedableRng, rngs::StdRng};
     use proptest::prelude::*;
 
@@ -258,7 +258,7 @@ mod tests {
 
         // Sign and verify
         const MSG: &[u8] = b"hello hiss";
-        let sig = CryptoProviderAsync::<P256>::sign_async(&provider, &sk1, MSG)
+        let sig = SigningProviderAsync::<P256>::sign_async(&provider, &sk1, MSG)
             .await
             .unwrap();
         assert!(pk1.verify(sig, MSG));

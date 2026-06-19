@@ -237,7 +237,7 @@ pub mod transport;
 pub use self::alias::{IKpsk1, K, Kpsk0, N};
 pub use self::cipher::{ChaChaPoly, Cipher};
 pub use self::cipher_state::CipherState;
-pub use self::curve::{Curve, P256};
+pub use self::curve::{Curve, DhCurve, P256};
 pub use self::error::HandshakeError;
 pub use self::handshake::{HandshakeState, Receiving, Sending};
 #[cfg(feature = "async-io")]
@@ -281,7 +281,7 @@ impl<P, Cu, Ci, H> Noise<P, Cu, Ci, H> {
     }
 }
 
-impl<P: Pattern, Cu: Curve, Ci: Cipher, H: Hash> Noise<P, Cu, Ci, H> {
+impl<P: Pattern, Cu: DhCurve, Ci: Cipher, H: Hash> Noise<P, Cu, Ci, H> {
     /// DH output length in bytes.
     pub const DHLEN: usize = Cu::DHLEN;
 
@@ -319,21 +319,21 @@ pub trait Protocol {
     /// The handshake pattern (e.g. [`IKpsk1`]).
     type Pattern: Pattern;
     /// The DH curve (e.g. [`P256`]).
-    type Curve: Curve;
+    type Curve: DhCurve;
     /// The AEAD cipher (e.g. [`ChaChaPoly`]).
     type Cipher: Cipher;
     /// The hash function (e.g. [`Blake2b`]).
     type Hash: Hash;
 }
 
-impl<P: Pattern, Cu: Curve, Ci: Cipher, H: Hash> Protocol for Noise<P, Cu, Ci, H> {
+impl<P: Pattern, Cu: DhCurve, Ci: Cipher, H: Hash> Protocol for Noise<P, Cu, Ci, H> {
     type Pattern = P;
     type Curve = Cu;
     type Cipher = Ci;
     type Hash = H;
 }
 
-impl<P: Pattern, Cu: Curve, Ci: Cipher, H: Hash> Noise<P, Cu, Ci, H> {
+impl<P: Pattern, Cu: DhCurve, Ci: Cipher, H: Hash> Noise<P, Cu, Ci, H> {
     /// Begin a handshake as the **initiator**.
     ///
     /// The `prologue` is mixed into the handshake hash before any

@@ -31,7 +31,9 @@ use crate::curve::ed25519::{
 };
 use crate::curve::p256::{Error, P256, P256Signature, P256r1PublicKey};
 use crate::noise::seal::{SEALED_SIZE, open_32, seal_32};
-use crate::provider::{CryptoKeys, CryptoProvider, CryptoProviderAsync};
+use crate::provider::{
+    CryptoKeys, CryptoProvider, CryptoProviderAsync, SigningProvider, SigningProviderAsync,
+};
 use core_foundation::{base::TCFType as _, data::CFData, dictionary::CFDictionary};
 use security_framework::{
     access_control::{ProtectionMode, SecAccessControl},
@@ -576,16 +578,6 @@ impl CryptoProviderAsync<P256> for AppleSecureEnclave {
         offload(P256r1PrivateKey::generate_ephemeral).await
     }
 
-    async fn sign_async(
-        &self,
-        key: &Self::PrivateKey,
-        message: &[u8],
-    ) -> Result<P256Signature, Self::Error> {
-        let key = key.clone();
-        let message = message.to_vec();
-        offload(move || key.sign(&message)).await
-    }
-
     async fn dh_async(
         &self,
         key: &Self::PrivateKey,
@@ -612,6 +604,16 @@ impl CryptoProvider<P256> for AppleSecureEnclave {
         P256r1PrivateKey::generate_ephemeral()
     }
 
+    fn dh(
+        &self,
+        key: &Self::PrivateKey,
+        peer: &P256r1PublicKey,
+    ) -> Result<SharedSecret, Self::Error> {
+        key.dh(peer)
+    }
+}
+
+impl SigningProvider<P256> for AppleSecureEnclave {
     fn sign(
         &self,
         key: &Self::PrivateKey,
@@ -619,13 +621,17 @@ impl CryptoProvider<P256> for AppleSecureEnclave {
     ) -> Result<P256Signature, Self::Error> {
         key.sign(message)
     }
+}
 
-    fn dh(
+impl SigningProviderAsync<P256> for AppleSecureEnclave {
+    async fn sign_async(
         &self,
         key: &Self::PrivateKey,
-        peer: &P256r1PublicKey,
-    ) -> Result<SharedSecret, Self::Error> {
-        key.dh(peer)
+        message: &[u8],
+    ) -> Result<P256Signature, Self::Error> {
+        let key = key.clone();
+        let message = message.to_vec();
+        offload(move || key.sign(&message)).await
     }
 }
 
@@ -674,14 +680,6 @@ impl CryptoProvider<Ed25519> for AppleSecureEnclave {
         apple_ed25519_generate()
     }
 
-    fn sign(
-        &self,
-        key: &Self::PrivateKey,
-        message: &[u8],
-    ) -> Result<Ed25519Signature, Self::Error> {
-        Ok(key.sign(message))
-    }
-
     fn dh(
         &self,
         key: &Self::PrivateKey,
@@ -700,20 +698,32 @@ impl CryptoProviderAsync<Ed25519> for AppleSecureEnclave {
         apple_ed25519_generate()
     }
 
-    async fn sign_async(
-        &self,
-        key: &Self::PrivateKey,
-        message: &[u8],
-    ) -> Result<Ed25519Signature, Self::Error> {
-        Ok(key.sign(message))
-    }
-
     async fn dh_async(
         &self,
         key: &Self::PrivateKey,
         peer: &Ed25519PublicKey,
     ) -> Result<SharedSecret, Self::Error> {
         Ok(key.dh(peer))
+    }
+}
+
+impl SigningProvider<Ed25519> for AppleSecureEnclave {
+    fn sign(
+        &self,
+        key: &Self::PrivateKey,
+        message: &[u8],
+    ) -> Result<Ed25519Signature, Self::Error> {
+        Ok(key.sign(message))
+    }
+}
+
+impl SigningProviderAsync<Ed25519> for AppleSecureEnclave {
+    async fn sign_async(
+        &self,
+        key: &Self::PrivateKey,
+        message: &[u8],
+    ) -> Result<Ed25519Signature, Self::Error> {
+        Ok(key.sign(message))
     }
 }
 
@@ -794,7 +804,7 @@ mod tests {
         assert_eq!(ab, ba);
 
         // The offloaded signing path round-trips too.
-        let sig = CryptoProviderAsync::<P256>::sign_async(&provider, &a, b"hello")
+        let sig = SigningProviderAsync::<P256>::sign_async(&provider, &a, b"hello")
             .await
             .unwrap();
         assert!(a_pub.verify(sig, b"hello"));

@@ -41,19 +41,16 @@ pub mod p256;
 
 // ── Curve trait ─────────────────────────────────────────────────
 
-/// An elliptic curve with its associated key and output types.
+/// An elliptic curve identity: its name, key sizes, and public-key type.
 ///
-/// Implemented by zero-sized marker types (e.g. [`p256::P256`]).
-/// The associated constants provide sizes needed by the Noise
-/// protocol and serialisation layers; the associated types tie
-/// the curve to its concrete public key, signature, and shared
-/// secret representations.
+/// Implemented by zero-sized marker types (e.g. [`p256::P256`]). This is
+/// the common denominator every curve provides regardless of which
+/// operations it supports; the *capabilities* a curve has — Diffie–Hellman
+/// ([`DhCurve`]) and/or digital signatures ([`SigningCurve`]) — are layered
+/// on top as separate traits, so a DH-only curve need not pretend to sign.
 pub trait Curve {
     /// Noise name component (e.g. `"P256"`).
     const NAME: &'static str;
-
-    /// DH output length in bytes (`DHLEN` in the Noise spec).
-    const DHLEN: usize;
 
     /// Serialised public key size in bytes.
     const PUBLIC_KEY_SIZE: usize;
@@ -70,14 +67,31 @@ pub trait Curve {
     /// The public key type for this curve.
     type PublicKey: Clone;
 
-    /// The signature type produced by signing with this curve.
-    type Signature;
+    /// Deserialise a public key from its canonical byte representation.
+    fn public_key_from_bytes(bytes: &[u8]) -> Result<Self::PublicKey, Self::Error>;
+}
+
+/// A [`Curve`] that supports Diffie–Hellman key agreement.
+///
+/// Separated from [`Curve`] so a DH-only curve (e.g. X25519) is a full
+/// participant in the Noise handshake — which is built entirely on this
+/// capability — without having to name a signature type it cannot produce.
+pub trait DhCurve: Curve {
+    /// DH output length in bytes (`DHLEN` in the Noise spec).
+    const DHLEN: usize;
 
     /// The shared secret type produced by ECDH on this curve.
     type SharedSecret;
+}
 
-    /// Deserialise a public key from its canonical byte representation.
-    fn public_key_from_bytes(bytes: &[u8]) -> Result<Self::PublicKey, Self::Error>;
+/// A [`Curve`] that supports digital signatures.
+///
+/// Independent of [`DhCurve`]: a curve may agree, sign, or both. The Noise
+/// handshake never signs — this capability exists for callers who want
+/// signatures alongside the channel.
+pub trait SigningCurve: Curve {
+    /// The signature type produced by signing with this curve.
+    type Signature;
 }
 
 /// Shared secret derived from an ECDH key exchange.

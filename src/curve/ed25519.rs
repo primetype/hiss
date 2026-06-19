@@ -43,7 +43,7 @@ use cryptoxide::ed25519 as ed;
 use packtool::Packed;
 use rand_core::{CryptoRng, RngCore};
 
-use super::{Curve, SharedSecret};
+use super::{Curve, DhCurve, SharedSecret, SigningCurve};
 
 // ── Errors ─────────────────────────────────────────────────────
 
@@ -72,18 +72,24 @@ pub struct Ed25519;
 
 impl Curve for Ed25519 {
     const NAME: &'static str = "Ed25519";
-    const DHLEN: usize = 32;
     const PUBLIC_KEY_SIZE: usize = 32;
     const PRIVATE_KEY_SIZE: usize = 32;
 
     type Error = Error;
     type PublicKey = Ed25519PublicKey;
-    type Signature = Ed25519Signature;
-    type SharedSecret = SharedSecret;
 
     fn public_key_from_bytes(bytes: &[u8]) -> Result<Self::PublicKey, Self::Error> {
         Ed25519PublicKey::from_bytes(bytes)
     }
+}
+
+impl DhCurve for Ed25519 {
+    const DHLEN: usize = 32;
+    type SharedSecret = SharedSecret;
+}
+
+impl SigningCurve for Ed25519 {
+    type Signature = Ed25519Signature;
 }
 
 // ── Public key ─────────────────────────────────────────────────
@@ -269,7 +275,7 @@ impl fmt::Debug for SoftwareEd25519PrivateKey {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::provider::{CryptoProviderAsync, EphemeralOnly, ProviderExt};
+    use crate::provider::{CryptoProviderAsync, EphemeralOnly, ProviderExt, SigningProviderAsync};
     use rand::{SeedableRng, rngs::StdRng};
 
     // ── Direct API tests ─────────────────────────────────────────
@@ -431,7 +437,7 @@ mod tests {
 
         // Sign and verify
         const MSG: &[u8] = b"hello hiss";
-        let sig = CryptoProviderAsync::<Ed25519>::sign_async(&provider, &sk1, MSG)
+        let sig = SigningProviderAsync::<Ed25519>::sign_async(&provider, &sk1, MSG)
             .await
             .unwrap();
         assert!(pk1.verify(sig, MSG));

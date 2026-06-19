@@ -27,7 +27,7 @@ mod software;
 #[cfg(test)]
 mod wycheproof;
 
-use super::{Curve, SharedSecret};
+use super::{Curve, DhCurve, SharedSecret, SigningCurve};
 #[cfg(any(target_os = "macos", target_os = "ios", test))]
 use crate::asn1::ASN1Reader;
 use cryptoxide::{digest::Digest as _, sha2::Sha256};
@@ -57,18 +57,24 @@ pub struct P256;
 
 impl Curve for P256 {
     const NAME: &'static str = "P256";
-    const DHLEN: usize = 32;
     const PUBLIC_KEY_SIZE: usize = 65;
     const PRIVATE_KEY_SIZE: usize = 32;
 
     type Error = Error;
     type PublicKey = P256r1PublicKey;
-    type Signature = P256Signature;
-    type SharedSecret = SharedSecret;
 
     fn public_key_from_bytes(bytes: &[u8]) -> Result<Self::PublicKey, Self::Error> {
         P256r1PublicKey::from_bytes(bytes)
     }
+}
+
+impl DhCurve for P256 {
+    const DHLEN: usize = 32;
+    type SharedSecret = SharedSecret;
+}
+
+impl SigningCurve for P256 {
+    type Signature = P256Signature;
 }
 
 // ── Errors ──────────────────────────────────────────────────────
