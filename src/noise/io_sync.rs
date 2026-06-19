@@ -79,6 +79,7 @@ use super::process::{do_psk, recv_e, recv_payload, recv_s, recv_to_transport, se
 use super::role::{Initiator, Responder, Role};
 use super::tokens::*;
 use super::transport::Transport;
+use super::WellFormed;
 use crate::curve::{Curve, DhCurve};
 use crate::provider::{CryptoKeys, CryptoProvider};
 
@@ -547,7 +548,7 @@ where
 //  Ergonomic protocol-level constructors (no turbofish)
 // ═══════════════════════════════════════════════════════════════
 
-impl<P: Pattern, Cu: DhCurve, Ci: Cipher, H: Hash> Noise<P, Cu, Ci, H> {
+impl<P: WellFormed, Cu: DhCurve, Ci: Cipher, H: Hash> Noise<P, Cu, Ci, H> {
     /// Begin a blocking handshake as the **initiator** over `stream`,
     /// without naming the six [`SyncHandshake`] type parameters.
     ///

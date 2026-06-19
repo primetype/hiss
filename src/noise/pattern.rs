@@ -5,6 +5,7 @@
 //! wrapped in a [`Message`] with a direction.
 
 use super::tokens::*;
+use super::well_formed::assert_well_formed;
 
 /// A Noise handshake pattern.
 ///
@@ -61,6 +62,8 @@ impl Pattern for N {
     type Messages = Cons<Message<ToResponder, Cons<E, Cons<Es, Nil>>>, Nil>;
 }
 
+assert_well_formed!(N);
+
 // ── K ───────────────────────────────────────────────────────────
 
 /// `K` — one-way authenticated pattern. Both static keys are known
@@ -92,6 +95,8 @@ impl Pattern for K {
     type Messages = Cons<Message<ToResponder, Cons<E, Cons<Es, Cons<Ss, Nil>>>>, Nil>;
 }
 
+assert_well_formed!(K);
+
 // ── Kpsk0 ────────────────────────────────────────────────────────
 
 /// `Kpsk0` — one-way authenticated pattern with PSK at position 0.
@@ -119,6 +124,8 @@ impl Pattern for Kpsk0 {
     // -> psk, e, es, ss
     type Messages = Cons<Message<ToResponder, Cons<Psk, Cons<E, Cons<Es, Cons<Ss, Nil>>>>>, Nil>;
 }
+
+assert_well_formed!(Kpsk0);
 
 // ── IKpsk1 ──────────────────────────────────────────────────────
 
@@ -154,3 +161,5 @@ impl Pattern for IKpsk1 {
         Cons<Message<ToInitiator, Cons<E, Cons<Ee, Cons<Se, Nil>>>>, Nil>,
     >;
 }
+
+assert_well_formed!(IKpsk1);

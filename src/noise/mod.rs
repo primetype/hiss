@@ -233,6 +233,7 @@ pub mod session_id;
 pub mod symmetric_state;
 pub mod tokens;
 pub mod transport;
+pub mod well_formed;
 
 pub use self::alias::{IKpsk1, K, Kpsk0, N};
 pub use self::cipher::{ChaChaPoly, Cipher};
@@ -249,6 +250,7 @@ pub use self::hash::{Blake2b, Hash};
 // the bare `noise::{N, K, …}` names above are the ready-made default-suite
 // protocol aliases. Only the `Pattern` trait is re-exported at the root.
 pub use self::pattern::Pattern;
+pub use self::well_formed::WellFormed;
 pub use self::role::{Initiator, Responder, Role};
 pub use self::session_id::SessionId;
 pub use self::symmetric_state::SymmetricState;
@@ -326,14 +328,14 @@ pub trait Protocol {
     type Hash: Hash;
 }
 
-impl<P: Pattern, Cu: DhCurve, Ci: Cipher, H: Hash> Protocol for Noise<P, Cu, Ci, H> {
+impl<P: WellFormed, Cu: DhCurve, Ci: Cipher, H: Hash> Protocol for Noise<P, Cu, Ci, H> {
     type Pattern = P;
     type Curve = Cu;
     type Cipher = Ci;
     type Hash = H;
 }
 
-impl<P: Pattern, Cu: DhCurve, Ci: Cipher, H: Hash> Noise<P, Cu, Ci, H> {
+impl<P: WellFormed, Cu: DhCurve, Ci: Cipher, H: Hash> Noise<P, Cu, Ci, H> {
     /// Begin a handshake as the **initiator**.
     ///
     /// The `prologue` is mixed into the handshake hash before any
