@@ -24,6 +24,9 @@
 
 mod software;
 
+#[cfg(test)]
+mod wycheproof;
+
 use super::{Curve, SharedSecret};
 #[cfg(any(target_os = "macos", target_os = "ios", test))]
 use crate::asn1::ASN1Reader;

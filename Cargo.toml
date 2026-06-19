@@ -47,6 +47,10 @@ base64 = "0.22"
 criterion = { version = "0.8.2", features = ["html_reports"] }
 proptest = "1.6"
 rand = "0.9"
+# Wycheproof / Noise test-vector ingestion (test-only; never in the
+# published crate — see tests/vectors/).
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 snow = { version = "0.10.0", features = ["default-resolver", "use-p256", "use-chacha20poly1305", "use-blake2"] }
 tempfile = "3.12"
 tokio = { version = "1.50", features = ["macros", "rt", "rt-multi-thread", "net", "signal", "time", "sync", "io-util", "fs"] }
