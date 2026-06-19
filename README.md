@@ -1,0 +1,177 @@
+# hiss
+
+**Static Noise.** The [Noise Protocol Framework][noise], resolved at compile time.
+
+A `Noise<Pattern, Curve, Cipher, Hash>` is zero-sized: the handshake pattern, curve,
+cipher, and hash are encoded as *types*, so every buffer size is a `const` and every
+protocol misuse — a token out of order, a wrong-direction message — is a **compile
+error**. To anyone on the wire, a `hiss` channel is indistinguishable from static.
+
+Secret keys live in software or behind a pluggable, hardware-backed provider (Apple
+Secure Enclave today), and are wiped on drop.
+
+> **Status: pre-release (`0.1`), not yet published.** The API is unstable and the code
+> has **not** been independently audited. See [Security](#security) before relying on it.
+
+[noise]: https://noiseprotocol.org/
+
+## What it offers
+
+- **Compile-time protocol selection.** The pattern, curve, cipher, and hash are
+  zero-sized type parameters; message sizes are associated constants. Misuse is rejected
+  by the type system rather than at runtime.
+- **A small, deliberate crypto core.** Production cryptography is `cryptoxide` +
+  `eccoxide` only — no sprawling dependency surface.
+- **Pluggable crypto providers.** A `CryptoProvider` (sync) / `CryptoProviderAsync`
+  (async) trait family lets the same handshake run against a software backend or a
+  hardware-backed one (Apple Secure Enclave). See [Providers](#providers).
+- **Both a buffer core and streaming I/O adapters.** Drive the handshake with explicit
+  buffers, or hand it a stream: a blocking `std::io` adapter (always available) and an
+  optional `tokio::io` adapter behind the `async-io` feature.
+
+## Supported suite
+
+This `0.1` targets one cipher suite and a fixed set of patterns:
+
+| Axis    | Supported |
+|---------|-----------|
+| Patterns | `N`, `K`, `Kpsk0`, `IKpsk1` |
+| Curve   | NIST **P-256** (secp256r1) |
+| Cipher  | **ChaCha20-Poly1305** |
+| Hash    | **BLAKE2b** |
+
+Conformance is anchored against [`snow`](https://crates.io/crates/snow) via an interop
+test suite. Additional patterns, curves (Curve25519), hashes, and ciphers (AES-GCM) are
+planned for `0.2+`.
+
+## Quickstart
+
+The `N` pattern lets an initiator seal a message to a recipient's known static public
+key. The streaming `SyncHandshake` adapter owns any `std::io::Read`/`Write` (a TCP
+socket, an in-memory buffer, …) and advances the handshake over it.
+
+```rust
+use hiss::curve::p256::SoftwareCryptoProvider;
+use hiss::curve::{CryptoKeys, CryptoProvider};
+use hiss::noise::{Blake2b, ChaChaPoly, Initiator, N, Noise, P256, Responder, SyncHandshake};
+
+// Spell out the protocol once as a type alias.
+type Seal = Noise<N, P256, ChaChaPoly, Blake2b>;
+
+// The recipient owns a static P-256 key; its public half is known to the sender.
+let provider = SoftwareCryptoProvider;
+let recipient_static = provider.generate_static_key()?;
+let recipient_pub = provider.public_key(&recipient_static)?;
+
+// ── Initiator: run the handshake, then seal a payload ───────────────────────
+let handshake = SyncHandshake::<Seal, Initiator, _, _, _, _>::initiate(
+    SoftwareCryptoProvider,
+    &[],                 // prologue
+    Vec::<u8>::new(),    // writer: anything implementing std::io::Write
+)
+.set_rs(recipient_pub);
+
+let (mut sender, wire) = handshake.e()?.es()?.into_parts();
+
+let payload = b"attack at dawn!!";
+let mut sealed = [0u8; 32]; // 16-byte payload + 16-byte AEAD tag
+let n = sender.send(payload, &mut sealed)?;
+
+// ── Responder: read the handshake, then open the payload ────────────────────
+let handshake = SyncHandshake::<Seal, Responder, _, _, _, _>::respond(
+    SoftwareCryptoProvider,
+    &[],                                  // prologue (must match)
+    std::io::Cursor::new(wire),           // reader: anything implementing std::io::Read
+)
+.set_s(recipient_static)?;
+
+let (_revealed_ephemeral, recv) = handshake.recv().e()?;
+let mut transport = recv.es()?;
+
+// Both ends derived the same session.
+assert_eq!(sender.session_id(), transport.transport().session_id());
+
+let mut opened = [0u8; 16];
+transport.transport().receive(&sealed[..n], &mut opened)?;
+assert_eq!(&opened, payload);
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+The same protocol can be driven with explicit buffers (the `HandshakeState` core) instead
+of an owned stream, and — with the `async-io` feature — over `tokio::io` via
+`AsyncHandshake`. The mutual-authentication patterns (`K`, `Kpsk0`, `IKpsk1`) follow the
+same builder shape with additional pre-message setters.
+
+## Providers
+
+Standard Noise authenticates and key-agrees **only via raw ECDH** — there is no signature
+token in the handshake. A backend can therefore serve the Noise **DH (key-agreement)**
+role only if it can yield a value Noise can mix (the raw shared secret, or the result of
+Noise's exact HKDF over it). Backends that can only *sign* fit a separate
+identity/attestation layer **around** the channel, not inside it.
+
+| Backend | DH (Noise channel) | Identity / signing | Status |
+|---------|:------------------:|:------------------:|--------|
+| Software (`eccoxide`)        | ✅ | ✅ | **implemented** |
+| Apple Secure Enclave (macOS/iOS) | ✅ | ✅ | **implemented** |
+| Android Keystore / StrongBox | ✅ | ✅ | planned (`0.2+`) |
+| Linux TPM2                   | ✅ (policy-permitting) | ✅ | planned (`0.2+`) |
+| AWS KMS                      | ✅ (`DeriveSharedSecret`) | ✅ | planned (`0.2+`) |
+| Windows CNG / Azure / GCP KMS | ❌ (no raw ECDH) | ✅ | identity role only |
+| PKCS#11 HSM, YubiKey, Ledger | ❌ (no raw ECDH export) | — | out of scope |
+
+The implementation of a provider is selected through the `CryptoProvider` /
+`CryptoProviderAsync` traits, so additional DH-capable backends can be added without
+touching the Noise core.
+
+## Platforms
+
+- **All platforms:** the software backend (`SoftwareCryptoProvider`) and the blocking
+  `std::io` handshake adapter.
+- **macOS / iOS:** the Apple Secure Enclave backend. Its blocking Security-framework calls
+  are offloaded to a Tokio blocking thread pool for the async provider path.
+
+## Cargo features
+
+| Feature | Default | Effect |
+|---------|:-------:|--------|
+| `async-io` | no | Adds the `tokio::io` streaming handshake adapter (`AsyncHandshake`), pulling in `tokio` with its I/O extension traits. The blocking `std::io` adapter needs no feature and no runtime. |
+
+## Security
+
+**This crate has not been independently audited and is pre-1.0. Do not use it to protect
+anything you cannot afford to lose.** That said, the crypto core is built to be
+responsible:
+
+- **Constant-time P-256 scalar multiplication** via `eccoxide`'s constant-time backend.
+- **Deterministic ECDSA** (RFC 6979) with low-S normalization; no signing RNG.
+- **Peer-key and DH-output validation** — operations on attacker-supplied points return
+  `Result` rather than panicking; a degenerate (point-at-infinity) shared secret is
+  rejected.
+- **Noise's 65535-byte message-length limit** is enforced at the cipher-state chokepoint.
+- **Secret material is zeroized on drop** and is never required to be `Clone`.
+
+> **Note for would-be packagers:** the constant-time P-256 support currently pins
+> `eccoxide` to a specific git revision. A crates.io release of `eccoxide` carrying that
+> fix is required before `hiss` can itself be published.
+
+Please report security issues privately to the maintainers rather than opening a public
+issue.
+
+## Minimum supported Rust version
+
+`hiss` uses the Rust 2024 edition and declares an MSRV of **1.85**. The MSRV is not yet
+enforced in CI.
+
+## License
+
+Licensed under either of
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+- MIT license ([LICENSE-MIT](LICENSE-MIT))
+
+at your option.
+
+Unless you explicitly state otherwise, any contribution intentionally submitted for
+inclusion in the work by you, as defined in the Apache-2.0 license, shall be dual licensed
+as above, without any additional terms or conditions.

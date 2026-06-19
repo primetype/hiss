@@ -6,6 +6,7 @@ rust-version = "1.85"
 authors = ["Nicolas Di Prima <nicolas@primetype.co.uk>"]
 license = "MIT OR Apache-2.0"
 description = "Static, type-level Noise Protocol Framework with pluggable hardware-backed crypto."
+readme = "README.md"
 repository = "https://github.com/primetype/hiss"
 homepage = "https://github.com/primetype/hiss"
 documentation = "https://docs.rs/hiss"
