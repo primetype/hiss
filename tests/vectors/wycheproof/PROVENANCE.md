@@ -13,5 +13,6 @@ vendored so the test suite is hermetic and offline-reproducible.
 | File | Upstream path | Tests |
 |------|---------------|-------|
 | `ecdsa_secp256r1_sha256_test.json` | `testvectors_v1/ecdsa_secp256r1_sha256_test.json` | 484 (DER/ASN.1-encoded signatures) |
+| `ecdh_secp256r1_ecpoint_test.json` | `testvectors_v1/ecdh_secp256r1_ecpoint_test.json` | 355 (raw SEC1 EC-point public keys) |
 
 To refresh, re-fetch the same paths at a newer commit and update the pin above.
