@@ -265,6 +265,10 @@ best-effort compiler fence:
   API and posture may change before 1.0.
 - **Curated surface.** Only the patterns, curves, cipher, and hash in [Scope](#scope)
   are implemented — not the full Noise matrix.
+- **No `fallback` / compound protocols.** The Noise `fallback` modifier (`XXfallback`,
+  Noise Pipes / 0-RTT-with-retry) is intentionally not implemented. It is optional in the
+  spec and unnecessary for the targeted use cases — a deliberate scoping decision, not an
+  oversight. `snow` omits it likewise.
 - **Noise KAT provenance.** The P-256 Noise vectors are agreement-with-snow, not
   standards-body vectors (see above).
 - **Upstream constant-time dependency.** Constant-time P-256 rests on a git-pinned,

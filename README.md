@@ -44,6 +44,11 @@ Conformance is anchored against [`snow`](https://crates.io/crates/snow) via an i
 test suite. Additional patterns, curves (Curve25519), hashes, and ciphers (AES-GCM) are
 planned for `0.2+`.
 
+The `fallback` modifier — and the compound protocols it enables (e.g. Noise Pipes /
+0-RTT-with-retry) — is an **intentional non-goal**, not a missing feature. It is optional
+in the Noise spec, which presents it only as an illustrative building block, and is
+unnecessary for the targeted use cases; `snow` omits it for the same reason.
+
 ## Quickstart
 
 The `N` pattern lets an initiator seal a message to a recipient's known static public
