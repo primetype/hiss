@@ -31,7 +31,7 @@ use crate::curve::p256::{P256, P256Signature, P256r1PrivateKey, P256r1PublicKey}
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub mod apple;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-pub use apple::AppleSecureEnclave;
+pub use apple::{AppleSecureEnclave, SeedError};
 
 // ── Provider trait family ────────────────────────────────────────
 

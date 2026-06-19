@@ -25,18 +25,34 @@
 //!   `kSecAttrTokenIDSecureEnclave` — D-23 invariant. iOS continues to
 //!   use its single (data-protection) keychain as before.
 
-use crate::curve::p256::{Error, P256, P256Signature, P256r1PublicKey};
 use crate::curve::SharedSecret;
+use crate::curve::ed25519::{
+    Ed25519, Ed25519PublicKey, Ed25519Signature, SoftwareEd25519PrivateKey,
+};
+use crate::curve::p256::{Error, P256, P256Signature, P256r1PublicKey};
+use crate::noise::seal::{SEALED_SIZE, open_32, seal_32};
 use crate::provider::{CryptoKeys, CryptoProvider, CryptoProviderAsync};
 use core_foundation::{base::TCFType as _, data::CFData, dictionary::CFDictionary};
 use security_framework::{
     access_control::{ProtectionMode, SecAccessControl},
     item::Location,
     key::{Algorithm, GenerateKeyOptions, KeyType, SecKey, Token},
+    passwords::{
+        PasswordOptions, delete_generic_password_options, generic_password,
+        set_generic_password_options,
+    },
     passwords_options::AccessControlOptions,
 };
 
-const TAG: &str = "uk.co.primetype.hiss.p256";
+/// Keychain label for ephemeral P-256 keys.
+///
+/// Ephemeral keys are never persisted or looked up by label, so this is
+/// a fixed, namespace-independent descriptor.
+const EPHEMERAL_LABEL: &str = "hiss.ephemeral.p256";
+
+/// Keychain account for the sealed Ed25519 seed item. A neutral
+/// descriptor — the per-caller namespace lives in the service name.
+const ED25519_SEED_ACCOUNT: &str = "device-identity";
 
 // `Clone` here is a CoreFoundation retain of the `SecKey` handle — no
 // secret material is copied (the key stays in the keychain / Secure
@@ -81,7 +97,7 @@ impl P256r1PrivateKey {
             .set_key_type(KeyType::ec())
             .set_size_in_bits(256)
             .set_token(Token::Software)
-            .set_label(format!("{TAG}.ephemeral"));
+            .set_label(EPHEMERAL_LABEL);
 
         let key = SecKey::new(&attributes)
             .map_err(|e| Error::Platform(format!("failed to generate SecKey: {e:?}")))?;
@@ -97,7 +113,7 @@ impl P256r1PrivateKey {
             .set_key_type(KeyType::ec())
             .set_size_in_bits(256)
             .set_token(Token::SecureEnclave)
-            .set_label(TAG)
+            .set_label(EPHEMERAL_LABEL)
             .set_access_control(
                 SecAccessControl::create_with_protection(
                     Some(ProtectionMode::AccessibleAfterFirstUnlockThisDeviceOnly),
@@ -117,12 +133,12 @@ impl P256r1PrivateKey {
     /// prompt. The app-level lock screen provides the authentication gate.
     /// `AccessibleAfterFirstUnlockThisDeviceOnly` ensures the key is
     /// available once the device has been unlocked after boot.
-    pub fn generate_secure_enclave() -> Result<Self, Error> {
+    pub fn generate_secure_enclave(label: &str) -> Result<Self, Error> {
         let mut attributes = GenerateKeyOptions::default();
         attributes
             .set_key_type(KeyType::ec())
             .set_size_in_bits(256)
-            .set_label(TAG)
+            .set_label(label)
             .set_token(Token::SecureEnclave)
             // Phase 18.1 (`2026/05/12`): the data-protection Keychain
             // selector is RESTORED (D-20-restored) per Apple TN3137
@@ -152,7 +168,7 @@ impl P256r1PrivateKey {
 
     /// Load a previously persisted Secure Enclave key from the Keychain.
     ///
-    /// Queries the Keychain for a key matching [`TAG`] (stored via
+    /// Queries the Keychain for a key matching `label` (stored under
     /// `kSecAttrLabel` by [`generate_secure_enclave`]). Returns `None`
     /// if no key is found.
     ///
@@ -162,7 +178,7 @@ impl P256r1PrivateKey {
     /// authorisation lives in the embedded provisioning profile bundled
     /// by the host application's build script (Option B, CONTEXT.md
     /// Amendment 2026/05/12).
-    pub fn load_from_keychain() -> Result<Option<Self>, Error> {
+    pub fn load_from_keychain(label: &str) -> Result<Option<Self>, Error> {
         use core_foundation::base::TCFType as _;
         use core_foundation::boolean::CFBoolean;
         use core_foundation::string::CFString;
@@ -173,7 +189,7 @@ impl P256r1PrivateKey {
         };
         use security_framework_sys::keychain_item::SecItemCopyMatching;
 
-        let label = CFString::new(TAG);
+        let label = CFString::new(label);
 
         unsafe {
             let query = CFDictionary::from_CFType_pairs(&[
@@ -296,15 +312,203 @@ impl P256r1PrivateKey {
     }
 }
 
-// ── CryptoProviderAsync ──────────────────────────────────────────────
+// ── AppleSecureEnclave ───────────────────────────────────────────────
 
-/// macOS Secure Enclave [`CryptoProviderAsync`] for P-256.
+/// Apple Secure Enclave provider — P-256 in the enclave, software Ed25519
+/// with a sealed seed.
 ///
-/// Static keys are generated in the Secure Enclave and persisted
-/// to the Data Protection Keychain. Ephemeral keys use a
-/// software-backed `SecKey` (no persistence, no biometric).
-#[derive(Clone, Copy)]
-pub struct AppleSecureEnclave;
+/// P-256 static keys are generated in the Secure Enclave and persisted to
+/// the data-protection Keychain under the label `{namespace}.p256`;
+/// ephemeral keys use a software-backed `SecKey` (no persistence). Ed25519
+/// is software-signed — the enclave has no Ed25519 support — and its
+/// 32-byte seed is sealed to this device's SE P-256 public key (a
+/// 129-byte Noise-N envelope, see [`crate::noise::seal`]) and stored in
+/// the same data-protection Keychain under the service
+/// `{namespace}.ed25519` ([`store_seed`](Self::store_seed) /
+/// [`load_seed`](Self::load_seed)). Both platforms (macOS and iOS) use
+/// the Keychain — there is no on-disk seed file.
+///
+/// `namespace` is a required, caller-supplied reverse-DNS base (no
+/// default): it names the persisted slots so independent identities on a
+/// device never collide.
+#[derive(Clone)]
+pub struct AppleSecureEnclave {
+    namespace: String,
+}
+
+/// Errors from the [`AppleSecureEnclave`] Ed25519 seed lifecycle
+/// ([`store_seed`](AppleSecureEnclave::store_seed) /
+/// [`load_seed`](AppleSecureEnclave::load_seed)).
+#[derive(Debug, thiserror::Error)]
+pub enum SeedError {
+    /// The Secure Enclave P-256 identity key (the seal recipient) is
+    /// absent. Establish it first via
+    /// [`generate_static_key`](CryptoProvider::generate_static_key).
+    #[error("Secure Enclave P-256 identity key {label:?} not found (establish it before sealing the Ed25519 seed)")]
+    IdentityKeyMissing { label: String },
+
+    /// A Secure Enclave P-256 key operation failed.
+    #[error(transparent)]
+    P256(#[from] Error),
+
+    /// Sealing or opening the seed via the Noise-N envelope failed.
+    #[error(transparent)]
+    Seal(#[from] crate::noise::seal::SealError),
+
+    /// A Keychain item operation (store / query / delete) failed.
+    #[error("Ed25519 seed Keychain operation failed: {0}")]
+    Keychain(String),
+
+    /// The stored seed envelope was not the expected sealed length.
+    #[error(
+        "stored Ed25519 seed envelope has wrong length: expected {expected} bytes, got {got}",
+        expected = SEALED_SIZE
+    )]
+    WrongSize { got: usize },
+}
+
+/// Build the data-protection-Keychain generic-password query for the
+/// sealed Ed25519 seed under `service`.
+fn seed_password_options(service: &str) -> Result<PasswordOptions, SeedError> {
+    let mut options = PasswordOptions::new_generic_password(service, ED25519_SEED_ACCOUNT);
+    let access_control = SecAccessControl::create_with_protection(
+        Some(ProtectionMode::AccessibleAfterFirstUnlockThisDeviceOnly),
+        0,
+    )
+    .map_err(|e| SeedError::Keychain(format!("failed to build seed access control: {e}")))?;
+    options.set_access_control(access_control);
+    options.set_access_synchronized(Some(false));
+    options.use_protected_keychain();
+    Ok(options)
+}
+
+impl AppleSecureEnclave {
+    /// Construct a provider for the given keychain `namespace` (a
+    /// reverse-DNS base such as `"uk.co.example.app"`). The namespace
+    /// names every persisted slot: the SE key (`{namespace}.p256`) and
+    /// the sealed Ed25519 seed (`{namespace}.ed25519`).
+    pub fn new(namespace: impl Into<String>) -> Self {
+        Self {
+            namespace: namespace.into(),
+        }
+    }
+
+    /// Keychain label of the persisted SE P-256 identity key.
+    fn p256_label(&self) -> String {
+        format!("{}.p256", self.namespace)
+    }
+
+    /// Keychain generic-password service of the sealed Ed25519 seed.
+    fn ed25519_service(&self) -> String {
+        format!("{}.ed25519", self.namespace)
+    }
+
+    /// Load the persisted SE P-256 identity key, if one exists.
+    pub fn load_identity(&self) -> Result<Option<P256r1PrivateKey>, Error> {
+        P256r1PrivateKey::load_from_keychain(&self.p256_label())
+    }
+
+    /// Delete the persisted SE P-256 identity key (idempotent — `Ok` if
+    /// none is present).
+    pub fn delete_identity(&self) -> Result<(), Error> {
+        match self.load_identity()? {
+            Some(key) => key.delete(),
+            None => Ok(()),
+        }
+    }
+
+    /// Seal the 32-byte Ed25519 `seed` to this device's SE P-256 public
+    /// key and store the resulting 129-byte envelope in the
+    /// data-protection Keychain under `{namespace}.ed25519`.
+    ///
+    /// Requires the SE P-256 identity key (the seal recipient) to already
+    /// exist — establish it via
+    /// [`generate_static_key`](CryptoProvider::generate_static_key).
+    pub async fn store_seed(&self, seed: &[u8; 32]) -> Result<(), SeedError> {
+        // Look up the SE identity key and extract its public key (the
+        // seal recipient) on the blocking pool — the lookup is a blocking
+        // Security-framework call. Only the public key is needed past
+        // here, so the private `SecKey` handle never leaves the closure.
+        let label = self.p256_label();
+        let se_public = offload_seed(move || {
+            let se_private = match P256r1PrivateKey::load_from_keychain(&label)? {
+                Some(key) => key,
+                None => return Err(SeedError::IdentityKeyMissing { label }),
+            };
+            Ok(se_private.public()?)
+        })
+        .await?;
+
+        // Seal the seed to the SE public key (the DH is itself offloaded
+        // by the provider inside `seal_32`).
+        let sealed = seal_32(self.clone(), &se_public, seed).await?;
+
+        // Overwrite any prior item, then store the sealed envelope — both
+        // are blocking Keychain writes, so run them on the blocking pool.
+        let service = self.ed25519_service();
+        offload_seed(move || {
+            let _ = delete_generic_password_options(seed_password_options(&service)?);
+            set_generic_password_options(&sealed, seed_password_options(&service)?).map_err(|e| {
+                SeedError::Keychain(format!("failed to store sealed Ed25519 seed: {e}"))
+            })
+        })
+        .await
+    }
+
+    /// Load and unseal the Ed25519 seed, or `None` if none is stored.
+    pub async fn load_seed(&self) -> Result<Option<[u8; 32]>, SeedError> {
+        // Blocking Keychain query for the sealed envelope.
+        let service = self.ed25519_service();
+        let sealed_bytes = offload_seed(move || {
+            match generic_password(seed_password_options(&service)?) {
+                Ok(bytes) => Ok(Some(bytes)),
+                Err(e) if e.code() == security_framework_sys::base::errSecItemNotFound => Ok(None),
+                Err(e) => Err(SeedError::Keychain(format!(
+                    "failed to query sealed Ed25519 seed: {e}"
+                ))),
+            }
+        })
+        .await?;
+        let Some(sealed_bytes) = sealed_bytes else {
+            return Ok(None);
+        };
+        if sealed_bytes.len() != SEALED_SIZE {
+            return Err(SeedError::WrongSize {
+                got: sealed_bytes.len(),
+            });
+        }
+        let mut sealed = [0u8; SEALED_SIZE];
+        sealed.copy_from_slice(&sealed_bytes);
+
+        // Blocking SE-key lookup; the returned key (a `Send` `SecKey`
+        // handle) then moves into `open_32`, whose DH the provider
+        // offloads.
+        let label = self.p256_label();
+        let se_private = offload_seed(move || {
+            match P256r1PrivateKey::load_from_keychain(&label)? {
+                Some(key) => Ok(key),
+                None => Err(SeedError::IdentityKeyMissing { label }),
+            }
+        })
+        .await?;
+
+        let opened = open_32(self.clone(), se_private, &sealed).await?;
+        Ok(Some(opened))
+    }
+
+    /// Delete the stored sealed Ed25519 seed (idempotent). Synchronous —
+    /// removing the Keychain item needs no enclave round-trip.
+    pub fn delete_seed(&self) -> Result<(), SeedError> {
+        let service = self.ed25519_service();
+        match delete_generic_password_options(seed_password_options(&service)?) {
+            Ok(()) => Ok(()),
+            Err(e) if e.code() == security_framework_sys::base::errSecItemNotFound => Ok(()),
+            Err(e) => Err(SeedError::Keychain(format!(
+                "failed to delete sealed Ed25519 seed: {e}"
+            ))),
+        }
+    }
+}
 
 /// Run a blocking Security-framework operation on Tokio's blocking
 /// thread pool.
@@ -317,11 +521,12 @@ pub struct AppleSecureEnclave;
 /// dedicated blocking thread so the executor keeps making progress and
 /// the future genuinely suspends until the work completes.
 ///
-/// Because this offloads, the [`CryptoProviderAsync`] futures here resolve on
-/// a worker thread (not the first poll) — so, unlike the software
-/// backend, `AppleSecureEnclave` deliberately does **not**
-/// implement [`CryptoProvider`](crate::provider::CryptoProvider)
-/// and is not usable with the blocking `std::io` handshake.
+/// Because this offloads, the [`CryptoProviderAsync`] futures here resolve
+/// on a worker thread rather than the first poll. The synchronous
+/// [`CryptoProvider`](crate::provider::CryptoProvider) surface runs the
+/// same blocking calls directly on the caller's thread, so
+/// `AppleSecureEnclave` is usable with the blocking `std::io` handshake
+/// too.
 async fn offload<T, F>(op: F) -> Result<T, Error>
 where
     F: FnOnce() -> Result<T, Error> + Send + 'static,
@@ -330,6 +535,22 @@ where
     tokio::task::spawn_blocking(op)
         .await
         .map_err(|e| Error::Platform(format!("Secure Enclave task failed to join: {e}")))?
+}
+
+/// Like [`offload`], but for the Ed25519 seed lifecycle's [`SeedError`].
+///
+/// The Keychain item calls and the SE-key lookup are synchronous,
+/// blocking Security-framework operations (a keychain wait can stall) —
+/// run them on the blocking pool so the async seed methods never block
+/// the executor.
+async fn offload_seed<T, F>(op: F) -> Result<T, SeedError>
+where
+    F: FnOnce() -> Result<T, SeedError> + Send + 'static,
+    T: Send + 'static,
+{
+    tokio::task::spawn_blocking(op)
+        .await
+        .map_err(|e| SeedError::Keychain(format!("seed Keychain task failed to join: {e}")))?
 }
 
 impl CryptoKeys<P256> for AppleSecureEnclave {
@@ -345,7 +566,8 @@ impl CryptoKeys<P256> for AppleSecureEnclave {
 
 impl CryptoProviderAsync<P256> for AppleSecureEnclave {
     async fn generate_static_key_async(&self) -> Result<Self::PrivateKey, Self::Error> {
-        offload(P256r1PrivateKey::generate_secure_enclave).await
+        let label = self.p256_label();
+        offload(move || P256r1PrivateKey::generate_secure_enclave(&label)).await
     }
 
     async fn generate_ephemeral_key_async(&self) -> Result<Self::PrivateKey, Self::Error> {
@@ -381,7 +603,7 @@ impl CryptoProviderAsync<P256> for AppleSecureEnclave {
 // handshake, exactly as Apple's libraries expose them.
 impl CryptoProvider<P256> for AppleSecureEnclave {
     fn generate_static_key(&self) -> Result<Self::PrivateKey, Self::Error> {
-        P256r1PrivateKey::generate_secure_enclave()
+        P256r1PrivateKey::generate_secure_enclave(&self.p256_label())
     }
 
     fn generate_ephemeral_key(&self) -> Result<Self::PrivateKey, Self::Error> {
@@ -405,10 +627,79 @@ impl CryptoProvider<P256> for AppleSecureEnclave {
     }
 }
 
+// ── Ed25519 (software — the enclave has no Ed25519 support) ───────────
+//
+// The Secure Enclave never touches Ed25519: these are the same software
+// (`cryptoxide`) operations as `EphemeralOnly`. Persistence of the seed
+// at rest is handled separately by the sealed-seed lifecycle above
+// (`store_seed` / `load_seed`).
+
+impl CryptoKeys<Ed25519> for AppleSecureEnclave {
+    type Error = crate::curve::ed25519::Error;
+    type PrivateKey = SoftwareEd25519PrivateKey;
+
+    fn public_key(&self, key: &Self::PrivateKey) -> Result<Ed25519PublicKey, Self::Error> {
+        Ok(key.public_key())
+    }
+}
+
+impl CryptoProvider<Ed25519> for AppleSecureEnclave {
+    fn generate_static_key(&self) -> Result<Self::PrivateKey, Self::Error> {
+        SoftwareEd25519PrivateKey::generate_os()
+    }
+
+    fn generate_ephemeral_key(&self) -> Result<Self::PrivateKey, Self::Error> {
+        SoftwareEd25519PrivateKey::generate_os()
+    }
+
+    fn sign(
+        &self,
+        key: &Self::PrivateKey,
+        message: &[u8],
+    ) -> Result<Ed25519Signature, Self::Error> {
+        Ok(key.sign(message))
+    }
+
+    fn dh(
+        &self,
+        key: &Self::PrivateKey,
+        peer: &Ed25519PublicKey,
+    ) -> Result<SharedSecret, Self::Error> {
+        Ok(key.dh(peer))
+    }
+}
+
+impl CryptoProviderAsync<Ed25519> for AppleSecureEnclave {
+    async fn generate_static_key_async(&self) -> Result<Self::PrivateKey, Self::Error> {
+        SoftwareEd25519PrivateKey::generate_os()
+    }
+
+    async fn generate_ephemeral_key_async(&self) -> Result<Self::PrivateKey, Self::Error> {
+        SoftwareEd25519PrivateKey::generate_os()
+    }
+
+    async fn sign_async(
+        &self,
+        key: &Self::PrivateKey,
+        message: &[u8],
+    ) -> Result<Ed25519Signature, Self::Error> {
+        Ok(key.sign(message))
+    }
+
+    async fn dh_async(
+        &self,
+        key: &Self::PrivateKey,
+        peer: &Ed25519PublicKey,
+    ) -> Result<SharedSecret, Self::Error> {
+        Ok(key.dh(peer))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::curve::p256::P256r1PrivateKey as SoftwareP256r1PrivateKey;
+    use crate::provider::ProviderExt;
 
     #[test]
     fn generate_signature_ephemeral() {
@@ -459,19 +750,31 @@ mod tests {
     /// two ephemeral keys, agree, and confirm the DH matches both ways.
     #[tokio::test]
     async fn crypto_provider_offloaded_dh_roundtrip() {
-        let provider = AppleSecureEnclave;
+        let provider = AppleSecureEnclave::new("uk.co.example.hiss-test");
 
-        let a = provider.generate_ephemeral_key_async().await.unwrap();
-        let b = provider.generate_ephemeral_key_async().await.unwrap();
-        let a_pub = provider.public_key(&a).unwrap();
-        let b_pub = provider.public_key(&b).unwrap();
+        // Fully-qualified P-256: the provider also implements the trait
+        // for Ed25519, so the curve can't be inferred from the call alone.
+        let a = CryptoProviderAsync::<P256>::generate_ephemeral_key_async(&provider)
+            .await
+            .unwrap();
+        let b = CryptoProviderAsync::<P256>::generate_ephemeral_key_async(&provider)
+            .await
+            .unwrap();
+        let a_pub = provider.public(&a).unwrap();
+        let b_pub = provider.public(&b).unwrap();
 
-        let ab = provider.dh_async(&a, &b_pub).await.unwrap();
-        let ba = provider.dh_async(&b, &a_pub).await.unwrap();
+        let ab = CryptoProviderAsync::<P256>::dh_async(&provider, &a, &b_pub)
+            .await
+            .unwrap();
+        let ba = CryptoProviderAsync::<P256>::dh_async(&provider, &b, &a_pub)
+            .await
+            .unwrap();
         assert_eq!(ab, ba);
 
         // The offloaded signing path round-trips too.
-        let sig = provider.sign_async(&a, b"hello").await.unwrap();
+        let sig = CryptoProviderAsync::<P256>::sign_async(&provider, &a, b"hello")
+            .await
+            .unwrap();
         assert!(a_pub.verify(sig, b"hello"));
     }
 
@@ -490,5 +793,39 @@ mod tests {
 
         sk1.delete().unwrap();
         sk2.delete().unwrap();
+    }
+
+    /// Establish an SE identity, seal + store the Ed25519 seed to the
+    /// Keychain, load it back, and delete — the full keychain-backed
+    /// seed lifecycle. Ignored: needs a codesigned binary with the
+    /// keychain-access-groups entitlement and Secure Enclave hardware.
+    #[tokio::test]
+    #[ignore = "requires codesigned test binary + Secure Enclave hardware"]
+    async fn ed25519_seed_keychain_round_trip() {
+        let provider = AppleSecureEnclave::new("uk.co.example.hiss-test");
+
+        // Establish the SE P-256 identity (the seal recipient).
+        let _identity = provider.generate::<P256>().unwrap();
+
+        let seed: [u8; 32] = *SoftwareEd25519PrivateKey::generate(rand::rng())
+            .expect("generate Ed25519 seed")
+            .seed();
+
+        assert!(provider.load_seed().await.unwrap().is_none());
+
+        provider.store_seed(&seed).await.unwrap();
+        let loaded = provider
+            .load_seed()
+            .await
+            .unwrap()
+            .expect("seed present after store");
+        assert_eq!(loaded, seed, "loaded seed must byte-equal the stored seed");
+
+        provider.delete_seed().unwrap();
+        assert!(provider.load_seed().await.unwrap().is_none());
+        // idempotent
+        provider.delete_seed().unwrap();
+
+        provider.delete_identity().unwrap();
     }
 }

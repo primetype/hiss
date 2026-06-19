@@ -1064,12 +1064,14 @@ mod tests {
     async fn n_async_seal_open_with_secure_enclave_provider() {
         use crate::provider::apple::AppleSecureEnclave;
 
-        let provider = AppleSecureEnclave;
-        let recipient_static = provider.generate_ephemeral_key_async().await.unwrap();
+        let provider = AppleSecureEnclave::new("uk.co.example.hiss-test");
+        let recipient_static = CryptoProviderAsync::<P256>::generate_ephemeral_key_async(&provider)
+            .await
+            .unwrap();
         let recipient_pub = provider.public(&recipient_static).unwrap();
 
         let sealer = AsyncHandshake::<Seal, Initiator, _, _, _, _>::initiate(
-            AppleSecureEnclave,
+            provider.clone(),
             &[],
             Vec::<u8>::new(),
         )
@@ -1082,7 +1084,7 @@ mod tests {
         let sealed_len = send_transport.send(&payload, &mut sealed).unwrap();
 
         let opener = AsyncHandshake::<Seal, Responder, _, _, _, _>::respond(
-            AppleSecureEnclave,
+            provider.clone(),
             &[],
             Cursor::new(wire),
         )

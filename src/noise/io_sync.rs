@@ -1146,7 +1146,7 @@ sync_recv_token! {
 mod tests {
     use super::*;
     use crate::provider::EphemeralOnly;
-    use crate::provider::{CryptoProvider, ProviderExt};
+    use crate::provider::ProviderExt;
     use crate::noise::{Blake2b, ChaChaPoly, IKpsk1, Initiator, K, N, Noise, P256, Responder};
     use crate::noise_message_size;
     use crate::psk::Psk;
@@ -1282,12 +1282,12 @@ mod tests {
     fn n_sync_seal_open_with_secure_enclave_provider() {
         use crate::provider::apple::AppleSecureEnclave;
 
-        let provider = AppleSecureEnclave;
-        let recipient_static = provider.generate_ephemeral_key().unwrap();
+        let provider = AppleSecureEnclave::new("uk.co.example.hiss-test");
+        let recipient_static = provider.generate_ephemeral::<P256>().unwrap();
         let recipient_pub = provider.public(&recipient_static).unwrap();
 
         let sealer = SyncHandshake::<Seal, Initiator, _, _, _, _>::initiate(
-            AppleSecureEnclave,
+            provider.clone(),
             &[],
             Vec::<u8>::new(),
         )
@@ -1300,7 +1300,7 @@ mod tests {
         let sealed_len = send_transport.send(&payload, &mut sealed).unwrap();
 
         let opener = SyncHandshake::<Seal, Responder, _, _, _, _>::respond(
-            AppleSecureEnclave,
+            provider.clone(),
             &[],
             Cursor::new(wire),
         )
