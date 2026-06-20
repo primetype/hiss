@@ -238,7 +238,7 @@ pub mod well_formed;
 pub use self::alias::{IK, IKpsk1, IX, K, Kpsk0, N, NK, NN, XK, XX};
 pub use self::cipher::{ChaChaPoly, Cipher};
 pub use self::cipher_state::CipherState;
-pub use self::curve::{Curve, DhCurve, P256};
+pub use self::curve::{Curve, DhCurve, P256, X25519};
 pub use self::error::HandshakeError;
 pub use self::handshake::{HandshakeState, Receiving, Sending};
 #[cfg(feature = "async-io")]

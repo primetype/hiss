@@ -15,7 +15,7 @@ categories = ["cryptography", "network-programming"]
 
 
 [dependencies]
-cryptoxide = { version = "0.5.1", default-features = false, features = ["chacha", "poly1305", "blake2", "sha2", "hmac", "ed25519"] }
+cryptoxide = { version = "0.5.1", default-features = false, features = ["chacha", "poly1305", "blake2", "sha2", "hmac", "ed25519", "x25519"] }
 eccoxide = { git = "https://github.com/vincenthz/eccoxide", rev = "722797f691129e02c8d54621838b6b41c3e48ea3", default-features = false, features = ["p256r1", "table"] }
 hex = "0.4"
 packtool = "0.4"

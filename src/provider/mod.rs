@@ -36,6 +36,7 @@ use crate::curve::ed25519::{
     Ed25519, Ed25519PublicKey, Ed25519Signature, SoftwareEd25519PrivateKey,
 };
 use crate::curve::p256::{P256, P256Signature, P256r1PrivateKey, P256r1PublicKey};
+use crate::curve::x25519::{SoftwareX25519PrivateKey, X25519, X25519PublicKey};
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub mod apple;
@@ -175,8 +176,8 @@ pub trait SigningProviderAsync<C: SigningCurve>: CryptoKeys<C> {
 /// Pure-software provider — keys live in memory only and persist
 /// **nothing** (zeroized on drop).
 ///
-/// Implements the trait family for both P-256 (`eccoxide`) and Ed25519
-/// (`cryptoxide`); works on every platform (including WASM); all
+/// Implements the trait family for P-256 (`eccoxide`), X25519, and
+/// Ed25519 (`cryptoxide`); works on every platform (including WASM); all
 /// operations resolve immediately — no hardware, no prompts.
 ///
 /// "Ephemeral-only" means *no built-in persistence*, not "no static
@@ -324,6 +325,53 @@ impl<R: Send + Sync> SigningProviderAsync<Ed25519> for EphemeralOnly<R> {
     }
 }
 
+// X25519 (cryptoxide, software) — DH-only, no signing ---------------
+
+impl<R> CryptoKeys<X25519> for EphemeralOnly<R> {
+    type Error = crate::curve::x25519::Error;
+    type PrivateKey = SoftwareX25519PrivateKey;
+
+    fn public_key(&self, key: &Self::PrivateKey) -> Result<X25519PublicKey, Self::Error> {
+        Ok(key.public_key())
+    }
+}
+
+impl<R: CryptoRng + RngCore> CryptoProvider<X25519> for EphemeralOnly<R> {
+    fn generate_static_key(&mut self) -> Result<Self::PrivateKey, Self::Error> {
+        Ok(SoftwareX25519PrivateKey::generate(&mut self.rng))
+    }
+
+    fn generate_ephemeral_key(&mut self) -> Result<Self::PrivateKey, Self::Error> {
+        Ok(SoftwareX25519PrivateKey::generate(&mut self.rng))
+    }
+
+    fn dh(
+        &self,
+        key: &Self::PrivateKey,
+        peer: &X25519PublicKey,
+    ) -> Result<SharedSecret, Self::Error> {
+        Ok(key.dh(peer))
+    }
+}
+
+impl<R: CryptoRng + RngCore + Send + Sync> CryptoProviderAsync<X25519> for EphemeralOnly<R> {
+    async fn generate_static_key_async(&mut self) -> Result<Self::PrivateKey, Self::Error> {
+        Ok(SoftwareX25519PrivateKey::generate(&mut self.rng))
+    }
+
+    async fn generate_ephemeral_key_async(&mut self) -> Result<Self::PrivateKey, Self::Error> {
+        Ok(SoftwareX25519PrivateKey::generate(&mut self.rng))
+    }
+
+    async fn dh_async(
+        &self,
+        key: &Self::PrivateKey,
+        peer: &X25519PublicKey,
+    ) -> Result<SharedSecret, Self::Error> {
+        Ok(key.dh(peer))
+    }
+}
+
 impl<R> EphemeralOnly<R> {
     /// Construct the software provider around a caller-supplied CSPRNG.
     pub fn new(rng: R) -> Self {
@@ -349,6 +397,10 @@ impl SecretKey for P256r1PrivateKey {
 
 impl SecretKey for SoftwareEd25519PrivateKey {
     type Curve = Ed25519;
+}
+
+impl SecretKey for SoftwareX25519PrivateKey {
+    type Curve = X25519;
 }
 
 // ── Ergonomic, curve-selecting entry points ──────────────────────

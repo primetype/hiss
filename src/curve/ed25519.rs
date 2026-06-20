@@ -36,6 +36,14 @@
 //! (Montgomery) equivalents via `cryptoxide::ed25519::exchange`.
 //! The shared secret is 32 bytes — the x-coordinate of the shared
 //! point on Curve25519.
+//!
+//! This Ed25519 DH is a **standalone** capability over Ed25519 keys; it
+//! is **not** the Noise `25519` DH function. A Noise handshake that wants
+//! Curve25519 key agreement must use [`X25519`](super::x25519::X25519),
+//! whose public keys are bare Montgomery u-coordinates and interoperate
+//! byte-for-byte with other Noise implementations. The two are **not**
+//! wire-compatible — an Edwards-point encoding here versus a Montgomery
+//! u-coordinate there.
 
 use std::fmt;
 
