@@ -75,7 +75,7 @@ pub enum Error {
 /// Zero-sized type implementing [`Curve`] that ties together the
 /// concrete [`Ed25519PublicKey`], [`Ed25519Signature`], and
 /// [`SharedSecret`] types. Used as a type parameter for
-/// [`CryptoProviderAsync`](crate::provider::CryptoProviderAsync).
+/// [`DhProviderAsync`](crate::provider::DhProviderAsync).
 pub struct Ed25519;
 
 impl Curve for Ed25519 {
@@ -283,7 +283,9 @@ impl fmt::Debug for SoftwareEd25519PrivateKey {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::provider::{CryptoProviderAsync, EphemeralOnly, ProviderExt, SigningProviderAsync};
+    use crate::provider::{
+        CryptoKeyProviderAsync, DhProviderAsync, EphemeralOnly, ProviderExt, SigningProviderAsync,
+    };
     use rand::{SeedableRng, rngs::StdRng};
 
     // ── Direct API tests ─────────────────────────────────────────
@@ -427,18 +429,18 @@ mod tests {
         assert_ne!(ss1, ss2);
     }
 
-    // ── CryptoProviderAsync trait tests ───────────────────────────────
+    // ── DhProviderAsync trait tests ───────────────────────────────
 
     #[tokio::test]
     async fn provider_sign_and_dh() {
         let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
 
-        let sk1 = CryptoProviderAsync::<Ed25519>::generate_static_key_async(&mut provider)
+        let sk1 = CryptoKeyProviderAsync::<Ed25519>::generate_static_key_async(&mut provider)
             .await
             .unwrap();
         let pk1 = provider.public(&sk1).unwrap();
 
-        let sk2 = CryptoProviderAsync::<Ed25519>::generate_ephemeral_key_async(&mut provider)
+        let sk2 = CryptoKeyProviderAsync::<Ed25519>::generate_ephemeral_key_async(&mut provider)
             .await
             .unwrap();
         let pk2 = provider.public(&sk2).unwrap();
@@ -452,10 +454,10 @@ mod tests {
         assert!(!pk2.verify(sig, MSG));
 
         // DH symmetry
-        let ss1 = CryptoProviderAsync::<Ed25519>::dh_async(&provider, &sk1, &pk2)
+        let ss1 = DhProviderAsync::<Ed25519>::dh_async(&provider, &sk1, &pk2)
             .await
             .unwrap();
-        let ss2 = CryptoProviderAsync::<Ed25519>::dh_async(&provider, &sk2, &pk1)
+        let ss2 = DhProviderAsync::<Ed25519>::dh_async(&provider, &sk2, &pk1)
             .await
             .unwrap();
         assert_eq!(ss1, ss2);

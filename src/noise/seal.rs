@@ -5,7 +5,7 @@
 //! expose two ergonomic async functions for sealing and opening a
 //! 32-byte payload to a recipient's P-256 public key.
 //!
-//! Async by construction: matches the existing `CryptoProviderAsync<P256>`
+//! Async by construction: matches the existing `DhProviderAsync<P256>`
 //! async-trait pattern in [`crate::curve::p256`]. Callers `.await`
 //! directly. NO `block_on` / `Handle::try_current` is used — those
 //! would panic when invoked from inside a Tokio worker.
@@ -29,7 +29,7 @@
 //! lives in the Secure Enclave (non-exportable hardware-resident
 //! material).
 
-use crate::provider::CryptoProviderAsync;
+use crate::provider::DhProviderAsync;
 use crate::curve::p256::{P256, P256r1PublicKey};
 use crate::noise::{HandshakeError, N, Transport};
 
@@ -76,7 +76,7 @@ pub async fn seal_32<P>(
     payload: &[u8; SEAL_PAYLOAD_SIZE],
 ) -> Result<[u8; SEALED_SIZE], SealError>
 where
-    P: CryptoProviderAsync<P256>,
+    P: DhProviderAsync<P256>,
 {
     let sealer = NoiseSeal::initiate(provider, &[]).set_rs(*recipient_pub);
 
@@ -114,7 +114,7 @@ pub async fn open_32<P>(
     sealed: &[u8; SEALED_SIZE],
 ) -> Result<[u8; SEAL_PAYLOAD_SIZE], SealError>
 where
-    P: CryptoProviderAsync<P256>,
+    P: DhProviderAsync<P256>,
 {
     let msg1 = &sealed[..NOISE_N_MSG1_SIZE];
     let ciphertext = &sealed[NOISE_N_MSG1_SIZE..];

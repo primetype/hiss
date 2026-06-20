@@ -11,8 +11,8 @@
 //! # Providers
 //!
 //! *How* a curve's operations are performed lives in [`crate::provider`]:
-//! the [`CryptoProvider`](crate::provider::CryptoProvider) /
-//! [`CryptoProviderAsync`](crate::provider::CryptoProviderAsync) trait
+//! the [`DhProvider`](crate::provider::DhProvider) /
+//! [`DhProviderAsync`](crate::provider::DhProviderAsync) trait
 //! family, and the backends that implement it — pure software, or
 //! hardware such as the Apple Secure Enclave.
 //!

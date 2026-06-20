@@ -60,7 +60,7 @@ pub enum Error {
 /// [`SigningCurve`](super::SigningCurve)) that ties together the concrete
 /// [`X25519PublicKey`] and [`SharedSecret`] types. Used as the `Cu` type
 /// parameter of a Noise protocol and of
-/// [`CryptoProvider`](crate::provider::CryptoProvider).
+/// [`DhProvider`](crate::provider::DhProvider).
 pub struct X25519;
 
 impl Curve for X25519 {

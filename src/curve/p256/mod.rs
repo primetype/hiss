@@ -52,7 +52,7 @@ pub use crate::asn1::Asn1Error;
 /// concrete [`P256r1PublicKey`], [`P256Signature`], and
 /// [`SharedSecret`] types. Used as a type parameter for
 /// [`Noise`](crate::noise::Noise) and
-/// [`CryptoProviderAsync`](crate::provider::CryptoProviderAsync).
+/// [`DhProviderAsync`](crate::provider::DhProviderAsync).
 pub struct P256;
 
 impl Curve for P256 {

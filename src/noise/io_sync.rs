@@ -40,14 +40,14 @@
 //!
 //! # Synchronous crypto
 //!
-//! The blocking handshake is generic over [`CryptoProvider`] — the
+//! The blocking handshake is generic over [`DhProvider`] — the
 //! synchronous provider surface — and calls its `*_sync` methods
 //! directly (no executor, no future-polling). Both backends implement
 //! it: software (`eccoxide`) natively, and Apple **Secure Enclave**
 //! (whose Security-framework calls are synchronous, blocking C
 //! functions) by running them on the calling thread — exactly as Apple's
 //! libraries expose them. An async-only provider cannot be used here: it
-//! is a *compile* error (it does not implement [`CryptoProvider`]).
+//! is a *compile* error (it does not implement [`DhProvider`]).
 //!
 //! The provider-free helpers (`recv_e`/`recv_s`/`send_s`/`send_payload`/
 //! `recv_payload`/`do_psk`/`recv_to_transport`) are shared verbatim with
@@ -81,7 +81,7 @@ use super::tokens::*;
 use super::transport::Transport;
 use super::WellFormed;
 use crate::curve::{Curve, DhCurve};
-use crate::provider::{CryptoKeys, CryptoProvider};
+use crate::provider::{CryptoKeyProvider, DhProvider};
 
 /// Largest single contiguous write/read a token produces: an encrypted
 /// static key (`PUBLIC_KEY_SIZE + TAG_SIZE`). 128 bytes covers every
@@ -91,7 +91,7 @@ const TOKEN_SCRATCH: usize = 128;
 // ── Synchronous token crypto ─────────────────────────────────────
 //
 // Mirror the provider-calling helpers in `process.rs`, but call the
-// synchronous `CryptoProvider` methods instead of awaiting. The
+// synchronous `DhProvider` methods instead of awaiting. The
 // provider-free helpers are reused from `process.rs` directly.
 
 /// Generate our ephemeral, write its public key, mix it in.
@@ -104,7 +104,7 @@ where
     Cu::PublicKey: AsRef<[u8]>,
     Ci: Cipher,
     H: Hash,
-    CP: CryptoProvider<Cu>,
+    CP: DhProvider<Cu>,
 {
     let e = inner
         .provider
@@ -133,7 +133,7 @@ where
     Cu::SharedSecret: AsRef<[u8]>,
     Ci: Cipher,
     H: Hash,
-    CP: CryptoProvider<Cu>,
+    CP: DhProvider<Cu>,
 {
     let e = inner
         .e
@@ -160,7 +160,7 @@ where
     Cu::SharedSecret: AsRef<[u8]>,
     Ci: Cipher,
     H: Hash,
-    CP: CryptoProvider<Cu>,
+    CP: DhProvider<Cu>,
 {
     let s = inner.s.as_ref().ok_or(HandshakeError::MissingStaticKey)?;
     let re = inner
@@ -184,7 +184,7 @@ where
     Cu::SharedSecret: AsRef<[u8]>,
     Ci: Cipher,
     H: Hash,
-    CP: CryptoProvider<Cu>,
+    CP: DhProvider<Cu>,
 {
     let e = inner
         .e
@@ -211,7 +211,7 @@ where
     Cu::SharedSecret: AsRef<[u8]>,
     Ci: Cipher,
     H: Hash,
-    CP: CryptoProvider<Cu>,
+    CP: DhProvider<Cu>,
 {
     let s = inner.s.as_ref().ok_or(HandshakeError::MissingStaticKey)?;
     let re = inner
@@ -235,7 +235,7 @@ where
     Cu::SharedSecret: AsRef<[u8]>,
     Ci: Cipher,
     H: Hash,
-    CP: CryptoProvider<Cu>,
+    CP: DhProvider<Cu>,
 {
     let e = inner
         .e
@@ -262,7 +262,7 @@ where
     Cu::SharedSecret: AsRef<[u8]>,
     Ci: Cipher,
     H: Hash,
-    CP: CryptoProvider<Cu>,
+    CP: DhProvider<Cu>,
 {
     let s = inner.s.as_ref().ok_or(HandshakeError::MissingStaticKey)?;
     let rs = inner
@@ -289,7 +289,7 @@ where
     Cu::PublicKey: AsRef<[u8]>,
     Ci: Cipher,
     H: Hash,
-    CP: CryptoProvider<Cu>,
+    CP: DhProvider<Cu>,
     Io: Write,
 {
     let mut scratch = [0u8; TOKEN_SCRATCH];
@@ -310,7 +310,7 @@ where
     Cu::PublicKey: AsRef<[u8]>,
     Ci: Cipher,
     H: Hash,
-    CP: CryptoKeys<Cu>,
+    CP: CryptoKeyProvider<Cu>,
     Io: Write,
 {
     let mut scratch = [0u8; TOKEN_SCRATCH];
@@ -330,7 +330,7 @@ where
     Cu::PublicKey: AsRef<[u8]>,
     Ci: Cipher,
     H: Hash,
-    CP: CryptoKeys<Cu>,
+    CP: CryptoKeyProvider<Cu>,
     Io: Read,
 {
     let pk_size = Cu::PUBLIC_KEY_SIZE;
@@ -350,7 +350,7 @@ where
     Cu::PublicKey: AsRef<[u8]>,
     Ci: Cipher,
     H: Hash,
-    CP: CryptoKeys<Cu>,
+    CP: CryptoKeyProvider<Cu>,
     Io: Read,
 {
     let wire_len = if inner.symmetric.has_key() {
@@ -375,7 +375,7 @@ where
     Cu: Curve,
     Ci: Cipher,
     H: Hash,
-    CP: CryptoKeys<Cu>,
+    CP: CryptoKeyProvider<Cu>,
     Io: Write,
 {
     let tag_len = if inner.symmetric.has_key() {
@@ -401,7 +401,7 @@ where
     Cu: Curve,
     Ci: Cipher,
     H: Hash,
-    CP: CryptoKeys<Cu>,
+    CP: CryptoKeyProvider<Cu>,
     Io: Read,
 {
     let tag_len = if inner.symmetric.has_key() {
@@ -424,7 +424,7 @@ where
 pub struct SyncHandshake<N, R, Stage, Msgs, CP, Io>
 where
     N: Protocol,
-    CP: CryptoProvider<N::Curve>,
+    CP: DhProvider<N::Curve>,
 {
     inner: HandshakeInner<N::Curve, N::Cipher, N::Hash, CP>,
     stream: Io,
@@ -435,7 +435,7 @@ where
 pub struct SyncSending<N, R, Tokens, MsgRest, CP, Io>
 where
     N: Protocol,
-    CP: CryptoProvider<N::Curve>,
+    CP: DhProvider<N::Curve>,
 {
     inner: HandshakeInner<N::Curve, N::Cipher, N::Hash, CP>,
     stream: Io,
@@ -446,7 +446,7 @@ where
 pub struct SyncReceiving<N, R, Tokens, MsgRest, CP, Io>
 where
     N: Protocol,
-    CP: CryptoProvider<N::Curve>,
+    CP: DhProvider<N::Curve>,
 {
     inner: HandshakeInner<N::Curve, N::Cipher, N::Hash, CP>,
     stream: Io,
@@ -495,7 +495,7 @@ impl<N, CP, Io>
     >
 where
     N: Protocol,
-    CP: CryptoProvider<N::Curve>,
+    CP: DhProvider<N::Curve>,
 {
     /// Begin a blocking handshake as the **initiator** over `stream`.
     pub fn initiate(provider: CP, prologue: &[u8], stream: Io) -> Self {
@@ -525,7 +525,7 @@ impl<N, CP, Io>
     >
 where
     N: Protocol,
-    CP: CryptoProvider<N::Curve>,
+    CP: DhProvider<N::Curve>,
 {
     /// Begin a blocking handshake as the **responder** over `stream`.
     pub fn respond(provider: CP, prologue: &[u8], stream: Io) -> Self {
@@ -565,7 +565,7 @@ impl<P: WellFormed, Cu: DhCurve, Ci: Cipher, H: Hash> Noise<P, Cu, Ci, H> {
         stream: Io,
     ) -> SyncHandshake<Self, Initiator, P::PreMessages, P::Messages, CP, Io>
     where
-        CP: CryptoProvider<Cu>,
+        CP: DhProvider<Cu>,
     {
         SyncHandshake::initiate(provider, prologue, stream)
     }
@@ -578,7 +578,7 @@ impl<P: WellFormed, Cu: DhCurve, Ci: Cipher, H: Hash> Noise<P, Cu, Ci, H> {
         stream: Io,
     ) -> SyncHandshake<Self, Responder, P::PreMessages, P::Messages, CP, Io>
     where
-        CP: CryptoProvider<Cu>,
+        CP: DhProvider<Cu>,
     {
         SyncHandshake::respond(provider, prologue, stream)
     }
@@ -593,7 +593,7 @@ impl<N, Tokens, Rest, Msgs, CP, Io>
     SyncHandshake<N, Initiator, Cons<Message<ToInitiator, Tokens>, Rest>, Msgs, CP, Io>
 where
     N: Protocol,
-    CP: CryptoProvider<N::Curve>,
+    CP: DhProvider<N::Curve>,
     <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
 {
     /// Provide the remote party's static public key (`<- s`).
@@ -616,7 +616,7 @@ impl<N, Tokens, Rest, Msgs, CP, Io>
     SyncHandshake<N, Responder, Cons<Message<ToInitiator, Tokens>, Rest>, Msgs, CP, Io>
 where
     N: Protocol,
-    CP: CryptoProvider<N::Curve>,
+    CP: DhProvider<N::Curve>,
     <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
 {
     /// Provide our local static key (`<- s`).
@@ -645,7 +645,7 @@ impl<N, Tokens, Rest, Msgs, CP, Io>
     SyncHandshake<N, Initiator, Cons<Message<ToResponder, Tokens>, Rest>, Msgs, CP, Io>
 where
     N: Protocol,
-    CP: CryptoProvider<N::Curve>,
+    CP: DhProvider<N::Curve>,
     <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
 {
     /// Provide our local static key (`-> s`).
@@ -674,7 +674,7 @@ impl<N, Tokens, Rest, Msgs, CP, Io>
     SyncHandshake<N, Responder, Cons<Message<ToResponder, Tokens>, Rest>, Msgs, CP, Io>
 where
     N: Protocol,
-    CP: CryptoProvider<N::Curve>,
+    CP: DhProvider<N::Curve>,
     <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
 {
     /// Provide the remote party's static public key (`-> s`).
@@ -709,7 +709,7 @@ impl<N, R, Next, More, MsgRest, Dir, CP, Io>
 where
     N: Protocol,
     R: Role<SendDir = Dir>,
-    CP: CryptoProvider<N::Curve>,
+    CP: DhProvider<N::Curve>,
     <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
     Io: Write,
 {
@@ -732,7 +732,7 @@ impl<N, R, NextMsg, MoreMsgs, Dir, CP, Io>
 where
     N: Protocol,
     R: Role<SendDir = Dir>,
-    CP: CryptoProvider<N::Curve>,
+    CP: DhProvider<N::Curve>,
     <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
     Io: Write,
 {
@@ -755,7 +755,7 @@ impl<N, R, Dir, CP, Io> SyncHandshake<N, R, Nil, Cons<Message<Dir, Cons<E, Nil>>
 where
     N: Protocol,
     R: Role<SendDir = Dir>,
-    CP: CryptoProvider<N::Curve>,
+    CP: DhProvider<N::Curve>,
     <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
     Io: Write,
 {
@@ -777,7 +777,7 @@ impl<N, R, Tokens, MsgRest, Dir, CP, Io>
 where
     N: Protocol,
     R: Role<SendDir = Dir>,
-    CP: CryptoProvider<N::Curve>,
+    CP: DhProvider<N::Curve>,
     <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
 {
     /// Mix the pre-shared key (`psk`) — writes nothing to the wire.
@@ -800,7 +800,7 @@ impl<N, R, Tokens, MsgRest, Dir, CP, Io>
 where
     N: Protocol,
     R: Role<SendDir = Dir>,
-    CP: CryptoProvider<N::Curve>,
+    CP: DhProvider<N::Curve>,
     <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
     Io: Write,
 {
@@ -825,7 +825,7 @@ impl<N, R, Tokens, Rest, Dir, CP, Io>
 where
     N: Protocol,
     R: Role<RecvDir = Dir>,
-    CP: CryptoProvider<N::Curve>,
+    CP: DhProvider<N::Curve>,
 {
     /// Begin reading the next incoming handshake message.
     pub fn recv(self) -> SyncReceiving<N, R, Tokens, Rest, CP, Io> {
@@ -859,7 +859,7 @@ macro_rules! sync_send_token {
         where
             N: Protocol,
             <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
-            CP: CryptoProvider<N::Curve>,
+            CP: DhProvider<N::Curve>,
             Io: Write,
             $($extra)*
         {
@@ -881,7 +881,7 @@ macro_rules! sync_send_token {
         where
             N: Protocol,
             <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
-            CP: CryptoProvider<N::Curve>,
+            CP: DhProvider<N::Curve>,
             Io: Write,
             $($extra)*
         {
@@ -904,7 +904,7 @@ macro_rules! sync_send_token {
         where
             N: Protocol,
             <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
-            CP: CryptoProvider<N::Curve>,
+            CP: DhProvider<N::Curve>,
             Io: Write,
             $($extra)*
         {
@@ -942,7 +942,7 @@ macro_rules! sync_recv_token {
         where
             N: Protocol,
             <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
-            CP: CryptoProvider<N::Curve>,
+            CP: DhProvider<N::Curve>,
             Io: Read,
             $($extra)*
         {
@@ -964,7 +964,7 @@ macro_rules! sync_recv_token {
         where
             N: Protocol,
             <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
-            CP: CryptoProvider<N::Curve>,
+            CP: DhProvider<N::Curve>,
             Io: Read,
             $($extra)*
         {
@@ -987,7 +987,7 @@ macro_rules! sync_recv_token {
         where
             N: Protocol,
             <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
-            CP: CryptoProvider<N::Curve>,
+            CP: DhProvider<N::Curve>,
             Io: Read,
             $($extra)*
         {
@@ -1025,7 +1025,7 @@ macro_rules! sync_recv_reveal_token {
         where
             N: Protocol,
             <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
-            CP: CryptoProvider<N::Curve>,
+            CP: DhProvider<N::Curve>,
             Io: Read,
             $($extra)*
         {
@@ -1048,7 +1048,7 @@ macro_rules! sync_recv_reveal_token {
         where
             N: Protocol,
             <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
-            CP: CryptoProvider<N::Curve>,
+            CP: DhProvider<N::Curve>,
             Io: Read,
             $($extra)*
         {
@@ -1072,7 +1072,7 @@ macro_rules! sync_recv_reveal_token {
         where
             N: Protocol,
             <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
-            CP: CryptoProvider<N::Curve>,
+            CP: DhProvider<N::Curve>,
             Io: Read,
             $($extra)*
         {

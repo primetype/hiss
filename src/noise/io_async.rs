@@ -46,13 +46,13 @@
 //!
 //! # Asynchronous crypto
 //!
-//! The handshake is generic over [`CryptoProviderAsync`] — the
+//! The handshake is generic over [`DhProviderAsync`] — the
 //! async provider surface — and `.await`s its operations. Both backends
 //! implement it: software (`eccoxide`) resolves immediately, and Apple
 //! **Secure Enclave** offloads its blocking Security-framework calls to
 //! a worker thread (`tokio::task::spawn_blocking`) so the executor never
 //! blocks. A sync-only provider that does not implement
-//! [`CryptoProviderAsync`] is a *compile* error here.
+//! [`DhProviderAsync`] is a *compile* error here.
 //!
 //! # Flushing & cancellation
 //!
@@ -84,7 +84,7 @@ use super::tokens::*;
 use super::transport::Transport;
 use super::WellFormed;
 use crate::curve::{Curve, DhCurve};
-use crate::provider::{CryptoKeys, CryptoProviderAsync};
+use crate::provider::{CryptoKeyProvider, DhProviderAsync};
 
 /// Largest single contiguous write/read a token produces: an encrypted
 /// static key (`PUBLIC_KEY_SIZE + TAG_SIZE`). 128 bytes covers every
@@ -107,7 +107,7 @@ where
     Cu::PublicKey: AsRef<[u8]>,
     Ci: Cipher,
     H: Hash,
-    CP: CryptoProviderAsync<Cu>,
+    CP: DhProviderAsync<Cu>,
     Io: AsyncWrite + Unpin,
 {
     let mut scratch = [0u8; TOKEN_SCRATCH];
@@ -128,7 +128,7 @@ where
     Cu::PublicKey: AsRef<[u8]>,
     Ci: Cipher,
     H: Hash,
-    CP: CryptoKeys<Cu>,
+    CP: CryptoKeyProvider<Cu>,
     Io: AsyncWrite + Unpin,
 {
     let mut scratch = [0u8; TOKEN_SCRATCH];
@@ -148,7 +148,7 @@ where
     Cu::PublicKey: AsRef<[u8]>,
     Ci: Cipher,
     H: Hash,
-    CP: CryptoKeys<Cu>,
+    CP: CryptoKeyProvider<Cu>,
     Io: AsyncRead + Unpin,
 {
     let pk_size = Cu::PUBLIC_KEY_SIZE;
@@ -168,7 +168,7 @@ where
     Cu::PublicKey: AsRef<[u8]>,
     Ci: Cipher,
     H: Hash,
-    CP: CryptoKeys<Cu>,
+    CP: CryptoKeyProvider<Cu>,
     Io: AsyncRead + Unpin,
 {
     let wire_len = if inner.symmetric.has_key() {
@@ -193,7 +193,7 @@ where
     Cu: Curve,
     Ci: Cipher,
     H: Hash,
-    CP: CryptoKeys<Cu>,
+    CP: CryptoKeyProvider<Cu>,
     Io: AsyncWrite + Unpin,
 {
     let tag_len = if inner.symmetric.has_key() {
@@ -219,7 +219,7 @@ where
     Cu: Curve,
     Ci: Cipher,
     H: Hash,
-    CP: CryptoKeys<Cu>,
+    CP: CryptoKeyProvider<Cu>,
     Io: AsyncRead + Unpin,
 {
     let tag_len = if inner.symmetric.has_key() {
@@ -242,7 +242,7 @@ where
 pub struct AsyncHandshake<N, R, Stage, Msgs, CP, Io>
 where
     N: Protocol,
-    CP: CryptoProviderAsync<N::Curve>,
+    CP: DhProviderAsync<N::Curve>,
 {
     inner: HandshakeInner<N::Curve, N::Cipher, N::Hash, CP>,
     stream: Io,
@@ -253,7 +253,7 @@ where
 pub struct AsyncSending<N, R, Tokens, MsgRest, CP, Io>
 where
     N: Protocol,
-    CP: CryptoProviderAsync<N::Curve>,
+    CP: DhProviderAsync<N::Curve>,
 {
     inner: HandshakeInner<N::Curve, N::Cipher, N::Hash, CP>,
     stream: Io,
@@ -264,7 +264,7 @@ where
 pub struct AsyncReceiving<N, R, Tokens, MsgRest, CP, Io>
 where
     N: Protocol,
-    CP: CryptoProviderAsync<N::Curve>,
+    CP: DhProviderAsync<N::Curve>,
 {
     inner: HandshakeInner<N::Curve, N::Cipher, N::Hash, CP>,
     stream: Io,
@@ -313,7 +313,7 @@ impl<N, CP, Io>
     >
 where
     N: Protocol,
-    CP: CryptoProviderAsync<N::Curve>,
+    CP: DhProviderAsync<N::Curve>,
 {
     /// Begin an async handshake as the **initiator** over `stream`.
     pub fn initiate(provider: CP, prologue: &[u8], stream: Io) -> Self {
@@ -343,7 +343,7 @@ impl<N, CP, Io>
     >
 where
     N: Protocol,
-    CP: CryptoProviderAsync<N::Curve>,
+    CP: DhProviderAsync<N::Curve>,
 {
     /// Begin an async handshake as the **responder** over `stream`.
     pub fn respond(provider: CP, prologue: &[u8], stream: Io) -> Self {
@@ -379,7 +379,7 @@ impl<P: WellFormed, Cu: DhCurve, Ci: Cipher, H: Hash> Noise<P, Cu, Ci, H> {
         stream: Io,
     ) -> AsyncHandshake<Self, Initiator, P::PreMessages, P::Messages, CP, Io>
     where
-        CP: CryptoProviderAsync<Cu>,
+        CP: DhProviderAsync<Cu>,
     {
         AsyncHandshake::initiate(provider, prologue, stream)
     }
@@ -392,7 +392,7 @@ impl<P: WellFormed, Cu: DhCurve, Ci: Cipher, H: Hash> Noise<P, Cu, Ci, H> {
         stream: Io,
     ) -> AsyncHandshake<Self, Responder, P::PreMessages, P::Messages, CP, Io>
     where
-        CP: CryptoProviderAsync<Cu>,
+        CP: DhProviderAsync<Cu>,
     {
         AsyncHandshake::respond(provider, prologue, stream)
     }
@@ -407,7 +407,7 @@ impl<N, Tokens, Rest, Msgs, CP, Io>
     AsyncHandshake<N, Initiator, Cons<Message<ToInitiator, Tokens>, Rest>, Msgs, CP, Io>
 where
     N: Protocol,
-    CP: CryptoProviderAsync<N::Curve>,
+    CP: DhProviderAsync<N::Curve>,
     <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
 {
     /// Provide the remote party's static public key (`<- s`).
@@ -430,7 +430,7 @@ impl<N, Tokens, Rest, Msgs, CP, Io>
     AsyncHandshake<N, Responder, Cons<Message<ToInitiator, Tokens>, Rest>, Msgs, CP, Io>
 where
     N: Protocol,
-    CP: CryptoProviderAsync<N::Curve>,
+    CP: DhProviderAsync<N::Curve>,
     <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
 {
     /// Provide our local static key (`<- s`).
@@ -459,7 +459,7 @@ impl<N, Tokens, Rest, Msgs, CP, Io>
     AsyncHandshake<N, Initiator, Cons<Message<ToResponder, Tokens>, Rest>, Msgs, CP, Io>
 where
     N: Protocol,
-    CP: CryptoProviderAsync<N::Curve>,
+    CP: DhProviderAsync<N::Curve>,
     <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
 {
     /// Provide our local static key (`-> s`).
@@ -488,7 +488,7 @@ impl<N, Tokens, Rest, Msgs, CP, Io>
     AsyncHandshake<N, Responder, Cons<Message<ToResponder, Tokens>, Rest>, Msgs, CP, Io>
 where
     N: Protocol,
-    CP: CryptoProviderAsync<N::Curve>,
+    CP: DhProviderAsync<N::Curve>,
     <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
 {
     /// Provide the remote party's static public key (`-> s`).
@@ -524,7 +524,7 @@ impl<N, R, Next, More, MsgRest, Dir, CP, Io>
 where
     N: Protocol,
     R: Role<SendDir = Dir>,
-    CP: CryptoProviderAsync<N::Curve>,
+    CP: DhProviderAsync<N::Curve>,
     <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
     Io: AsyncWrite + Unpin,
 {
@@ -547,7 +547,7 @@ impl<N, R, NextMsg, MoreMsgs, Dir, CP, Io>
 where
     N: Protocol,
     R: Role<SendDir = Dir>,
-    CP: CryptoProviderAsync<N::Curve>,
+    CP: DhProviderAsync<N::Curve>,
     <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
     Io: AsyncWrite + Unpin,
 {
@@ -570,7 +570,7 @@ impl<N, R, Dir, CP, Io> AsyncHandshake<N, R, Nil, Cons<Message<Dir, Cons<E, Nil>
 where
     N: Protocol,
     R: Role<SendDir = Dir>,
-    CP: CryptoProviderAsync<N::Curve>,
+    CP: DhProviderAsync<N::Curve>,
     <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
     Io: AsyncWrite + Unpin,
 {
@@ -592,7 +592,7 @@ impl<N, R, Tokens, MsgRest, Dir, CP, Io>
 where
     N: Protocol,
     R: Role<SendDir = Dir>,
-    CP: CryptoProviderAsync<N::Curve>,
+    CP: DhProviderAsync<N::Curve>,
     <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
 {
     /// Mix the pre-shared key (`psk`) — writes nothing to the wire.
@@ -615,7 +615,7 @@ impl<N, R, Tokens, MsgRest, Dir, CP, Io>
 where
     N: Protocol,
     R: Role<SendDir = Dir>,
-    CP: CryptoProviderAsync<N::Curve>,
+    CP: DhProviderAsync<N::Curve>,
     <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
     Io: AsyncWrite + Unpin,
 {
@@ -640,7 +640,7 @@ impl<N, R, Tokens, Rest, Dir, CP, Io>
 where
     N: Protocol,
     R: Role<RecvDir = Dir>,
-    CP: CryptoProviderAsync<N::Curve>,
+    CP: DhProviderAsync<N::Curve>,
 {
     /// Begin reading the next incoming handshake message.
     pub fn recv(self) -> AsyncReceiving<N, R, Tokens, Rest, CP, Io> {
@@ -674,7 +674,7 @@ macro_rules! async_send_token {
         where
             N: Protocol,
             <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
-            CP: CryptoProviderAsync<N::Curve>,
+            CP: DhProviderAsync<N::Curve>,
             Io: AsyncWrite + Unpin,
             $($extra)*
         {
@@ -696,7 +696,7 @@ macro_rules! async_send_token {
         where
             N: Protocol,
             <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
-            CP: CryptoProviderAsync<N::Curve>,
+            CP: DhProviderAsync<N::Curve>,
             Io: AsyncWrite + Unpin,
             $($extra)*
         {
@@ -719,7 +719,7 @@ macro_rules! async_send_token {
         where
             N: Protocol,
             <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
-            CP: CryptoProviderAsync<N::Curve>,
+            CP: DhProviderAsync<N::Curve>,
             Io: AsyncWrite + Unpin,
             $($extra)*
         {
@@ -757,7 +757,7 @@ macro_rules! async_recv_token {
         where
             N: Protocol,
             <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
-            CP: CryptoProviderAsync<N::Curve>,
+            CP: DhProviderAsync<N::Curve>,
             Io: AsyncRead + Unpin,
             $($extra)*
         {
@@ -779,7 +779,7 @@ macro_rules! async_recv_token {
         where
             N: Protocol,
             <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
-            CP: CryptoProviderAsync<N::Curve>,
+            CP: DhProviderAsync<N::Curve>,
             Io: AsyncRead + Unpin,
             $($extra)*
         {
@@ -802,7 +802,7 @@ macro_rules! async_recv_token {
         where
             N: Protocol,
             <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
-            CP: CryptoProviderAsync<N::Curve>,
+            CP: DhProviderAsync<N::Curve>,
             Io: AsyncRead + Unpin,
             $($extra)*
         {
@@ -840,7 +840,7 @@ macro_rules! async_recv_reveal_token {
         where
             N: Protocol,
             <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
-            CP: CryptoProviderAsync<N::Curve>,
+            CP: DhProviderAsync<N::Curve>,
             Io: AsyncRead + Unpin,
             $($extra)*
         {
@@ -863,7 +863,7 @@ macro_rules! async_recv_reveal_token {
         where
             N: Protocol,
             <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
-            CP: CryptoProviderAsync<N::Curve>,
+            CP: DhProviderAsync<N::Curve>,
             Io: AsyncRead + Unpin,
             $($extra)*
         {
@@ -887,7 +887,7 @@ macro_rules! async_recv_reveal_token {
         where
             N: Protocol,
             <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
-            CP: CryptoProviderAsync<N::Curve>,
+            CP: DhProviderAsync<N::Curve>,
             Io: AsyncRead + Unpin,
             $($extra)*
         {
@@ -1060,7 +1060,7 @@ mod tests {
     use super::*;
     use crate::provider::EphemeralOnly;
     use rand::{SeedableRng, rngs::StdRng};
-    use crate::provider::{CryptoProviderAsync, ProviderExt};
+    use crate::provider::{CryptoKeyProviderAsync, ProviderExt};
     use crate::noise::{ChaChaPoly, IKpsk1, Initiator, K, N, P256, Responder};
     use crate::noise_message_size;
     use crate::psk::Psk;
@@ -1203,7 +1203,7 @@ mod tests {
         use crate::provider::apple::AppleSecureEnclave;
 
         let mut provider = AppleSecureEnclave::new("uk.co.example.hiss-test");
-        let recipient_static = CryptoProviderAsync::<P256>::generate_ephemeral_key_async(&mut provider)
+        let recipient_static = CryptoKeyProviderAsync::<P256>::generate_ephemeral_key_async(&mut provider)
             .await
             .unwrap();
         let recipient_pub = provider.public(&recipient_static).unwrap();

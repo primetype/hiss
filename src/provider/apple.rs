@@ -32,7 +32,8 @@ use crate::curve::ed25519::{
 use crate::curve::p256::{Error, P256, P256Signature, P256r1PublicKey};
 use crate::noise::seal::{SEALED_SIZE, open_32, seal_32};
 use crate::provider::{
-    CryptoKeys, CryptoProvider, CryptoProviderAsync, SigningProvider, SigningProviderAsync,
+    CryptoKeyProvider, CryptoKeyProviderAsync, DhProvider, DhProviderAsync, SigningProvider,
+    SigningProviderAsync,
 };
 use core_foundation::{base::TCFType as _, data::CFData, dictionary::CFDictionary};
 use security_framework::{
@@ -347,7 +348,7 @@ pub struct AppleSecureEnclave {
 pub enum SeedError {
     /// The Secure Enclave P-256 identity key (the seal recipient) is
     /// absent. Establish it first via
-    /// [`generate_static_key`](CryptoProvider::generate_static_key).
+    /// [`generate_static_key`](CryptoKeyProvider::generate_static_key).
     #[error("Secure Enclave P-256 identity key {label:?} not found (establish it before sealing the Ed25519 seed)")]
     IdentityKeyMissing { label: String },
 
@@ -427,7 +428,7 @@ impl AppleSecureEnclave {
     ///
     /// Requires the SE P-256 identity key (the seal recipient) to already
     /// exist — establish it via
-    /// [`generate_static_key`](CryptoProvider::generate_static_key).
+    /// [`generate_static_key`](CryptoKeyProvider::generate_static_key).
     pub async fn store_seed(&self, seed: &[u8; 32]) -> Result<(), SeedError> {
         // Look up the SE identity key and extract its public key (the
         // seal recipient) on the blocking pool — the lookup is a blocking
@@ -525,9 +526,9 @@ impl AppleSecureEnclave {
 /// dedicated blocking thread so the executor keeps making progress and
 /// the future genuinely suspends until the work completes.
 ///
-/// Because this offloads, the [`CryptoProviderAsync`] futures here resolve
+/// Because this offloads, the [`DhProviderAsync`] futures here resolve
 /// on a worker thread rather than the first poll. The synchronous
-/// [`CryptoProvider`] surface runs the
+/// [`DhProvider`] surface runs the
 /// same blocking calls directly on the caller's thread, so
 /// `AppleSecureEnclave` is usable with the blocking `std::io` handshake
 /// too.
@@ -557,7 +558,13 @@ where
         .map_err(|e| SeedError::Keychain(format!("seed Keychain task failed to join: {e}")))?
 }
 
-impl CryptoKeys<P256> for AppleSecureEnclave {
+// Apple's Security-framework operations are synchronous, blocking C
+// calls — so the *synchronous* surface is simply those inherent ops,
+// run directly on the calling thread. (This is the right behaviour in a
+// blocking context; the async impls below offload the same calls.) This
+// is what makes Secure Enclave keys usable with the blocking `std::io`
+// handshake, exactly as Apple's libraries expose them.
+impl CryptoKeyProvider<P256> for AppleSecureEnclave {
     type Error = Error;
     type PrivateKey = P256r1PrivateKey;
 
@@ -566,9 +573,17 @@ impl CryptoKeys<P256> for AppleSecureEnclave {
         // no prompt — so it stays inline (the trait declares it sync).
         key.public()
     }
+
+    fn generate_static_key(&mut self) -> Result<Self::PrivateKey, Self::Error> {
+        P256r1PrivateKey::generate_secure_enclave(&self.p256_label())
+    }
+
+    fn generate_ephemeral_key(&mut self) -> Result<Self::PrivateKey, Self::Error> {
+        P256r1PrivateKey::generate_ephemeral()
+    }
 }
 
-impl CryptoProviderAsync<P256> for AppleSecureEnclave {
+impl CryptoKeyProviderAsync<P256> for AppleSecureEnclave {
     async fn generate_static_key_async(&mut self) -> Result<Self::PrivateKey, Self::Error> {
         let label = self.p256_label();
         offload(move || P256r1PrivateKey::generate_secure_enclave(&label)).await
@@ -577,7 +592,19 @@ impl CryptoProviderAsync<P256> for AppleSecureEnclave {
     async fn generate_ephemeral_key_async(&mut self) -> Result<Self::PrivateKey, Self::Error> {
         offload(P256r1PrivateKey::generate_ephemeral).await
     }
+}
 
+impl DhProvider<P256> for AppleSecureEnclave {
+    fn dh(
+        &self,
+        key: &Self::PrivateKey,
+        peer: &P256r1PublicKey,
+    ) -> Result<SharedSecret, Self::Error> {
+        key.dh(peer)
+    }
+}
+
+impl DhProviderAsync<P256> for AppleSecureEnclave {
     async fn dh_async(
         &self,
         key: &Self::PrivateKey,
@@ -586,30 +613,6 @@ impl CryptoProviderAsync<P256> for AppleSecureEnclave {
         let key = key.clone();
         let peer = *peer;
         offload(move || key.dh(&peer)).await
-    }
-}
-
-// Apple's Security-framework operations are synchronous, blocking C
-// calls — so the *synchronous* surface is simply those inherent ops,
-// run directly on the calling thread. (This is the right behaviour in a
-// blocking context; the async impl above offloads the same calls.) This
-// is what makes Secure Enclave keys usable with the blocking `std::io`
-// handshake, exactly as Apple's libraries expose them.
-impl CryptoProvider<P256> for AppleSecureEnclave {
-    fn generate_static_key(&mut self) -> Result<Self::PrivateKey, Self::Error> {
-        P256r1PrivateKey::generate_secure_enclave(&self.p256_label())
-    }
-
-    fn generate_ephemeral_key(&mut self) -> Result<Self::PrivateKey, Self::Error> {
-        P256r1PrivateKey::generate_ephemeral()
-    }
-
-    fn dh(
-        &self,
-        key: &Self::PrivateKey,
-        peer: &P256r1PublicKey,
-    ) -> Result<SharedSecret, Self::Error> {
-        key.dh(peer)
     }
 }
 
@@ -662,16 +665,14 @@ fn apple_ed25519_generate() -> Result<SoftwareEd25519PrivateKey, crate::curve::e
     Ok(SoftwareEd25519PrivateKey::from_seed(seed))
 }
 
-impl CryptoKeys<Ed25519> for AppleSecureEnclave {
+impl CryptoKeyProvider<Ed25519> for AppleSecureEnclave {
     type Error = crate::curve::ed25519::Error;
     type PrivateKey = SoftwareEd25519PrivateKey;
 
     fn public_key(&self, key: &Self::PrivateKey) -> Result<Ed25519PublicKey, Self::Error> {
         Ok(key.public_key())
     }
-}
 
-impl CryptoProvider<Ed25519> for AppleSecureEnclave {
     fn generate_static_key(&mut self) -> Result<Self::PrivateKey, Self::Error> {
         apple_ed25519_generate()
     }
@@ -679,7 +680,19 @@ impl CryptoProvider<Ed25519> for AppleSecureEnclave {
     fn generate_ephemeral_key(&mut self) -> Result<Self::PrivateKey, Self::Error> {
         apple_ed25519_generate()
     }
+}
 
+impl CryptoKeyProviderAsync<Ed25519> for AppleSecureEnclave {
+    async fn generate_static_key_async(&mut self) -> Result<Self::PrivateKey, Self::Error> {
+        apple_ed25519_generate()
+    }
+
+    async fn generate_ephemeral_key_async(&mut self) -> Result<Self::PrivateKey, Self::Error> {
+        apple_ed25519_generate()
+    }
+}
+
+impl DhProvider<Ed25519> for AppleSecureEnclave {
     fn dh(
         &self,
         key: &Self::PrivateKey,
@@ -689,15 +702,7 @@ impl CryptoProvider<Ed25519> for AppleSecureEnclave {
     }
 }
 
-impl CryptoProviderAsync<Ed25519> for AppleSecureEnclave {
-    async fn generate_static_key_async(&mut self) -> Result<Self::PrivateKey, Self::Error> {
-        apple_ed25519_generate()
-    }
-
-    async fn generate_ephemeral_key_async(&mut self) -> Result<Self::PrivateKey, Self::Error> {
-        apple_ed25519_generate()
-    }
-
+impl DhProviderAsync<Ed25519> for AppleSecureEnclave {
     async fn dh_async(
         &self,
         key: &Self::PrivateKey,
@@ -777,7 +782,7 @@ mod tests {
         assert_eq!(apple_dh, our_dh);
     }
 
-    /// Drive the async `CryptoProviderAsync` trait methods (which offload to
+    /// Drive the async provider trait methods (which offload to
     /// the Tokio blocking pool) end-to-end under a real runtime: generate
     /// two ephemeral keys, agree, and confirm the DH matches both ways.
     #[tokio::test]
@@ -786,19 +791,19 @@ mod tests {
 
         // Fully-qualified P-256: the provider also implements the trait
         // for Ed25519, so the curve can't be inferred from the call alone.
-        let a = CryptoProviderAsync::<P256>::generate_ephemeral_key_async(&mut provider)
+        let a = CryptoKeyProviderAsync::<P256>::generate_ephemeral_key_async(&mut provider)
             .await
             .unwrap();
-        let b = CryptoProviderAsync::<P256>::generate_ephemeral_key_async(&mut provider)
+        let b = CryptoKeyProviderAsync::<P256>::generate_ephemeral_key_async(&mut provider)
             .await
             .unwrap();
         let a_pub = provider.public(&a).unwrap();
         let b_pub = provider.public(&b).unwrap();
 
-        let ab = CryptoProviderAsync::<P256>::dh_async(&provider, &a, &b_pub)
+        let ab = DhProviderAsync::<P256>::dh_async(&provider, &a, &b_pub)
             .await
             .unwrap();
-        let ba = CryptoProviderAsync::<P256>::dh_async(&provider, &b, &a_pub)
+        let ba = DhProviderAsync::<P256>::dh_async(&provider, &b, &a_pub)
             .await
             .unwrap();
         assert_eq!(ab, ba);

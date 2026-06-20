@@ -70,12 +70,12 @@ impl CryptoRng for ScriptedRng {}
 // ── Fixed-key minting (P-256) ────────────────────────────────────
 
 use hiss::noise::{Curve, P256};
-use hiss::provider::{CryptoKeys, EphemeralOnly, ProviderExt};
+use hiss::provider::{CryptoKeyProvider, EphemeralOnly, ProviderExt};
 
 /// Mint a P-256 private key from fixed scalar bytes via the public
 /// provider API (the scripted block is a valid scalar, accepted on the
 /// first rejection-sampling draw).
-pub fn private_key(seed: &[u8; 32]) -> <EphemeralOnly<ScriptedRng> as CryptoKeys<P256>>::PrivateKey {
+pub fn private_key(seed: &[u8; 32]) -> <EphemeralOnly<ScriptedRng> as CryptoKeyProvider<P256>>::PrivateKey {
     let mut p = EphemeralOnly::new(ScriptedRng::new(&[seed]));
     p.generate::<P256>().unwrap()
 }

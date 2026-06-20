@@ -28,7 +28,7 @@ use super::role::{Initiator, Responder, Role};
 use super::tokens::*;
 use super::transport::Transport;
 use crate::curve::{Curve, DhCurve};
-use crate::provider::{CryptoKeys, CryptoProviderAsync};
+use crate::provider::{CryptoKeyProvider, DhProviderAsync};
 use std::marker::PhantomData;
 
 // ═══════════════════════════════════════════════════════════════
@@ -54,7 +54,7 @@ where
     Cu: Curve,
     Ci: Cipher,
     H: Hash,
-    CP: CryptoKeys<Cu>,
+    CP: CryptoKeyProvider<Cu>,
 {
     let tag_len = if inner.symmetric.has_key() {
         Ci::TAG_SIZE
@@ -78,7 +78,7 @@ where
     Cu: Curve,
     Ci: Cipher,
     H: Hash,
-    CP: CryptoKeys<Cu>,
+    CP: CryptoKeyProvider<Cu>,
 {
     let remaining_len = buffer.remaining().len();
     let tag = buffer.read(remaining_len)?;
@@ -96,7 +96,7 @@ fn send_to_handshake_state<'a, N, R, MsgRest, CP>(
 ) -> (&'a [u8], HandshakeState<N, R, Nil, MsgRest, CP>)
 where
     N: Protocol,
-    CP: CryptoProviderAsync<N::Curve>,
+    CP: DhProviderAsync<N::Curve>,
 {
     (
         buffer.finish(),
@@ -114,7 +114,7 @@ fn send_to_transport<'a, N, R, CP>(
 where
     N: Protocol,
     R: Role,
-    CP: CryptoProviderAsync<N::Curve>,
+    CP: DhProviderAsync<N::Curve>,
 {
     let session_id = inner.symmetric.handshake_hash().to_vec().into();
     let local_e = inner.e_pub;
@@ -133,7 +133,7 @@ fn recv_to_handshake_state<N, R, MsgRest, CP>(
 ) -> HandshakeState<N, R, Nil, MsgRest, CP>
 where
     N: Protocol,
-    CP: CryptoProviderAsync<N::Curve>,
+    CP: DhProviderAsync<N::Curve>,
 {
     HandshakeState {
         inner,
@@ -147,7 +147,7 @@ pub(crate) fn recv_to_transport<N, R, CP>(
 where
     N: Protocol,
     R: Role,
-    CP: CryptoKeys<N::Curve>,
+    CP: CryptoKeyProvider<N::Curve>,
 {
     let session_id = inner.symmetric.handshake_hash().to_vec().into();
     let local_e = inner.e_pub;
@@ -173,7 +173,7 @@ where
     Cu::PublicKey: AsRef<[u8]>,
     Ci: Cipher,
     H: Hash,
-    CP: CryptoProviderAsync<Cu>,
+    CP: DhProviderAsync<Cu>,
 {
     let e = inner
         .provider
@@ -203,7 +203,7 @@ where
     Cu::PublicKey: AsRef<[u8]>,
     Ci: Cipher,
     H: Hash,
-    CP: CryptoKeys<Cu>,
+    CP: CryptoKeyProvider<Cu>,
 {
     let bytes = buffer.read(Cu::PUBLIC_KEY_SIZE)?;
     inner.symmetric.mix_hash(bytes);
@@ -227,7 +227,7 @@ where
     Cu::PublicKey: AsRef<[u8]>,
     Ci: Cipher,
     H: Hash,
-    CP: CryptoKeys<Cu>,
+    CP: CryptoKeyProvider<Cu>,
 {
     let s_pub = inner
         .provider
@@ -254,7 +254,7 @@ where
     Cu::PublicKey: AsRef<[u8]>,
     Ci: Cipher,
     H: Hash,
-    CP: CryptoKeys<Cu>,
+    CP: CryptoKeyProvider<Cu>,
 {
     let wire_len = if inner.symmetric.has_key() {
         Cu::PUBLIC_KEY_SIZE + Ci::TAG_SIZE
@@ -280,7 +280,7 @@ where
     Cu::SharedSecret: AsRef<[u8]>,
     Ci: Cipher,
     H: Hash,
-    CP: CryptoProviderAsync<Cu>,
+    CP: DhProviderAsync<Cu>,
 {
     let e = inner
         .e
@@ -307,7 +307,7 @@ where
     Cu::SharedSecret: AsRef<[u8]>,
     Ci: Cipher,
     H: Hash,
-    CP: CryptoProviderAsync<Cu>,
+    CP: DhProviderAsync<Cu>,
 {
     let e = inner
         .e
@@ -334,7 +334,7 @@ where
     Cu::SharedSecret: AsRef<[u8]>,
     Ci: Cipher,
     H: Hash,
-    CP: CryptoProviderAsync<Cu>,
+    CP: DhProviderAsync<Cu>,
 {
     let s = inner.s.as_ref().ok_or(HandshakeError::MissingStaticKey)?;
     let re = inner
@@ -358,7 +358,7 @@ where
     Cu::SharedSecret: AsRef<[u8]>,
     Ci: Cipher,
     H: Hash,
-    CP: CryptoProviderAsync<Cu>,
+    CP: DhProviderAsync<Cu>,
 {
     let s = inner.s.as_ref().ok_or(HandshakeError::MissingStaticKey)?;
     let re = inner
@@ -382,7 +382,7 @@ where
     Cu::SharedSecret: AsRef<[u8]>,
     Ci: Cipher,
     H: Hash,
-    CP: CryptoProviderAsync<Cu>,
+    CP: DhProviderAsync<Cu>,
 {
     let e = inner
         .e
@@ -409,7 +409,7 @@ where
     Cu::SharedSecret: AsRef<[u8]>,
     Ci: Cipher,
     H: Hash,
-    CP: CryptoProviderAsync<Cu>,
+    CP: DhProviderAsync<Cu>,
 {
     let s = inner.s.as_ref().ok_or(HandshakeError::MissingStaticKey)?;
     let rs = inner
@@ -433,7 +433,7 @@ where
     Cu: Curve,
     Ci: Cipher,
     H: Hash,
-    CP: CryptoKeys<Cu>,
+    CP: CryptoKeyProvider<Cu>,
 {
     inner.symmetric.mix_key_and_hash(psk.as_bytes());
     Ok(())
@@ -461,7 +461,7 @@ macro_rules! send_token {
         where
             N: Protocol,
             <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
-            CP: CryptoProviderAsync<N::Curve>,
+            CP: DhProviderAsync<N::Curve>,
             $($extra)*
         {
             pub async fn $method(
@@ -480,7 +480,7 @@ macro_rules! send_token {
         where
             N: Protocol,
             <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
-            CP: CryptoProviderAsync<N::Curve>,
+            CP: DhProviderAsync<N::Curve>,
             $($extra)*
         {
             pub async fn $method(
@@ -500,7 +500,7 @@ macro_rules! send_token {
         where
             N: Protocol,
             <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
-            CP: CryptoProviderAsync<N::Curve>,
+            CP: DhProviderAsync<N::Curve>,
             $($extra)*
         {
             pub async fn $method(
@@ -535,7 +535,7 @@ macro_rules! recv_token {
         where
             N: Protocol,
             <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
-            CP: CryptoProviderAsync<N::Curve>,
+            CP: DhProviderAsync<N::Curve>,
             $($extra)*
         {
             pub async fn $method(
@@ -554,7 +554,7 @@ macro_rules! recv_token {
         where
             N: Protocol,
             <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
-            CP: CryptoProviderAsync<N::Curve>,
+            CP: DhProviderAsync<N::Curve>,
             $($extra)*
         {
             pub async fn $method(
@@ -574,7 +574,7 @@ macro_rules! recv_token {
         where
             N: Protocol,
             <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
-            CP: CryptoProviderAsync<N::Curve>,
+            CP: DhProviderAsync<N::Curve>,
             $($extra)*
         {
             pub async fn $method(
@@ -613,7 +613,7 @@ macro_rules! recv_reveal_token {
         where
             N: Protocol,
             <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
-            CP: CryptoProviderAsync<N::Curve>,
+            CP: DhProviderAsync<N::Curve>,
             $($extra)*
         {
             pub async fn $method(
@@ -632,7 +632,7 @@ macro_rules! recv_reveal_token {
         where
             N: Protocol,
             <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
-            CP: CryptoProviderAsync<N::Curve>,
+            CP: DhProviderAsync<N::Curve>,
             $($extra)*
         {
             pub async fn $method(
@@ -653,7 +653,7 @@ macro_rules! recv_reveal_token {
         where
             N: Protocol,
             <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
-            CP: CryptoProviderAsync<N::Curve>,
+            CP: DhProviderAsync<N::Curve>,
             $($extra)*
         {
             pub async fn $method(
@@ -843,7 +843,7 @@ where
     N: Protocol,
     R: Role<SendDir = Dir>,
     <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
-    CP: CryptoProviderAsync<N::Curve>,
+    CP: DhProviderAsync<N::Curve>,
     Cons<E, Cons<Next, More>>:
         WireSize<N::Curve, N::Cipher, true> + WireSize<N::Curve, N::Cipher, false>,
 {
@@ -873,7 +873,7 @@ where
     N: Protocol,
     R: Role<SendDir = Dir>,
     <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
-    CP: CryptoProviderAsync<N::Curve>,
+    CP: DhProviderAsync<N::Curve>,
     Cons<E, Nil>: WireSize<N::Curve, N::Cipher, true> + WireSize<N::Curve, N::Cipher, false>,
 {
     /// Send a single-`E` message (`-> e`) when more messages follow.
@@ -907,7 +907,7 @@ where
     N: Protocol,
     R: Role<SendDir = Dir>,
     <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
-    CP: CryptoProviderAsync<N::Curve>,
+    CP: DhProviderAsync<N::Curve>,
     Cons<E, Nil>: WireSize<N::Curve, N::Cipher, true> + WireSize<N::Curve, N::Cipher, false>,
 {
     /// Send a single-`E` message (`-> e`) as the final handshake message.
@@ -930,7 +930,7 @@ where
     N: Protocol,
     R: Role<SendDir = Dir>,
     <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
-    CP: CryptoProviderAsync<N::Curve>,
+    CP: DhProviderAsync<N::Curve>,
     Cons<Psk, Tokens>: WireSize<N::Curve, N::Cipher, true> + WireSize<N::Curve, N::Cipher, false>,
 {
     /// Start a send message with the `Psk` token.
@@ -960,7 +960,7 @@ where
     N: Protocol,
     R: Role<SendDir = Dir>,
     <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
-    CP: CryptoProviderAsync<N::Curve>,
+    CP: DhProviderAsync<N::Curve>,
     Cons<S, Tokens>: WireSize<N::Curve, N::Cipher, true> + WireSize<N::Curve, N::Cipher, false>,
 {
     /// Start a send message with the `S` token.

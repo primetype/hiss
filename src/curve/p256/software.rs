@@ -110,7 +110,7 @@ impl P256r1PrivateKey {
     /// nonce-reuse / weak-RNG failure modes of randomized ECDSA. The `s`
     /// value is low-S normalized, so each signature has one canonical
     /// encoding. Returns `Result` only for parity with the
-    /// [`CryptoProviderAsync`](crate::provider::CryptoProviderAsync)
+    /// [`DhProviderAsync`](crate::provider::DhProviderAsync)
     /// trait; signing does not fail in practice.
     pub fn sign(&self, data: impl AsRef<[u8]>) -> Result<P256Signature, Error> {
         Ok(super::ecdsa_sign_rfc6979(&self.0, data.as_ref()))
@@ -175,7 +175,9 @@ impl Drop for P256r1PrivateKey {
 mod tests {
     use super::*;
     use crate::curve::p256::P256;
-    use crate::provider::{CryptoProviderAsync, EphemeralOnly, ProviderExt, SigningProviderAsync};
+    use crate::provider::{
+        CryptoKeyProviderAsync, DhProviderAsync, EphemeralOnly, ProviderExt, SigningProviderAsync,
+    };
     use rand::{SeedableRng, rngs::StdRng};
     use proptest::prelude::*;
 
@@ -241,17 +243,17 @@ mod tests {
     }
 
     /// Exercises the [`EphemeralOnly`] through the
-    /// [`CryptoProviderAsync`] trait — sign/verify and ECDH.
+    /// [`DhProviderAsync`] trait — sign/verify and ECDH.
     #[tokio::test]
     async fn provider_sign_and_dh() {
         let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
 
-        let sk1 = CryptoProviderAsync::<P256>::generate_static_key_async(&mut provider)
+        let sk1 = CryptoKeyProviderAsync::<P256>::generate_static_key_async(&mut provider)
             .await
             .unwrap();
         let pk1 = provider.public(&sk1).unwrap();
 
-        let sk2 = CryptoProviderAsync::<P256>::generate_ephemeral_key_async(&mut provider)
+        let sk2 = CryptoKeyProviderAsync::<P256>::generate_ephemeral_key_async(&mut provider)
             .await
             .unwrap();
         let pk2 = provider.public(&sk2).unwrap();
@@ -265,10 +267,10 @@ mod tests {
         assert!(!pk2.verify(sig, MSG));
 
         // DH symmetry
-        let ss1 = CryptoProviderAsync::<P256>::dh_async(&provider, &sk1, &pk2)
+        let ss1 = DhProviderAsync::<P256>::dh_async(&provider, &sk1, &pk2)
             .await
             .unwrap();
-        let ss2 = CryptoProviderAsync::<P256>::dh_async(&provider, &sk2, &pk1)
+        let ss2 = DhProviderAsync::<P256>::dh_async(&provider, &sk2, &pk1)
             .await
             .unwrap();
         assert_eq!(ss1, ss2);
