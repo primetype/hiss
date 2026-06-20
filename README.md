@@ -22,12 +22,16 @@ Secure Enclave today), and are wiped on drop.
   by the type system rather than at runtime.
 - **A small, deliberate crypto core.** Production cryptography is `cryptoxide` +
   `eccoxide` only — no sprawling dependency surface.
-- **Pluggable crypto providers.** A `CryptoProvider` (sync) / `CryptoProviderAsync`
-  (async) trait family lets the same handshake run against a software backend or a
-  hardware-backed one (Apple Secure Enclave). See [Providers](#providers).
-- **Both a buffer core and streaming I/O adapters.** Drive the handshake with explicit
-  buffers, or hand it a stream: a blocking `std::io` adapter (always available) and an
-  optional `tokio::io` adapter behind the `async-io` feature.
+- **Pluggable crypto providers.** A trait family — `CryptoKeyProvider<C>` (keygen) at the
+  base, with `DhProvider<C>` adding the ECDH the handshake actually consumes and
+  `SigningProvider` for identity signing, each paired with an `…Async` refinement — lets
+  the same handshake run against a software backend or a hardware-backed one (Apple Secure
+  Enclave). See [Providers](#providers).
+- **Two streaming drivers.** A blocking `std::io` driver (`SyncHandshake`, always
+  available) and an optional `tokio::io` driver (`AsyncHandshake`, behind the `async-io`
+  feature). The buffer / no-syscall / one-shot case is simply passing an in-memory `Io` —
+  a `Cursor`, `Vec`, or `&mut [u8]` — to the synchronous driver; there is no separate
+  buffer API.
 
 ## Supported suite
 
@@ -36,13 +40,13 @@ This `0.1` targets one cipher suite and a fixed set of patterns:
 | Axis    | Supported |
 |---------|-----------|
 | Patterns | `N`, `K`, `Kpsk0`, `IKpsk1`, `IK`, `NK`, `IX`, `XK`, `NN`, `XX` |
-| Curve   | NIST **P-256** (secp256r1) |
+| Curves  | NIST **P-256** (secp256r1) and **X25519** (Curve25519, the Noise `25519` curve) |
 | Cipher  | **ChaCha20-Poly1305** |
 | Hash    | **BLAKE2b** |
 
 Conformance is anchored against [`snow`](https://crates.io/crates/snow) via an interop
-test suite. Additional patterns, curves (Curve25519), hashes, and ciphers (AES-GCM) are
-planned for `0.2+`.
+test suite. All ten fundamental patterns are present; additional hashes and ciphers
+(AES-GCM) are planned for `0.2+`.
 
 The `fallback` modifier — and the compound protocols it enables (e.g. Noise Pipes /
 0-RTT-with-retry) — is an **intentional non-goal**, not a missing feature. It is optional
@@ -52,15 +56,16 @@ unnecessary for the targeted use cases; `snow` omits it for the same reason.
 ## Quickstart
 
 The `N` pattern lets an initiator seal a message to a recipient's known static public
-key. The streaming `SyncHandshake` adapter owns any `std::io::Read`/`Write` (a TCP
+key. The streaming `SyncHandshake` driver owns any `std::io::Read`/`Write` (a TCP
 socket, an in-memory buffer, …) and advances the handshake over it.
 
 ```rust
 use hiss::provider::{EphemeralOnly, ProviderExt};
-use hiss::noise::{Blake2b, ChaChaPoly, Initiator, N, Noise, P256, Responder, SyncHandshake};
+use hiss::noise::{Blake2b, ChaChaPoly, Initiator, Noise, P256, Responder, SyncHandshake, pattern};
 
-// Spell out the protocol once as a type alias.
-type Seal = Noise<N, P256, ChaChaPoly, Blake2b>;
+// Spell out the protocol once as a type alias. (The ready-made
+// `noise::N` alias is exactly this; here we name the suite in full.)
+type Seal = Noise<pattern::N, P256, ChaChaPoly, Blake2b>;
 
 // Each party owns a software provider holding its own CSPRNG — `rand::rng()`
 // here; pass a seeded RNG instead for deterministic tests. The recipient's
@@ -143,14 +148,14 @@ identity/attestation layer **around** the channel, not inside it.
 | Windows CNG / Azure / GCP KMS | ❌ (no raw ECDH) | ✅ | identity role only |
 | PKCS#11 HSM, YubiKey, Ledger | ❌ (no raw ECDH export) | — | out of scope |
 
-The implementation of a provider is selected through the `CryptoProvider` /
-`CryptoProviderAsync` traits, so additional DH-capable backends can be added without
-touching the Noise core.
+A DH-capable backend is selected through the `DhProvider` / `DhProviderAsync` traits
+(both refining the `CryptoKeyProvider` keygen base), so additional backends can be added
+without touching the Noise core.
 
 ## Platforms
 
 - **All platforms:** the software backend (`EphemeralOnly`) and the blocking
-  `std::io` handshake adapter.
+  `std::io` handshake driver.
 - **macOS / iOS:** the Apple Secure Enclave backend. Its blocking Security-framework calls
   are offloaded to a Tokio blocking thread pool for the async provider path.
 
@@ -158,7 +163,7 @@ touching the Noise core.
 
 | Feature | Default | Effect |
 |---------|:-------:|--------|
-| `async-io` | no | Adds the `tokio::io` streaming handshake adapter (`AsyncHandshake`), pulling in `tokio` with its I/O extension traits. The blocking `std::io` adapter needs no feature and no runtime. |
+| `async-io` | no | Adds the `tokio::io` streaming handshake driver (`AsyncHandshake`), pulling in `tokio` with its I/O extension traits. The blocking `std::io` driver needs no feature and no runtime. |
 
 ## Security
 
