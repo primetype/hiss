@@ -228,7 +228,8 @@ pub mod pattern;
 #[allow(clippy::type_complexity)]
 pub mod process;
 pub mod role;
-pub mod seal;
+#[cfg(any(target_os = "macos", target_os = "ios", test))]
+pub(crate) mod seal;
 pub mod session_id;
 pub mod symmetric_state;
 pub mod tokens;

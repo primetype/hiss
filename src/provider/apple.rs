@@ -359,8 +359,11 @@ pub enum SeedError {
     P256(#[from] Error),
 
     /// Sealing or opening the seed via the Noise-N envelope failed.
-    #[error(transparent)]
-    Seal(#[from] crate::noise::seal::SealError),
+    ///
+    /// The internal `SealError` is rendered to a message at this
+    /// boundary because the seal primitive is crate-private.
+    #[error("Noise-N seed envelope operation failed: {0}")]
+    Seal(String),
 
     /// A Keychain item operation (store / query / delete) failed.
     #[error("Ed25519 seed Keychain operation failed: {0}")]
@@ -448,7 +451,9 @@ impl AppleSecureEnclave {
 
         // Seal the seed to the SE public key (the DH is itself offloaded
         // by the provider inside `seal_32`).
-        let sealed = seal_32(self.clone(), &se_public, seed).await?;
+        let sealed = seal_32(self.clone(), &se_public, seed)
+            .await
+            .map_err(|e| SeedError::Seal(e.to_string()))?;
 
         // Overwrite any prior item, then store the sealed envelope — both
         // are blocking Keychain writes, so run them on the blocking pool.
@@ -503,7 +508,9 @@ impl AppleSecureEnclave {
             )
             .await?;
 
-        let opened = open_32(self.clone(), se_private, &sealed).await?;
+        let opened = open_32(self.clone(), se_private, &sealed)
+            .await
+            .map_err(|e| SeedError::Seal(e.to_string()))?;
         Ok(Some(opened))
     }
 

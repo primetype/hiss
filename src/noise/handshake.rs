@@ -109,6 +109,50 @@ where
     pub(crate) provider: CP,
 }
 
+impl<Cu, Ci, H, CP> HandshakeInner<Cu, Ci, H, CP>
+where
+    Cu: Curve,
+    Ci: Cipher,
+    H: Hash,
+    CP: CryptoKeyProvider<Cu>,
+{
+    /// Build the runtime handshake state for protocol `N` and the given
+    /// provider, mixing the prologue into the handshake hash.
+    ///
+    /// This is the single source of the protocol-name + `mix_hash`
+    /// initialisation shared by every driver (`SyncHandshake`,
+    /// `AsyncHandshake`, and the internal seal helpers). The protocol
+    /// descriptor `N` supplies the pattern/curve/cipher/hash names.
+    pub(crate) fn new<N>(provider: CP, prologue: &[u8]) -> Self
+    where
+        N: Protocol<Curve = Cu, Cipher = Ci, Hash = H>,
+    {
+        let protocol_name = format!(
+            "Noise_{}_{}_{}_{}",
+            <N::Pattern as Pattern>::NAME,
+            <Cu as Curve>::NAME,
+            <Ci as Cipher>::NAME,
+            <H as Hash>::NAME,
+        );
+        let mut symmetric = SymmetricState::<Ci, H>::initialize(&protocol_name);
+
+        // Noise spec §5.3: MixHash(prologue).
+        symmetric.mix_hash(prologue);
+
+        HandshakeInner {
+            symmetric,
+            e: None,
+            e_pub: None,
+            s: None,
+            s_pub: None,
+            re: None,
+            rs: None,
+            has_psk: <N::Pattern as Pattern>::HAS_PSK,
+            provider,
+        }
+    }
+}
+
 // ── HandshakeState — between messages ─────────────────────────
 
 /// The handshake state between messages.
@@ -174,30 +218,8 @@ where
     ///     .set_rs(responder_pub);
     /// ```
     pub fn new(provider: CP, prologue: &[u8]) -> Self {
-        let protocol_name = format!(
-            "Noise_{}_{}_{}_{}",
-            <N::Pattern as Pattern>::NAME,
-            <N::Curve as Curve>::NAME,
-            <N::Cipher as Cipher>::NAME,
-            <N::Hash as Hash>::NAME,
-        );
-        let mut symmetric = SymmetricState::<N::Cipher, N::Hash>::initialize(&protocol_name);
-
-        // Noise spec §5.3: MixHash(prologue).
-        symmetric.mix_hash(prologue);
-
         HandshakeState {
-            inner: HandshakeInner {
-                symmetric,
-                e: None,
-                e_pub: None,
-                s: None,
-                s_pub: None,
-                re: None,
-                rs: None,
-                has_psk: <N::Pattern as Pattern>::HAS_PSK,
-                provider,
-            },
+            inner: HandshakeInner::new::<N>(provider, prologue),
             _marker: PhantomData,
         }
     }
