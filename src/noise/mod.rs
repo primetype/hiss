@@ -106,7 +106,7 @@
 //! split on the only irreducible axis — synchronous vs asynchronous I/O:
 //!
 //! - [`SyncHandshake`] — blocking [`std::io::Read`]/[`std::io::Write`].
-//! - [`AsyncHandshake`] — `tokio` `AsyncRead`/`AsyncWrite` (feature
+//! - `AsyncHandshake` — `tokio` `AsyncRead`/`AsyncWrite` (feature
 //!   `async-io`).
 //!
 //! Each driver is a type-state machine over three states, parameterised
@@ -122,7 +122,7 @@
 //!   Cons-list.
 //!
 //! When the last token of the last message is processed, the chain
-//! yields a [`SyncTransport`]/[`AsyncTransport`] bundling the
+//! yields a [`SyncTransport`]/`AsyncTransport` bundling the
 //! post-handshake [`Transport`] with the stream it ran over. Revealing
 //! tokens (`e`/`s`) additionally hand back the revealed public key.
 //!
@@ -157,10 +157,10 @@
 //! - **Secure Enclave** (Apple Security framework) — the blocking
 //!   Security-framework calls run on the calling thread for the
 //!   [`SyncHandshake`], or are offloaded to a worker for the
-//!   [`AsyncHandshake`]; may prompt for biometric authentication.
+//!   `AsyncHandshake`; may prompt for biometric authentication.
 //!
 //! [`SyncHandshake`] takes a synchronous
-//! [`DhProvider`](crate::provider::DhProvider); [`AsyncHandshake`] takes
+//! [`DhProvider`](crate::provider::DhProvider); `AsyncHandshake` takes
 //! a [`DhProviderAsync`](crate::provider::DhProviderAsync).
 //!
 //! # Usage
@@ -196,7 +196,7 @@
 //! let transport = r.e()?.ee()?.se()?;             // <- e, ee, se → SyncTransport
 //! ```
 //!
-//! The [`AsyncHandshake`] (feature `async-io`) is the identical chain
+//! The `AsyncHandshake` (feature `async-io`) is the identical chain
 //! with `async_initiator`/`async_responder` and `.await` on each token.
 
 pub mod alias;
@@ -302,7 +302,7 @@ impl<P, Cu, Ci, H> Default for Noise<P, Cu, Ci, H> {
 /// A fully specified Noise protocol — pattern, curve, cipher, and hash.
 ///
 /// Implemented by [`Noise<P, Cu, Ci, H>`]. Used as a single type
-/// parameter on the [`SyncHandshake`]/[`AsyncHandshake`] drivers
+/// parameter on the [`SyncHandshake`]/`AsyncHandshake` drivers
 /// instead of spreading four separate generic parameters.
 pub trait Protocol {
     /// The handshake pattern (e.g. [`IKpsk1`]).

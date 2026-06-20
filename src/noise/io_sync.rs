@@ -28,7 +28,7 @@
 //! # Design
 //!
 //! This is one of the two handshake drivers (the other is the async
-//! [`AsyncHandshake`](super::io_async::AsyncHandshake)). Each token
+//! `AsyncHandshake`, feature `async-io`). Each token
 //! method threads its compile-time-sized bytes through a small fixed
 //! stack scratch and streams them to the stream, so the bytes on the
 //! wire are byte-identical to the async path; only the I/O differs. The
