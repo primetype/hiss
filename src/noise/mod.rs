@@ -1983,6 +1983,108 @@ mod tests {
         assert_eq!(&pt[..pt_len], b"reply after rekey");
     }
 
+    /// Exercises the split-transport API: `Transport::split` and the
+    /// resulting `TransportSend`/`TransportRecv` halves (encrypt/decrypt/
+    /// rekey/session_id/ephemeral accessors), plus the `Transport`-level
+    /// ephemeral accessors. IKpsk1 is interactive, so both sides hold a
+    /// local *and* a remote ephemeral.
+    #[test]
+    fn transport_split_round_trip() {
+        let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
+
+        let initiator_static = provider.generate::<P256>().unwrap();
+        let responder_static = provider.generate::<P256>().unwrap();
+        let responder_pub = provider.public(&responder_static).unwrap();
+        let psk = Psk::from_bytes([0x5A; 32]);
+
+        // Complete handshake.
+        let (i_pipe, r_pipe) = Pipe::pair();
+        let i_hs = SyncHandshake::<Channel, Initiator, _, _, _, _>::initiate(
+            EphemeralOnly::new(StdRng::from_os_rng()),
+            &[],
+            i_pipe.clone(),
+        )
+        .set_rs(responder_pub);
+        let r_hs = SyncHandshake::<Channel, Responder, _, _, _, _>::respond(
+            EphemeralOnly::new(StdRng::from_os_rng()),
+            &[],
+            r_pipe.clone(),
+        )
+        .set_s(responder_static)
+        .unwrap();
+
+        let i_hs = i_hs
+            .e()
+            .unwrap()
+            .es()
+            .unwrap()
+            .s(initiator_static)
+            .unwrap()
+            .ss()
+            .unwrap()
+            .psk(&psk)
+            .unwrap();
+        let (_, recv) = r_hs.recv().e().unwrap();
+        let recv = recv.es().unwrap();
+        let (_, recv) = recv.s().unwrap();
+        let recv = recv.ss().unwrap();
+        let r_hs = recv.psk(&psk).unwrap();
+
+        let (r_transport, _) = r_hs.e().unwrap().ee().unwrap().se().unwrap().into_parts();
+        let (_, recv) = i_hs.recv().e().unwrap();
+        let (i_transport, _) = recv.ee().unwrap().se().unwrap().into_parts();
+
+        // `Transport`-level ephemeral accessors: interactive pattern ⇒
+        // both ephemerals present on each side. Both peers agree on the
+        // session id (it is derived from the shared handshake hash).
+        assert!(i_transport.local_ephemeral().is_some());
+        assert!(i_transport.remote_ephemeral().is_some());
+        assert!(r_transport.local_ephemeral().is_some());
+        assert!(r_transport.remote_ephemeral().is_some());
+        // `SessionId` is `PartialEq` but not `Debug`, so compare with `==`.
+        assert!(i_transport.session_id() == r_transport.session_id());
+
+        // Split each peer into independent send / receive halves.
+        let (mut i_send, mut i_recv) = i_transport.split();
+        let (mut r_send, mut r_recv) = r_transport.split();
+
+        // Each half carries a clone of the session id and ephemerals.
+        assert!(i_send.session_id() == i_recv.session_id());
+        assert!(i_send.session_id() == r_recv.session_id());
+        assert!(i_send.local_ephemeral().is_some());
+        assert!(i_send.remote_ephemeral().is_some());
+        assert!(r_recv.local_ephemeral().is_some());
+        assert!(r_recv.remote_ephemeral().is_some());
+
+        let mut ct = [0u8; 256];
+        let mut pt = [0u8; 256];
+
+        // initiator → responder across the split halves.
+        let ct_len = i_send.encrypt(b"ping", &mut ct).unwrap();
+        assert_eq!(ct_len, b"ping".len() + TransportSend::<Channel>::OVERHEAD);
+        let pt_len = r_recv.decrypt(&ct[..ct_len], &mut pt).unwrap();
+        assert_eq!(&pt[..pt_len], b"ping");
+
+        // responder → initiator.
+        let ct_len = r_send.encrypt(b"pong", &mut ct).unwrap();
+        let pt_len = i_recv.decrypt(&ct[..ct_len], &mut pt).unwrap();
+        assert_eq!(&pt[..pt_len], b"pong");
+
+        // Rekey every half, then communication must still work both ways.
+        i_send.rekey().unwrap();
+        r_recv.rekey().unwrap();
+        r_send.rekey().unwrap();
+        i_recv.rekey().unwrap();
+
+        let ct_len = i_send.encrypt(b"after rekey", &mut ct).unwrap();
+        let pt_len = r_recv.decrypt(&ct[..ct_len], &mut pt).unwrap();
+        assert_eq!(&pt[..pt_len], b"after rekey");
+
+        let ct_len = r_send.encrypt(b"reply after rekey", &mut ct).unwrap();
+        let pt_len = i_recv.decrypt(&ct[..ct_len], &mut pt).unwrap();
+        assert_eq!(&pt[..pt_len], b"reply after rekey");
+    }
+
     #[test]
     fn transport_rekey_desync_rejected() {
         let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
