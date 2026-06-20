@@ -49,7 +49,7 @@ Noise matrix. The security claims below apply only to this surface:
 
 | Component | Supported |
 |-----------|-----------|
-| Handshake patterns | `N`, `K`, `Kpsk0`, `IKpsk1`, `IK`, `NK`, `IX`, `XK` (an 8-pattern subset) |
+| Handshake patterns | `N`, `K`, `Kpsk0`, `IKpsk1`, `IK`, `NK`, `IX`, `XK`, `NN` (a 9-pattern subset) |
 | DH / signing curves | NIST **P-256** (the Noise DH curve) and **Ed25519** (signing; Curve25519 DH) |
 | AEAD cipher | **ChaCha20-Poly1305** |
 | Hash | **BLAKE2b-512** |
@@ -93,7 +93,7 @@ party's host OS or RNG.
 - Patterns, curves, ciphers, or hashes outside the [Scope](#scope) table.
 - Replay protection for the one-way patterns (`N`/`K`/`Kpsk0`) — they are one-shot
   seals by construction; replay resistance is a property only of the interactive
-  `IK` / `IKpsk1` / `NK` / `IX` / `XK` handshakes. See the per-pattern table.
+  `IK` / `IKpsk1` / `NK` / `IX` / `XK` / `NN` handshakes. See the per-pattern table.
 - Anything a caller does with secret bytes after copying them out of a `hiss` type
   (e.g. via `seed()`).
 
@@ -116,6 +116,7 @@ P-256 is not part of the Noise spec (see the provenance note under
 | **NK** | two messages (`-> e, es` / `<- e, ee`) | **none for the initiator — it is anonymous** (no static key); the **responder is authenticated to the initiator** via the `es` DH that binds the responder's known static key | encrypted to the responder's known static key | **full** once both ephemerals are mixed (`ee`) | **yes** (responder contributes a fresh ephemeral) | — |
 | **IX** | two messages (`-> e, s` / `<- e, ee, se, s, es`) | **mutual** — no pre-known statics: the initiator is authenticated to the responder via `se`, the responder to the initiator via `es`; both statics are sent in-handshake | payload encrypted after `ee`; **the initiator's static identity is sent in the clear in msg1 (before any DH) and is exposed to a passive eavesdropper**; the responder's static is sent in msg2 after `ee` and is encrypted | **full** once both ephemerals are mixed (`ee`) | **yes** (responder contributes a fresh ephemeral) | — |
 | **XK** | three messages (`-> e, es` / `<- e, ee` / `-> s, se`) | **mutual** — the responder is authenticated to the initiator via the `es` DH that binds the responder's known static key; the initiator is authenticated to the responder via `se` | encrypted to the responder's known static key; **the initiator's static identity is sent encrypted in msg3 (after `ee`) and is hidden from a passive eavesdropper** | **full** once both ephemerals are mixed (`ee`) | **yes** (responder contributes a fresh ephemeral) | — |
+| **NN** | two messages (`-> e` / `<- e, ee`) | **none — both parties are anonymous** (no static keys); **no protection against an active man-in-the-middle** | only against a **passive** eavesdropper — there are no static keys, so a passive observer cannot read the traffic but an active MITM can impersonate either side | **full** once both ephemerals are mixed (`ee`) | **yes** (responder contributes a fresh ephemeral) | — |
 
 Notes:
 
@@ -149,6 +150,13 @@ Notes:
   static in msg1), `XK` spends an extra round trip to give the initiator's identity full
   forward-secret confidentiality. Forward secrecy and replay resistance follow the second
   message (the `ee` DH).
+- `NN` is the **unauthenticated** interactive handshake: **both parties are anonymous**
+  (there are no static keys and no pre-messages), so it provides **no authentication of
+  either side and no protection against an active man-in-the-middle** — an attacker who
+  sits on the wire can complete a separate handshake with each party and relay traffic.
+  Confidentiality holds **only against a passive eavesdropper**; forward secrecy and
+  replay resistance follow the second message (the `ee` DH). Use `NN` only when an
+  authenticated pattern is genuinely impossible, or layer authentication above it.
 - A PSK (`Kpsk0`, `IKpsk1`) is an **additional** authentication and confidentiality
   factor layered on top of the asymmetric authentication — not a replacement for it.
 
@@ -216,7 +224,7 @@ in-tree tests:
 | Wycheproof ECDH (secp256r1) | **355** vectors | Project Wycheproof, `ecpoint` encoding |
 | RFC 6979 deterministic ECDSA | Appendix A.2.5 (P-256/SHA-256) KAT | RFC 6979; raw `(r, s)` pinned for `"sample"` and `"test"` |
 | NIST ECC CDH | P-256 `Count=0` | NIST CAVP ECDH vector |
-| Noise handshake KATs | patterns `N` / `K` / `Kpsk0` / `IKpsk1` / `IK` / `NK` / `IX` / `XK` | frozen, replayed byte-for-byte (handshake ciphertexts + handshake hash + transport) |
+| Noise handshake KATs | patterns `N` / `K` / `Kpsk0` / `IKpsk1` / `IK` / `NK` / `IX` / `XK` / `NN` | frozen, replayed byte-for-byte (handshake ciphertexts + handshake hash + transport) |
 | Negative / boundary sweeps | per-pattern, deterministic | every-byte tamper, every-prefix truncation, over-length, ciphertext bit-flip, replay, out-of-order, wrong-PSK → all rejected |
 
 The Wycheproof corpora are third-party authoritative. The negative sweeps are

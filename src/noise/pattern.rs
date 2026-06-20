@@ -330,3 +330,43 @@ impl Pattern for XK {
 }
 
 assert_well_formed!(XK);
+
+// ── NN ──────────────────────────────────────────────────────────
+
+/// `NN` — interactive handshake with **no static keys** and **no
+/// pre-messages**: both parties are anonymous. The only key material
+/// exchanged is a fresh ephemeral from each side.
+///
+/// `NN` provides **no authentication** of either party — it is
+/// vulnerable to an active man-in-the-middle. Confidentiality holds
+/// only against a *passive* eavesdropper. Once `ee` mixes both
+/// ephemerals, the session has **full forward secrecy**.
+///
+/// msg1 (`-> e`) is the first pattern to drive the single-`e` send
+/// finalizer: the cipher is never keyed in msg1, so the message is
+/// just the bare ephemeral (no payload tag).
+///
+/// ```text
+/// NN:
+///   -> e
+///   <- e, ee
+/// ```
+pub struct NN;
+
+impl Pattern for NN {
+    const NAME: &'static str = "NN";
+    const NUM_MESSAGES: usize = 2;
+    const HAS_PSK: bool = false;
+
+    // No pre-messages: neither party holds any static key.
+    type PreMessages = Nil;
+
+    // -> e
+    // <- e, ee
+    type Messages = Cons<
+        Message<ToResponder, Cons<E, Nil>>,
+        Cons<Message<ToInitiator, Cons<E, Cons<Ee, Nil>>>, Nil>,
+    >;
+}
+
+assert_well_formed!(NN);

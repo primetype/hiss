@@ -2,7 +2,7 @@
 //!
 //! Where `src/noise/mod.rs` has hand-picked single-corruption tests, this
 //! file sweeps the adversarial space deterministically (via the
-//! [`ScriptedRng`] ephemeral-injection harness) across all seven supported
+//! [`ScriptedRng`] ephemeral-injection harness) across all nine supported
 //! patterns:
 //!
 //! * **tamper** — flip *every* byte of *every* handshake message → the
@@ -48,6 +48,8 @@ const IX_MSG2: usize = 162; // IX msg2: e + ee/se key cipher + encrypted s + es 
 const XK_MSG1: usize = 81; // XK msg1: e + es (keys cipher) + tag
 const XK_MSG2: usize = 81; // XK msg2: e + ee (keyed) + tag
 const XK_MSG3: usize = 97; // XK msg3: encrypted s (keyed) + se + tag
+const NN_MSG1: usize = 65; // NN msg1: bare e (cipher never keyed → no tag)
+const NN_MSG2: usize = 81; // NN msg2: e + ee (keys cipher) + tag
 
 /// Transform applied to a handshake message before the peer reads it.
 type Xform<'a> = dyn Fn(usize, Vec<u8>) -> Vec<u8> + 'a;
@@ -407,6 +409,29 @@ async fn run_xk(xform: &Xform<'_>) -> Result<(), ()> {
     Ok(())
 }
 
+async fn run_nn(xform: &Xform<'_>) -> Result<(), ()> {
+    // NN has no static keys and no pre-messages: both parties are
+    // anonymous. msg1 is a bare `-> e` (the single-`e` send finalizer).
+    let i = NN::initiate(EphemeralOnly::new(ScriptedRng::new(&[&INIT_EPHEMERAL])), &[]);
+    let mut b1 = [0u8; 256];
+    let (msg1, i) = i.e(&mut b1).await.unwrap();
+    let msg1 = xform(0, msg1.to_vec());
+
+    // Responder reads msg1 (-> e).
+    let r = NN::respond(EphemeralOnly::new(ScriptedRng::new(&[&RESP_EPHEMERAL])), &[]);
+    let (_, recv) = r.read(&msg1).map_err(|_| ())?.e().await.map_err(|_| ())?;
+
+    // Responder sends msg2 (<- e, ee), genuine.
+    let mut b2 = [0u8; 256];
+    let (msg2, _r_transport) = recv.e(&mut b2).await.unwrap().ee().await.unwrap();
+    let msg2 = xform(1, msg2.to_vec());
+
+    // Initiator reads msg2.
+    let (_, recv) = i.read(&msg2).map_err(|_| ())?.e().await.map_err(|_| ())?;
+    recv.ee().await.map_err(|_| ())?;
+    Ok(())
+}
+
 // ── Sweep helpers ────────────────────────────────────────────────
 
 /// Assert that the genuine handshake completes, then that flipping any
@@ -513,6 +538,16 @@ async fn xk_msg2_tamper_truncation_sweep() {
 #[tokio::test]
 async fn xk_msg3_tamper_truncation_sweep() {
     sweep("XK msg3", 2, XK_MSG3, |xf| async move { run_xk(&*xf).await }).await;
+}
+
+#[tokio::test]
+async fn nn_msg1_tamper_truncation_sweep() {
+    sweep("NN msg1", 0, NN_MSG1, |xf| async move { run_nn(&*xf).await }).await;
+}
+
+#[tokio::test]
+async fn nn_msg2_tamper_truncation_sweep() {
+    sweep("NN msg2", 1, NN_MSG2, |xf| async move { run_nn(&*xf).await }).await;
 }
 
 // ── Wrong PSK ────────────────────────────────────────────────────

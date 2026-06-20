@@ -35,7 +35,7 @@ This `0.1` targets one cipher suite and a fixed set of patterns:
 
 | Axis    | Supported |
 |---------|-----------|
-| Patterns | `N`, `K`, `Kpsk0`, `IKpsk1`, `IK`, `NK`, `IX`, `XK` |
+| Patterns | `N`, `K`, `Kpsk0`, `IKpsk1`, `IK`, `NK`, `IX`, `XK`, `NN` |
 | Curve   | NIST **P-256** (secp256r1) |
 | Cipher  | **ChaCha20-Poly1305** |
 | Hash    | **BLAKE2b** |
@@ -115,7 +115,10 @@ encrypted third flight, so the initiator's identity is hidden from a passive
 eavesdropper. `IX` is interactive and mutually authenticated
 but has **no pre-message setters** — neither side pre-knows the other's static; both
 transmit their static keys during the handshake as `s` tokens (the initiator's in the
-clear, the responder's encrypted).
+clear, the responder's encrypted). `NN` is the **unauthenticated** interactive pattern:
+both parties are anonymous (no static keys, no pre-message setters), so it offers
+confidentiality only against a passive eavesdropper — there is no protection against an
+active man-in-the-middle — with full forward secrecy once the ephemerals are mixed.
 
 ## Providers
 

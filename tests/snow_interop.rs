@@ -1282,3 +1282,112 @@ async fn xk_snow_initiator_hiss_responder() {
     let pt_len = snow_initiator.read_message(&ct[..ct_len], &mut pt).unwrap();
     assert_eq!(&pt[..pt_len], reply);
 }
+
+// ── NN: our initiator ↔ snow responder ──────────────────────────
+
+#[tokio::test]
+async fn nn_hiss_initiator_snow_responder() {
+    let proto = "Noise_NN_P256_ChaChaPoly_BLAKE2b";
+
+    // ── Snow responder setup (anonymous: no static) ──────────
+    let mut snow_responder = snow::Builder::new(proto.parse().unwrap())
+        .build_responder()
+        .unwrap();
+
+    // ── Our initiator setup (anonymous: no static, no pre-known peer) ──
+    type Channel = NN;
+
+    let i_hs = Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]);
+
+    // msg1: -> e (single-`e` send finalizer; 65 bytes, cipher never keyed)
+    let mut msg1_buf = [0u8; 65];
+    let (msg1, i_hs) = i_hs.e(&mut msg1_buf).await.unwrap();
+    let msg1 = msg1.to_vec();
+
+    let mut buf = [0u8; 256];
+    snow_responder.read_message(&msg1, &mut buf).unwrap();
+
+    // msg2: <- e, ee (snow responder sends)
+    let mut msg2 = [0u8; 256];
+    let msg2_len = snow_responder.write_message(&[], &mut msg2).unwrap();
+    let (_, recv) = i_hs.read(&msg2[..msg2_len]).unwrap().e().await.unwrap();
+    let i_transport = recv.ee().await.unwrap();
+
+    assert_eq!(
+        i_transport.session_id().as_ref(),
+        snow_responder.get_handshake_hash(),
+    );
+
+    let mut snow_responder = snow_responder.into_transport_mode().unwrap();
+    let mut i_transport = i_transport;
+
+    // Transport: bidirectional exchange.
+    let plaintext = b"hello from hiss NN initiator";
+    let mut ct = [0u8; 256];
+    let ct_len = i_transport.send(plaintext, &mut ct).unwrap();
+    let mut pt = [0u8; 256];
+    let pt_len = snow_responder.read_message(&ct[..ct_len], &mut pt).unwrap();
+    assert_eq!(&pt[..pt_len], plaintext);
+
+    let reply = b"hello from snow NN responder";
+    let mut ct = [0u8; 256];
+    let ct_len = snow_responder.write_message(reply, &mut ct).unwrap();
+    let mut pt = [0u8; 256];
+    let pt_len = i_transport.receive(&ct[..ct_len], &mut pt).unwrap();
+    assert_eq!(&pt[..pt_len], reply);
+}
+
+// ── NN: snow initiator ↔ our responder ──────────────────────────
+
+#[tokio::test]
+async fn nn_snow_initiator_hiss_responder() {
+    let proto = "Noise_NN_P256_ChaChaPoly_BLAKE2b";
+
+    // ── Snow initiator setup (anonymous: no static) ──────────
+    let mut snow_initiator = snow::Builder::new(proto.parse().unwrap())
+        .build_initiator()
+        .unwrap();
+
+    // ── Our responder setup (anonymous: no static) ───────────
+    type Channel = NN;
+
+    let r_hs = Channel::respond(EphemeralOnly::new(StdRng::from_os_rng()), &[]);
+
+    // msg1: -> e (snow initiator sends)
+    let mut msg1 = [0u8; 256];
+    let msg1_len = snow_initiator.write_message(&[], &mut msg1).unwrap();
+
+    // Our responder reads msg1.
+    let (_, recv) = r_hs.read(&msg1[..msg1_len]).unwrap().e().await.unwrap();
+
+    // msg2: <- e, ee (our responder sends)
+    let mut msg2_buf = [0u8; 81];
+    let (msg2, r_transport) = recv.e(&mut msg2_buf).await.unwrap().ee().await.unwrap();
+    let msg2 = msg2.to_vec();
+
+    let mut buf = [0u8; 256];
+    snow_initiator.read_message(&msg2, &mut buf).unwrap();
+
+    assert_eq!(
+        r_transport.session_id().as_ref(),
+        snow_initiator.get_handshake_hash(),
+    );
+
+    let mut snow_initiator = snow_initiator.into_transport_mode().unwrap();
+    let mut r_transport = r_transport;
+
+    // Transport: bidirectional exchange.
+    let plaintext = b"hello from snow NN initiator";
+    let mut ct = [0u8; 256];
+    let ct_len = snow_initiator.write_message(plaintext, &mut ct).unwrap();
+    let mut pt = [0u8; 256];
+    let pt_len = r_transport.receive(&ct[..ct_len], &mut pt).unwrap();
+    assert_eq!(&pt[..pt_len], plaintext);
+
+    let reply = b"hello from hiss NN responder";
+    let mut ct = [0u8; 256];
+    let ct_len = r_transport.send(reply, &mut ct).unwrap();
+    let mut pt = [0u8; 256];
+    let pt_len = snow_initiator.read_message(&ct[..ct_len], &mut pt).unwrap();
+    assert_eq!(&pt[..pt_len], reply);
+}

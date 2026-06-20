@@ -56,3 +56,8 @@ pub type IX = Noise<pattern::IX, P256, ChaChaPoly, Blake2b>;
 /// responder's static is pre-known and the initiator's static is sent
 /// encrypted in msg3.
 pub type XK = Noise<pattern::XK, P256, ChaChaPoly, Blake2b>;
+
+/// `Noise_NN_P256_ChaChaPoly_BLAKE2b` — interactive, **unauthenticated**
+/// handshake: both parties are anonymous (no static keys). Confidentiality
+/// holds only against a passive eavesdropper; full forward secrecy after `ee`.
+pub type NN = Noise<pattern::NN, P256, ChaChaPoly, Blake2b>;
