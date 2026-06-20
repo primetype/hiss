@@ -387,10 +387,80 @@ mod tests {
     use crate::provider::ProviderExt;
     use crate::psk::Psk;
     use rand::{SeedableRng, rngs::StdRng};
+    use std::cell::RefCell;
+    use std::collections::VecDeque;
+    use std::rc::Rc;
     type Channel = IKpsk1;
     type NoiseSeal = N;
     type NoiseK = K;
     type NoiseKpsk0 = Kpsk0;
+
+    /// In-memory `Read + Write` endpoint for driving the blocking
+    /// [`SyncHandshake`] in unit tests.
+    ///
+    /// `EphemeralOnly` is a synchronous `DhProvider`, so the whole
+    /// handshake runs without an executor and every byte each side emits
+    /// lands in an in-memory queue — byte-identical to the wire. Writes
+    /// accumulate on the write side; reads pull from the read side. Pair
+    /// two endpoints with their queues swapped for a hiss↔hiss
+    /// round-trip, or feed a single endpoint by hand for capture/tamper
+    /// tests.
+    #[derive(Clone)]
+    struct Pipe {
+        inbound: Rc<RefCell<VecDeque<u8>>>,
+        outbound: Rc<RefCell<VecDeque<u8>>>,
+    }
+
+    impl Pipe {
+        /// A linked pair `(a, b)` where `a`'s writes are `b`'s reads and
+        /// vice versa.
+        fn pair() -> (Pipe, Pipe) {
+            let l = Rc::new(RefCell::new(VecDeque::new()));
+            let r = Rc::new(RefCell::new(VecDeque::new()));
+            (
+                Pipe {
+                    inbound: r.clone(),
+                    outbound: l.clone(),
+                },
+                Pipe {
+                    inbound: l,
+                    outbound: r,
+                },
+            )
+        }
+
+        /// Drain everything written to this endpoint so far (one or more
+        /// completed outgoing handshake messages).
+        fn take_written(&self) -> Vec<u8> {
+            self.outbound.borrow_mut().drain(..).collect()
+        }
+
+        /// Push bytes onto this endpoint's read side.
+        fn feed(&self, bytes: &[u8]) {
+            self.inbound.borrow_mut().extend(bytes.iter().copied());
+        }
+    }
+
+    impl std::io::Read for Pipe {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let mut q = self.inbound.borrow_mut();
+            let n = q.len().min(buf.len());
+            for slot in buf.iter_mut().take(n) {
+                *slot = q.pop_front().unwrap();
+            }
+            Ok(n)
+        }
+    }
+
+    impl std::io::Write for Pipe {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.outbound.borrow_mut().extend(buf.iter().copied());
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
 
     #[test]
     fn descriptor_string() {
@@ -428,8 +498,8 @@ mod tests {
 
     /// Noise N one-way seal: encrypt data to a known public key,
     /// then open it with the corresponding private key.
-    #[tokio::test]
-    async fn noise_n_seal_open() {
+    #[test]
+    fn noise_n_seal_open() {
         let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
 
         // The "recipient" — in practice, the device's own Secure Enclave key.
@@ -438,15 +508,21 @@ mod tests {
 
         let psk_to_seal = Psk::from_bytes([0x42; 32]);
 
-        // ── Seal (initiator side) ─────────────────────────────────
-        let sealer = NoiseSeal::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[])
-            .set_rs(recipient_pub);
+        let (i_pipe, r_pipe) = Pipe::pair();
 
-        let mut msg_buf = [0u8;
-            noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: false, keyed: false, tokens: [E, Es],)];
-        let (msg, mut transport) = sealer.e(&mut msg_buf).await.unwrap().es().await.unwrap();
+        // ── Seal (initiator side) ─────────────────────────────────
+        let sealer = SyncHandshake::<NoiseSeal, Initiator, _, _, _, _>::initiate(
+            EphemeralOnly::new(StdRng::from_os_rng()),
+            &[],
+            i_pipe.clone(),
+        )
+        .set_rs(recipient_pub);
+
+        // -> e, es streams the message into the pipe and finalizes to transport.
+        let (mut transport, _) = sealer.e().unwrap().es().unwrap().into_parts();
 
         // msg = ephemeral public key (65) + payload tag (16) = 81 bytes
+        let msg = i_pipe.take_written();
         assert_eq!(msg.len(), 81);
 
         // Encrypt the PSK as a transport payload.
@@ -454,13 +530,17 @@ mod tests {
         let sealed_len = transport.send(psk_to_seal.as_bytes(), &mut sealed).unwrap();
 
         // ── Open (responder side) ─────────────────────────────────
-        let opener = NoiseSeal::respond(EphemeralOnly::new(StdRng::from_os_rng()), &[])
-            .set_s(recipient_static)
-            .unwrap();
+        r_pipe.feed(&msg);
+        let opener = SyncHandshake::<NoiseSeal, Responder, _, _, _, _>::respond(
+            EphemeralOnly::new(StdRng::from_os_rng()),
+            &[],
+            r_pipe.clone(),
+        )
+        .set_s(recipient_static)
+        .unwrap();
 
-        let msg = msg.to_vec();
-        let (_, recv) = opener.read(&msg).unwrap().e().await.unwrap();
-        let mut transport = recv.es().await.unwrap();
+        let (_, recv) = opener.recv().e().unwrap();
+        let (mut transport, _) = recv.es().unwrap().into_parts();
 
         let mut opened = [0u8; 32];
         let opened_len = transport
@@ -473,66 +553,81 @@ mod tests {
 
     // ── Noise N tampered handshake ─────────────────────────────────
 
-    #[tokio::test]
-    async fn noise_n_tampered_ephemeral_rejected() {
+    #[test]
+    fn noise_n_tampered_ephemeral_rejected() {
         let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
 
         let recipient_static = provider.generate::<P256>().unwrap();
         let recipient_pub = provider.public(&recipient_static).unwrap();
 
-        let sealer = NoiseSeal::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[])
-            .set_rs(recipient_pub);
-        let mut msg_buf = [0u8;
-            noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: false, keyed: false, tokens: [E, Es],)];
-        let (msg, _transport) = sealer.e(&mut msg_buf).await.unwrap().es().await.unwrap();
+        let (i_pipe, r_pipe) = Pipe::pair();
 
-        let mut tampered = msg.to_vec();
+        let sealer = SyncHandshake::<NoiseSeal, Initiator, _, _, _, _>::initiate(
+            EphemeralOnly::new(StdRng::from_os_rng()),
+            &[],
+            i_pipe.clone(),
+        )
+        .set_rs(recipient_pub);
+        // `take_written` drains the linked queue so the genuine bytes never
+        // reach the responder; only the tampered copy is fed in.
+        let (_transport, _) = sealer.e().unwrap().es().unwrap().into_parts();
+        let mut tampered = i_pipe.take_written();
         // Flip a byte in the ephemeral public key.
         tampered[1] ^= 0xFF;
 
-        let opener = NoiseSeal::respond(EphemeralOnly::new(StdRng::from_os_rng()), &[])
-            .set_s(recipient_static)
-            .unwrap();
+        r_pipe.feed(&tampered);
+        let opener = SyncHandshake::<NoiseSeal, Responder, _, _, _, _>::respond(
+            EphemeralOnly::new(StdRng::from_os_rng()),
+            &[],
+            r_pipe.clone(),
+        )
+        .set_s(recipient_static)
+        .unwrap();
 
         // The tampered ephemeral key causes either an invalid public key
         // error or a DH mismatch leading to payload tag failure.
-        let recv = match opener.read(&tampered) {
-            Err(_) => return, // invalid message length or parse error
-            Ok(recv) => recv,
-        };
-        let (_, recv) = match recv.e().await {
-            Err(_) => return, // invalid ephemeral key
+        let (_, recv) = match opener.recv().e() {
+            Err(_) => return, // invalid ephemeral key (or short read)
             Ok(result) => result,
         };
         // DH produces wrong shared secret → tag fails.
-        assert!(recv.es().await.is_err());
+        assert!(recv.es().is_err());
     }
 
-    #[tokio::test]
-    async fn noise_n_tampered_tag_rejected() {
+    #[test]
+    fn noise_n_tampered_tag_rejected() {
         let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
 
         let recipient_static = provider.generate::<P256>().unwrap();
         let recipient_pub = provider.public(&recipient_static).unwrap();
 
-        let sealer = NoiseSeal::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[])
-            .set_rs(recipient_pub);
-        let mut msg_buf = [0u8;
-            noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: false, keyed: false, tokens: [E, Es],)];
-        let (msg, _transport) = sealer.e(&mut msg_buf).await.unwrap().es().await.unwrap();
+        let (i_pipe, r_pipe) = Pipe::pair();
 
-        let mut tampered = msg.to_vec();
+        let sealer = SyncHandshake::<NoiseSeal, Initiator, _, _, _, _>::initiate(
+            EphemeralOnly::new(StdRng::from_os_rng()),
+            &[],
+            i_pipe.clone(),
+        )
+        .set_rs(recipient_pub);
+        let (_transport, _) = sealer.e().unwrap().es().unwrap().into_parts();
+
+        let mut tampered = i_pipe.take_written();
         // Flip a byte in the payload tag (last 16 bytes).
         let len = tampered.len();
         tampered[len - 1] ^= 0xFF;
 
-        let opener = NoiseSeal::respond(EphemeralOnly::new(StdRng::from_os_rng()), &[])
-            .set_s(recipient_static)
-            .unwrap();
+        r_pipe.feed(&tampered);
+        let opener = SyncHandshake::<NoiseSeal, Responder, _, _, _, _>::respond(
+            EphemeralOnly::new(StdRng::from_os_rng()),
+            &[],
+            r_pipe.clone(),
+        )
+        .set_s(recipient_static)
+        .unwrap();
 
-        let (_, recv) = opener.read(&tampered).unwrap().e().await.unwrap();
+        let (_, recv) = opener.recv().e().unwrap();
         // The tag is corrupted, so es must fail at DecryptAndHash.
-        assert!(recv.es().await.is_err());
+        assert!(recv.es().is_err());
     }
 
     // ── Noise K / Kpsk0 tests ─────────────────────────────────────
@@ -563,8 +658,8 @@ mod tests {
 
     /// Noise K authenticated seal: encrypt data from Alice to Bob,
     /// where both static keys are known. Open with Bob's key.
-    #[tokio::test]
-    async fn noise_k_seal_open() {
+    #[test]
+    fn noise_k_seal_open() {
         let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
 
         // Alice (sender) and Bob (recipient) each have static keys.
@@ -576,28 +671,24 @@ mod tests {
 
         let payload: [u8; 32] = [0x42; 32];
 
+        let (i_pipe, r_pipe) = Pipe::pair();
+
         // ── Seal (Alice → Bob) ──────────────────────────────────
         // Pre-messages: -> s (Alice), <- s (Bob)
-        let sealer = NoiseK::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[])
-            .set_s(alice_static)
-            .unwrap()
-            .set_rs(bob_pub);
+        let sealer = SyncHandshake::<NoiseK, Initiator, _, _, _, _>::initiate(
+            EphemeralOnly::new(StdRng::from_os_rng()),
+            &[],
+            i_pipe.clone(),
+        )
+        .set_s(alice_static)
+        .unwrap()
+        .set_rs(bob_pub);
 
         // -> e, es, ss
-        let mut msg_buf = [0u8;
-            noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: false, keyed: false, tokens: [E, Es, Ss],)];
-        let (msg, mut transport) = sealer
-            .e(&mut msg_buf)
-            .await
-            .unwrap()
-            .es()
-            .await
-            .unwrap()
-            .ss()
-            .await
-            .unwrap();
+        let (mut transport, _) = sealer.e().unwrap().es().unwrap().ss().unwrap().into_parts();
 
         // msg = ephemeral public key (65) + payload tag (16) = 81 bytes
+        let msg = i_pipe.take_written();
         assert_eq!(msg.len(), 81);
 
         let mut sealed = [0u8; 64]; // 32 + 16 tag
@@ -605,15 +696,19 @@ mod tests {
 
         // ── Open (Bob) ──────────────────────────────────────────
         // Pre-messages: -> s (Alice), <- s (Bob)
-        let opener = NoiseK::respond(EphemeralOnly::new(StdRng::from_os_rng()), &[])
-            .set_rs(alice_pub)
-            .set_s(bob_static)
-            .unwrap();
+        r_pipe.feed(&msg);
+        let opener = SyncHandshake::<NoiseK, Responder, _, _, _, _>::respond(
+            EphemeralOnly::new(StdRng::from_os_rng()),
+            &[],
+            r_pipe.clone(),
+        )
+        .set_rs(alice_pub)
+        .set_s(bob_static)
+        .unwrap();
 
-        let msg = msg.to_vec();
-        let (_, recv) = opener.read(&msg).unwrap().e().await.unwrap();
-        let recv = recv.es().await.unwrap();
-        let mut transport = recv.ss().await.unwrap();
+        let (_, recv) = opener.recv().e().unwrap();
+        let recv = recv.es().unwrap();
+        let (mut transport, _) = recv.ss().unwrap().into_parts();
 
         let mut opened = [0u8; 32];
         let opened_len = transport
@@ -625,8 +720,8 @@ mod tests {
     }
 
     /// Noise Kpsk0 authenticated seal with PSK binding.
-    #[tokio::test]
-    async fn noise_kpsk0_seal_open() {
+    #[test]
+    fn noise_kpsk0_seal_open() {
         let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
 
         let alice_static = provider.generate::<P256>().unwrap();
@@ -638,46 +733,52 @@ mod tests {
         let psk = Psk::from_bytes([0xBB; 32]);
         let payload: [u8; 32] = [0x42; 32];
 
+        let (i_pipe, r_pipe) = Pipe::pair();
+
         // ── Seal (Alice → Bob) ──────────────────────────────────
-        let sealer = NoiseKpsk0::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[])
-            .set_s(alice_static)
-            .unwrap()
-            .set_rs(bob_pub);
+        let sealer = SyncHandshake::<NoiseKpsk0, Initiator, _, _, _, _>::initiate(
+            EphemeralOnly::new(StdRng::from_os_rng()),
+            &[],
+            i_pipe.clone(),
+        )
+        .set_s(alice_static)
+        .unwrap()
+        .set_rs(bob_pub);
 
         // -> psk, e, es, ss
-        let mut msg_buf = [0u8;
-            noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: true, keyed: false, tokens: [Psk, E, Es, Ss],)];
-        let (msg, mut transport) = sealer
-            .psk(&mut msg_buf, &psk)
-            .await
+        let (mut transport, _) = sealer
+            .psk(&psk)
             .unwrap()
             .e()
-            .await
             .unwrap()
             .es()
-            .await
             .unwrap()
             .ss()
-            .await
-            .unwrap();
+            .unwrap()
+            .into_parts();
 
+        let msg = i_pipe.take_written();
         assert_eq!(msg.len(), 81);
 
         let mut sealed = [0u8; 64];
         let sealed_len = transport.send(&payload, &mut sealed).unwrap();
 
         // ── Open (Bob) ──────────────────────────────────────────
-        let opener = NoiseKpsk0::respond(EphemeralOnly::new(StdRng::from_os_rng()), &[])
-            .set_rs(alice_pub)
-            .set_s(bob_static)
-            .unwrap();
+        r_pipe.feed(&msg);
+        let opener = SyncHandshake::<NoiseKpsk0, Responder, _, _, _, _>::respond(
+            EphemeralOnly::new(StdRng::from_os_rng()),
+            &[],
+            r_pipe.clone(),
+        )
+        .set_rs(alice_pub)
+        .set_s(bob_static)
+        .unwrap();
 
-        let msg = msg.to_vec();
-        let recv = opener.read(&msg).unwrap();
-        let recv = recv.psk(&psk).await.unwrap();
-        let (_, recv) = recv.e().await.unwrap();
-        let recv = recv.es().await.unwrap();
-        let mut transport = recv.ss().await.unwrap();
+        let recv = opener.recv();
+        let recv = recv.psk(&psk).unwrap();
+        let (_, recv) = recv.e().unwrap();
+        let recv = recv.es().unwrap();
+        let (mut transport, _) = recv.ss().unwrap().into_parts();
 
         let mut opened = [0u8; 32];
         let opened_len = transport
@@ -689,8 +790,8 @@ mod tests {
     }
 
     /// Kpsk0 with wrong PSK fails to decrypt.
-    #[tokio::test]
-    async fn noise_kpsk0_wrong_psk_fails() {
+    #[test]
+    fn noise_kpsk0_wrong_psk_fails() {
         let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
 
         let alice_static = provider.generate::<P256>().unwrap();
@@ -703,46 +804,53 @@ mod tests {
         let wrong_psk = Psk::from_bytes([0xCC; 32]);
         let payload: [u8; 32] = [0x42; 32];
 
-        // Seal with correct PSK
-        let sealer = NoiseKpsk0::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[])
-            .set_s(alice_static)
-            .unwrap()
-            .set_rs(bob_pub);
+        let (i_pipe, r_pipe) = Pipe::pair();
 
-        let mut msg_buf = [0u8;
-            noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: false, keyed: false, tokens: [E, Es],)];
-        let (msg, mut transport) = sealer
-            .psk(&mut msg_buf, &psk)
-            .await
+        // Seal with correct PSK
+        let sealer = SyncHandshake::<NoiseKpsk0, Initiator, _, _, _, _>::initiate(
+            EphemeralOnly::new(StdRng::from_os_rng()),
+            &[],
+            i_pipe.clone(),
+        )
+        .set_s(alice_static)
+        .unwrap()
+        .set_rs(bob_pub);
+
+        let (mut transport, _) = sealer
+            .psk(&psk)
             .unwrap()
             .e()
-            .await
             .unwrap()
             .es()
-            .await
             .unwrap()
             .ss()
-            .await
-            .unwrap();
+            .unwrap()
+            .into_parts();
+
+        let msg = i_pipe.take_written();
 
         let mut sealed = [0u8; 64];
         let _sealed_len = transport.send(&payload, &mut sealed).unwrap();
 
         // Open with wrong PSK — the empty payload tag verification at
         // the end of the message catches the key divergence immediately.
-        let opener = NoiseKpsk0::respond(EphemeralOnly::new(StdRng::from_os_rng()), &[])
-            .set_rs(alice_pub)
-            .set_s(bob_static)
-            .unwrap();
+        r_pipe.feed(&msg);
+        let opener = SyncHandshake::<NoiseKpsk0, Responder, _, _, _, _>::respond(
+            EphemeralOnly::new(StdRng::from_os_rng()),
+            &[],
+            r_pipe.clone(),
+        )
+        .set_rs(alice_pub)
+        .set_s(bob_static)
+        .unwrap();
 
-        let msg = msg.to_vec();
-        let recv = opener.read(&msg).unwrap();
-        let recv = recv.psk(&wrong_psk).await.unwrap();
-        let (_, recv) = recv.e().await.unwrap();
-        let recv = recv.es().await.unwrap();
+        let recv = opener.recv();
+        let recv = recv.psk(&wrong_psk).unwrap();
+        let (_, recv) = recv.e().unwrap();
+        let recv = recv.es().unwrap();
         // ss is the last token — payload tag verification fails because
         // the wrong PSK produced different derived keys.
-        let result = recv.ss().await;
+        let result = recv.ss();
         assert!(result.is_err());
     }
 
@@ -760,8 +868,8 @@ mod tests {
     ///   -> e, es, s, ss, psk         (msg1: initiator → responder)
     ///   <- e, ee, se                 (msg2: responder → initiator)
     /// ```
-    #[tokio::test]
-    async fn ikpsk1_round_trip() {
+    #[test]
+    fn ikpsk1_round_trip() {
         let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
 
         // ── Key generation ──────────────────────────────────────
@@ -774,89 +882,86 @@ mod tests {
         // PSK established during the QR ceremony.
         let psk = Psk::from_bytes([0xAA; 32]);
 
-        // ── Construction ────────────────────────────────────────
-        let i_hs =
-            Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
+        // The handshake is driven over a linked pipe pair, but each message
+        // is captured off the wire (`take_written`) and fed to the peer so
+        // the test can inspect the on-wire ephemeral keys and lengths.
+        let (i_pipe, r_pipe) = Pipe::pair();
 
-        let r_hs = Channel::respond(EphemeralOnly::new(StdRng::from_os_rng()), &[])
-            .set_s(responder_static)
-            .unwrap();
+        // ── Construction ────────────────────────────────────────
+        let i_hs = SyncHandshake::<Channel, Initiator, _, _, _, _>::initiate(
+            EphemeralOnly::new(StdRng::from_os_rng()),
+            &[],
+            i_pipe.clone(),
+        )
+        .set_rs(responder_pub);
+
+        let r_hs = SyncHandshake::<Channel, Responder, _, _, _, _>::respond(
+            EphemeralOnly::new(StdRng::from_os_rng()),
+            &[],
+            r_pipe.clone(),
+        )
+        .set_s(responder_static)
+        .unwrap();
 
         // ── Message 1: -> e, es, s, ss, psk (initiator sends) ──
-        let mut msg1_buf = [0u8;
-            noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: true, keyed: false, tokens: [E, Es, S, Ss, Psk],)];
-        let (msg1, i_hs) = i_hs
-            .e(&mut msg1_buf)
-            .await
+        let i_hs = i_hs
+            .e()
             .unwrap()
             .es()
-            .await
             .unwrap()
             .s(initiator_static)
-            .await
             .unwrap()
             .ss()
-            .await
             .unwrap()
             .psk(&psk)
-            .await
             .unwrap();
 
         // msg1 = ephemeral (65) + encrypted static (65+16) + payload tag (16) = 162 bytes
+        let msg1 = i_pipe.take_written();
         assert_eq!(msg1.len(), 162);
 
         // ── Message 1 (responder receives) ──────────────────────
-        let msg1 = msg1.to_vec();
+        r_pipe.feed(&msg1);
 
         // The first 65 bytes of msg1 are the initiator's ephemeral
         // public key (SEC1 uncompressed P-256).
         let initiator_e_from_wire =
             P256r1PublicKey::from_bytes(&msg1[..65]).expect("valid ephemeral in msg1");
 
-        let (initiator_ephemeral, recv) = r_hs.read(&msg1).unwrap().e().await.unwrap();
+        let (initiator_ephemeral, recv) = r_hs.recv().e().unwrap();
 
         // The ephemeral key revealed by recv matches what was on the wire.
         assert_eq!(initiator_ephemeral, initiator_e_from_wire);
 
-        let recv = recv.es().await.unwrap();
-        let (revealed_initiator_pub, recv) = recv.s().await.unwrap();
-        let recv = recv.ss().await.unwrap();
-        let r_hs = recv.psk(&psk).await.unwrap();
+        let recv = recv.es().unwrap();
+        let (revealed_initiator_pub, recv) = recv.s().unwrap();
+        let recv = recv.ss().unwrap();
+        let r_hs = recv.psk(&psk).unwrap();
 
         // The responder now knows the initiator's static key.
         assert_eq!(revealed_initiator_pub, initiator_pub);
 
         // ── Message 2: <- e, ee, se (responder sends) ──────────
-        let mut msg2_buf = [0u8;
-            noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: true, keyed: true, tokens: [E, Ee, Se],)];
-        let (msg2, r_transport) = r_hs
-            .e(&mut msg2_buf)
-            .await
-            .unwrap()
-            .ee()
-            .await
-            .unwrap()
-            .se()
-            .await
-            .unwrap();
+        let (r_transport, _) = r_hs.e().unwrap().ee().unwrap().se().unwrap().into_parts();
 
         // msg2 = ephemeral (65) + payload tag (16) = 81 bytes
+        let msg2 = r_pipe.take_written();
         assert_eq!(msg2.len(), 81);
 
         // ── Message 2 (initiator receives) ──────────────────────
-        let msg2 = msg2.to_vec();
+        i_pipe.feed(&msg2);
 
         // The first 65 bytes of msg2 are the responder's ephemeral
         // public key (SEC1 uncompressed P-256).
         let responder_e_from_wire =
             P256r1PublicKey::from_bytes(&msg2[..65]).expect("valid ephemeral in msg2");
 
-        let (responder_ephemeral, recv) = i_hs.read(&msg2).unwrap().e().await.unwrap();
+        let (responder_ephemeral, recv) = i_hs.recv().e().unwrap();
 
         // The ephemeral key revealed by recv matches what was on the wire.
         assert_eq!(responder_ephemeral, responder_e_from_wire);
 
-        let i_transport = recv.ee().await.unwrap().se().await.unwrap();
+        let (i_transport, _) = recv.ee().unwrap().se().unwrap().into_parts();
 
         // ── Verify: both sides derived the same handshake hash ──
         assert_eq!(i_transport.session_id(), r_transport.session_id());
@@ -1039,42 +1144,44 @@ mod tests {
 
     // ── Handshake error path tests ────────────────────────────────
 
-    #[tokio::test]
-    async fn wrong_message_length_rejected() {
+    #[test]
+    fn wrong_message_length_rejected() {
         let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
         let responder_static = provider.generate::<P256>().unwrap();
 
-        let r_hs = Channel::respond(EphemeralOnly::new(StdRng::from_os_rng()), &[])
-            .set_s(responder_static)
-            .unwrap();
-
-        // msg1 should be 162 bytes (65 ephemeral + 65 encrypted static + 16 tag + 16 payload tag) — send 64 instead.
+        // msg1 should be 162 bytes (65 ephemeral + 65 encrypted static + 16 tag + 16 payload tag) — feed 64 instead.
+        let (_unused, r_pipe) = Pipe::pair();
         let bad_msg = [0u8; 64];
-        match r_hs.read(&bad_msg) {
-            Err(error::HandshakeError::UnexpectedMessageLength {
-                expected: 162,
-                actual: 64,
-            }) => {}
-            Err(e) => panic!("expected UnexpectedMessageLength, got {e:?}"),
-            Ok(_) => panic!("expected error, got Ok"),
-        }
+        r_pipe.feed(&bad_msg);
+
+        let r_hs = SyncHandshake::<Channel, Responder, _, _, _, _>::respond(
+            EphemeralOnly::new(StdRng::from_os_rng()),
+            &[],
+            r_pipe.clone(),
+        )
+        .set_s(responder_static)
+        .unwrap();
+
+        // The streaming driver has no length pre-check: a too-short message
+        // makes a token's `read_exact` run out of bytes, so the responder
+        // rejects it with a short-read IO error at the first token.
+        assert!(r_hs.recv().e().is_err());
     }
 
-    #[tokio::test]
-    async fn expected_message_size_reports_correctly() {
-        let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
-        let responder_static = provider.generate::<P256>().unwrap();
-
-        let r_hs = Channel::respond(EphemeralOnly::new(StdRng::from_os_rng()), &[])
-            .set_s(responder_static)
-            .unwrap();
-
-        // msg1 (-> e, es, s, ss, psk): 65 (ephemeral) + 65 (encrypted static) + 16 (tag) + 16 (payload tag) = 162
-        assert_eq!(r_hs.expected_message_size(), 162);
+    #[test]
+    fn expected_message_size_reports_correctly() {
+        // The streaming driver removed the runtime `expected_message_size`
+        // query; the same value is available at compile time from the
+        // message-size macro. msg1 (-> e, es, s, ss, psk):
+        // 65 (ephemeral) + 65 (encrypted static) + 16 (tag) + 16 (payload tag) = 162
+        assert_eq!(
+            noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: true, keyed: false, tokens: [E, Es, S, Ss, Psk],),
+            162
+        );
     }
 
-    #[tokio::test]
-    async fn corrupted_encrypted_static_in_msg1_rejected() {
+    #[test]
+    fn corrupted_encrypted_static_in_msg1_rejected() {
         let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
 
         let initiator_static = provider.generate::<P256>().unwrap();
@@ -1083,47 +1190,53 @@ mod tests {
 
         let psk = Psk::from_bytes([0xBB; 32]);
 
-        // Initiator constructs msg1 normally.
-        let i_hs =
-            Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
+        let (i_pipe, r_pipe) = Pipe::pair();
 
-        let mut msg1_buf = [0u8;
-            noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: true, keyed: false, tokens: [E, Es, S, Ss, Psk],)];
-        let (msg1, _) = i_hs
-            .e(&mut msg1_buf)
-            .await
+        // Initiator constructs msg1 normally.
+        let i_hs = SyncHandshake::<Channel, Initiator, _, _, _, _>::initiate(
+            EphemeralOnly::new(StdRng::from_os_rng()),
+            &[],
+            i_pipe.clone(),
+        )
+        .set_rs(responder_pub);
+
+        let _i_hs = i_hs
+            .e()
             .unwrap()
             .es()
-            .await
             .unwrap()
             .s(initiator_static)
-            .await
             .unwrap()
             .ss()
-            .await
             .unwrap()
             .psk(&psk)
-            .await
             .unwrap();
 
         // Corrupt a byte in the encrypted static key area (after the 65-byte ephemeral).
-        let mut corrupted = msg1.to_vec();
+        // `take_written` drains the linked queue, so only the tampered copy
+        // reaches the responder.
+        let mut corrupted = i_pipe.take_written();
         corrupted[70] ^= 0xFF;
 
         // Responder reads msg1 — corruption in the encrypted static key
         // area causes decryption failure at the `s` token.
-        let r_hs = Channel::respond(EphemeralOnly::new(StdRng::from_os_rng()), &[])
-            .set_s(responder_static)
-            .unwrap();
+        r_pipe.feed(&corrupted);
+        let r_hs = SyncHandshake::<Channel, Responder, _, _, _, _>::respond(
+            EphemeralOnly::new(StdRng::from_os_rng()),
+            &[],
+            r_pipe.clone(),
+        )
+        .set_s(responder_static)
+        .unwrap();
 
-        let (_, recv) = r_hs.read(&corrupted).unwrap().e().await.unwrap();
-        let recv = recv.es().await.unwrap();
+        let (_, recv) = r_hs.recv().e().unwrap();
+        let recv = recv.es().unwrap();
         // The `s` token decrypts the static key — corruption causes tag failure.
-        assert!(recv.s().await.is_err());
+        assert!(recv.s().is_err());
     }
 
-    #[tokio::test]
-    async fn mismatched_psk_fails() {
+    #[test]
+    fn mismatched_psk_fails() {
         let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
 
         let initiator_static = provider.generate::<P256>().unwrap();
@@ -1133,48 +1246,52 @@ mod tests {
         let i_psk = Psk::from_bytes([0xAA; 32]);
         let r_psk = Psk::from_bytes([0xBB; 32]); // different!
 
-        // Initiator sends msg1 with i_psk.
-        let i_hs =
-            Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
+        let (i_pipe, r_pipe) = Pipe::pair();
 
-        let mut msg1_buf = [0u8;
-            noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: true, keyed: false, tokens: [E, Es, S, Ss, Psk],)];
-        let (msg1, _i_hs) = i_hs
-            .e(&mut msg1_buf)
-            .await
+        // Initiator sends msg1 with i_psk.
+        let i_hs = SyncHandshake::<Channel, Initiator, _, _, _, _>::initiate(
+            EphemeralOnly::new(StdRng::from_os_rng()),
+            &[],
+            i_pipe.clone(),
+        )
+        .set_rs(responder_pub);
+
+        let _i_hs = i_hs
+            .e()
             .unwrap()
             .es()
-            .await
             .unwrap()
             .s(initiator_static)
-            .await
             .unwrap()
             .ss()
-            .await
             .unwrap()
             .psk(&i_psk)
-            .await
             .unwrap();
-        let msg1 = msg1.to_vec();
+        let msg1 = i_pipe.take_written();
 
         // Responder reads msg1 with r_psk — mismatch.
-        let r_hs = Channel::respond(EphemeralOnly::new(StdRng::from_os_rng()), &[])
-            .set_s(responder_static)
-            .unwrap();
+        r_pipe.feed(&msg1);
+        let r_hs = SyncHandshake::<Channel, Responder, _, _, _, _>::respond(
+            EphemeralOnly::new(StdRng::from_os_rng()),
+            &[],
+            r_pipe.clone(),
+        )
+        .set_s(responder_static)
+        .unwrap();
 
-        let (_, recv) = r_hs.read(&msg1).unwrap().e().await.unwrap();
-        let recv = recv.es().await.unwrap();
-        let (_, recv) = recv.s().await.unwrap();
-        let recv = recv.ss().await.unwrap();
+        let (_, recv) = r_hs.recv().e().unwrap();
+        let recv = recv.es().unwrap();
+        let (_, recv) = recv.s().unwrap();
+        let recv = recv.ss().unwrap();
 
         // The psk token is the last in msg1 — the payload tag
         // verification catches the PSK mismatch immediately.
-        let result = recv.psk(&r_psk).await;
+        let result = recv.psk(&r_psk);
         assert!(result.is_err());
     }
 
-    #[tokio::test]
-    async fn transport_corrupted_ciphertext_rejected() {
+    #[test]
+    fn transport_corrupted_ciphertext_rejected() {
         let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
 
         let initiator_static = provider.generate::<P256>().unwrap();
@@ -1183,52 +1300,41 @@ mod tests {
         let psk = Psk::from_bytes([0xCC; 32]);
 
         // Complete handshake.
-        let i_hs =
-            Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
-        let r_hs = Channel::respond(EphemeralOnly::new(StdRng::from_os_rng()), &[])
-            .set_s(responder_static)
-            .unwrap();
+        let (i_pipe, r_pipe) = Pipe::pair();
+        let i_hs = SyncHandshake::<Channel, Initiator, _, _, _, _>::initiate(
+            EphemeralOnly::new(StdRng::from_os_rng()),
+            &[],
+            i_pipe.clone(),
+        )
+        .set_rs(responder_pub);
+        let r_hs = SyncHandshake::<Channel, Responder, _, _, _, _>::respond(
+            EphemeralOnly::new(StdRng::from_os_rng()),
+            &[],
+            r_pipe.clone(),
+        )
+        .set_s(responder_static)
+        .unwrap();
 
-        let mut msg1_buf = [0u8;
-            noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: true, keyed: false, tokens: [E, Es, S, Ss, Psk],)];
-        let (msg1, i_hs) = i_hs
-            .e(&mut msg1_buf)
-            .await
+        let i_hs = i_hs
+            .e()
             .unwrap()
             .es()
-            .await
             .unwrap()
             .s(initiator_static)
-            .await
             .unwrap()
             .ss()
-            .await
             .unwrap()
             .psk(&psk)
-            .await
             .unwrap();
-        let msg1 = msg1.to_vec();
-        let (_, recv) = r_hs.read(&msg1).unwrap().e().await.unwrap();
-        let recv = recv.es().await.unwrap();
-        let (_, recv) = recv.s().await.unwrap();
-        let recv = recv.ss().await.unwrap();
-        let r_hs = recv.psk(&psk).await.unwrap();
+        let (_, recv) = r_hs.recv().e().unwrap();
+        let recv = recv.es().unwrap();
+        let (_, recv) = recv.s().unwrap();
+        let recv = recv.ss().unwrap();
+        let r_hs = recv.psk(&psk).unwrap();
 
-        let mut msg2_buf = [0u8;
-            noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: true, keyed: true, tokens: [E, Ee, Se],)];
-        let (msg2, r_transport) = r_hs
-            .e(&mut msg2_buf)
-            .await
-            .unwrap()
-            .ee()
-            .await
-            .unwrap()
-            .se()
-            .await
-            .unwrap();
-        let msg2 = msg2.to_vec();
-        let (_, recv) = i_hs.read(&msg2).unwrap().e().await.unwrap();
-        let i_transport = recv.ee().await.unwrap().se().await.unwrap();
+        let (r_transport, _) = r_hs.e().unwrap().ee().unwrap().se().unwrap().into_parts();
+        let (_, recv) = i_hs.recv().e().unwrap();
+        let (i_transport, _) = recv.ee().unwrap().se().unwrap().into_parts();
 
         let mut i_transport = i_transport;
         let mut r_transport = r_transport;
@@ -1245,8 +1351,8 @@ mod tests {
         assert!(matches!(err, error::HandshakeError::DecryptionFailed));
     }
 
-    #[tokio::test]
-    async fn transport_multiple_messages_nonce_advances() {
+    #[test]
+    fn transport_multiple_messages_nonce_advances() {
         let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
 
         let initiator_static = provider.generate::<P256>().unwrap();
@@ -1255,52 +1361,41 @@ mod tests {
         let psk = Psk::from_bytes([0xDD; 32]);
 
         // Complete handshake.
-        let i_hs =
-            Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
-        let r_hs = Channel::respond(EphemeralOnly::new(StdRng::from_os_rng()), &[])
-            .set_s(responder_static)
-            .unwrap();
+        let (i_pipe, r_pipe) = Pipe::pair();
+        let i_hs = SyncHandshake::<Channel, Initiator, _, _, _, _>::initiate(
+            EphemeralOnly::new(StdRng::from_os_rng()),
+            &[],
+            i_pipe.clone(),
+        )
+        .set_rs(responder_pub);
+        let r_hs = SyncHandshake::<Channel, Responder, _, _, _, _>::respond(
+            EphemeralOnly::new(StdRng::from_os_rng()),
+            &[],
+            r_pipe.clone(),
+        )
+        .set_s(responder_static)
+        .unwrap();
 
-        let mut msg1_buf = [0u8;
-            noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: true, keyed: false, tokens: [E, Es, S, Ss, Psk],)];
-        let (msg1, i_hs) = i_hs
-            .e(&mut msg1_buf)
-            .await
+        let i_hs = i_hs
+            .e()
             .unwrap()
             .es()
-            .await
             .unwrap()
             .s(initiator_static)
-            .await
             .unwrap()
             .ss()
-            .await
             .unwrap()
             .psk(&psk)
-            .await
             .unwrap();
-        let msg1 = msg1.to_vec();
-        let (_, recv) = r_hs.read(&msg1).unwrap().e().await.unwrap();
-        let recv = recv.es().await.unwrap();
-        let (_, recv) = recv.s().await.unwrap();
-        let recv = recv.ss().await.unwrap();
-        let r_hs = recv.psk(&psk).await.unwrap();
+        let (_, recv) = r_hs.recv().e().unwrap();
+        let recv = recv.es().unwrap();
+        let (_, recv) = recv.s().unwrap();
+        let recv = recv.ss().unwrap();
+        let r_hs = recv.psk(&psk).unwrap();
 
-        let mut msg2_buf = [0u8;
-            noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: true, keyed: true, tokens: [E, Ee, Se],)];
-        let (msg2, r_transport) = r_hs
-            .e(&mut msg2_buf)
-            .await
-            .unwrap()
-            .ee()
-            .await
-            .unwrap()
-            .se()
-            .await
-            .unwrap();
-        let msg2 = msg2.to_vec();
-        let (_, recv) = i_hs.read(&msg2).unwrap().e().await.unwrap();
-        let i_transport = recv.ee().await.unwrap().se().await.unwrap();
+        let (r_transport, _) = r_hs.e().unwrap().ee().unwrap().se().unwrap().into_parts();
+        let (_, recv) = i_hs.recv().e().unwrap();
+        let (i_transport, _) = recv.ee().unwrap().se().unwrap().into_parts();
 
         let mut i_transport = i_transport;
         let mut r_transport = r_transport;
@@ -1334,8 +1429,8 @@ mod tests {
 
     // ── Wrong responder static key ──────────────────────────────────
 
-    #[tokio::test]
-    async fn ikpsk1_wrong_responder_key_rejected() {
+    #[test]
+    fn ikpsk1_wrong_responder_key_rejected() {
         let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
 
         let initiator_static = provider.generate::<P256>().unwrap();
@@ -1344,51 +1439,55 @@ mod tests {
         let wrong_pub = provider.public(&wrong_static).unwrap();
         let psk = Psk::from_bytes([0xCC; 32]);
 
+        let (i_pipe, r_pipe) = Pipe::pair();
+
         // Initiator targets the wrong responder public key.
-        let i_hs =
-            Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(wrong_pub);
+        let i_hs = SyncHandshake::<Channel, Initiator, _, _, _, _>::initiate(
+            EphemeralOnly::new(StdRng::from_os_rng()),
+            &[],
+            i_pipe.clone(),
+        )
+        .set_rs(wrong_pub);
 
         // Initiator sends msg1 with es DH against the wrong key.
-        let mut msg1_buf = [0u8;
-            noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: true, keyed: false, tokens: [E, Es, S, Ss, Psk],)];
-        let (msg1, _i_hs) = i_hs
-            .e(&mut msg1_buf)
-            .await
+        let _i_hs = i_hs
+            .e()
             .unwrap()
             .es()
-            .await
             .unwrap()
             .s(initiator_static)
-            .await
             .unwrap()
             .ss()
-            .await
             .unwrap()
             .psk(&psk)
-            .await
             .unwrap();
-        let msg1 = msg1.to_vec();
+        let msg1 = i_pipe.take_written();
 
         // Actual responder holds a different static key.
-        let r_hs = Channel::respond(EphemeralOnly::new(StdRng::from_os_rng()), &[])
-            .set_s(responder_static)
-            .unwrap();
+        r_pipe.feed(&msg1);
+        let r_hs = SyncHandshake::<Channel, Responder, _, _, _, _>::respond(
+            EphemeralOnly::new(StdRng::from_os_rng()),
+            &[],
+            r_pipe.clone(),
+        )
+        .set_s(responder_static)
+        .unwrap();
 
         // Responder reads msg1. The es DH produces a different shared
         // secret because the initiator used the wrong responder key.
         // The `es` token itself succeeds (it just mixes in the DH result),
         // but the `s` token fails because the derived cipher key is wrong
         // and cannot decrypt the initiator's encrypted static key.
-        let (_, recv) = r_hs.read(&msg1).unwrap().e().await.unwrap();
-        let recv = recv.es().await.unwrap();
-        let result = recv.s().await;
+        let (_, recv) = r_hs.recv().e().unwrap();
+        let recv = recv.es().unwrap();
+        let result = recv.s();
         assert!(result.is_err());
     }
 
     // ── Transport direction isolation ───────────────────────────────
 
-    #[tokio::test]
-    async fn transport_keys_are_directional() {
+    #[test]
+    fn transport_keys_are_directional() {
         let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
 
         let initiator_static = provider.generate::<P256>().unwrap();
@@ -1397,52 +1496,41 @@ mod tests {
         let psk = Psk::from_bytes([0xFF; 32]);
 
         // Complete handshake.
-        let i_hs =
-            Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
-        let r_hs = Channel::respond(EphemeralOnly::new(StdRng::from_os_rng()), &[])
-            .set_s(responder_static)
-            .unwrap();
+        let (i_pipe, r_pipe) = Pipe::pair();
+        let i_hs = SyncHandshake::<Channel, Initiator, _, _, _, _>::initiate(
+            EphemeralOnly::new(StdRng::from_os_rng()),
+            &[],
+            i_pipe.clone(),
+        )
+        .set_rs(responder_pub);
+        let r_hs = SyncHandshake::<Channel, Responder, _, _, _, _>::respond(
+            EphemeralOnly::new(StdRng::from_os_rng()),
+            &[],
+            r_pipe.clone(),
+        )
+        .set_s(responder_static)
+        .unwrap();
 
-        let mut msg1_buf = [0u8;
-            noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: true, keyed: false, tokens: [E, Es, S, Ss, Psk],)];
-        let (msg1, i_hs) = i_hs
-            .e(&mut msg1_buf)
-            .await
+        let i_hs = i_hs
+            .e()
             .unwrap()
             .es()
-            .await
             .unwrap()
             .s(initiator_static)
-            .await
             .unwrap()
             .ss()
-            .await
             .unwrap()
             .psk(&psk)
-            .await
             .unwrap();
-        let msg1 = msg1.to_vec();
-        let (_, recv) = r_hs.read(&msg1).unwrap().e().await.unwrap();
-        let recv = recv.es().await.unwrap();
-        let (_, recv) = recv.s().await.unwrap();
-        let recv = recv.ss().await.unwrap();
-        let r_hs = recv.psk(&psk).await.unwrap();
+        let (_, recv) = r_hs.recv().e().unwrap();
+        let recv = recv.es().unwrap();
+        let (_, recv) = recv.s().unwrap();
+        let recv = recv.ss().unwrap();
+        let r_hs = recv.psk(&psk).unwrap();
 
-        let mut msg2_buf = [0u8;
-            noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: true, keyed: true, tokens: [E, Ee, Se],)];
-        let (msg2, r_transport) = r_hs
-            .e(&mut msg2_buf)
-            .await
-            .unwrap()
-            .ee()
-            .await
-            .unwrap()
-            .se()
-            .await
-            .unwrap();
-        let msg2 = msg2.to_vec();
-        let (_, recv) = i_hs.read(&msg2).unwrap().e().await.unwrap();
-        let i_transport = recv.ee().await.unwrap().se().await.unwrap();
+        let (r_transport, _) = r_hs.e().unwrap().ee().unwrap().se().unwrap().into_parts();
+        let (_, recv) = i_hs.recv().e().unwrap();
+        let (i_transport, _) = recv.ee().unwrap().se().unwrap().into_parts();
 
         let mut i_transport = i_transport;
 
@@ -1466,8 +1554,8 @@ mod tests {
 
     // ── Session uniqueness (different ephemeral keys) ───────────────
 
-    #[tokio::test]
-    async fn two_sessions_produce_different_handshake_hashes() {
+    #[test]
+    fn two_sessions_produce_different_handshake_hashes() {
         // Use a fixed responder key so both sessions share the same
         // responder identity — only ephemeral keys differ.
         let responder_bytes = [0xBB_u8; 32];
@@ -1484,54 +1572,43 @@ mod tests {
                 .generate::<P256>()
                 .unwrap();
 
-            let i_hs = Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[])
-                .set_rs(responder_pub);
+            let (i_pipe, r_pipe) = Pipe::pair();
+            let i_hs = SyncHandshake::<Channel, Initiator, _, _, _, _>::initiate(
+                EphemeralOnly::new(StdRng::from_os_rng()),
+                &[],
+                i_pipe.clone(),
+            )
+            .set_rs(responder_pub);
 
-            let mut msg1_buf = [0u8;
-                noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: true, keyed: false, tokens: [E, Es, S, Ss, Psk],)];
-            let (msg1, i_hs) = i_hs
-                .e(&mut msg1_buf)
-                .await
+            let i_hs = i_hs
+                .e()
                 .unwrap()
                 .es()
-                .await
                 .unwrap()
                 .s(initiator_static)
-                .await
                 .unwrap()
                 .ss()
-                .await
                 .unwrap()
                 .psk(&psk)
-                .await
-                .unwrap();
-            let msg1 = msg1.to_vec();
-
-            let r_hs = Channel::respond(EphemeralOnly::new(StdRng::from_os_rng()), &[])
-                .set_s(responder_static)
                 .unwrap();
 
-            let (_, recv) = r_hs.read(&msg1).unwrap().e().await.unwrap();
-            let recv = recv.es().await.unwrap();
-            let (_, recv) = recv.s().await.unwrap();
-            let recv = recv.ss().await.unwrap();
-            let r_hs = recv.psk(&psk).await.unwrap();
+            let r_hs = SyncHandshake::<Channel, Responder, _, _, _, _>::respond(
+                EphemeralOnly::new(StdRng::from_os_rng()),
+                &[],
+                r_pipe.clone(),
+            )
+            .set_s(responder_static)
+            .unwrap();
 
-            let mut msg2_buf = [0u8;
-                noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: true, keyed: true, tokens: [E, Ee, Se],)];
-            let (msg2, r_transport) = r_hs
-                .e(&mut msg2_buf)
-                .await
-                .unwrap()
-                .ee()
-                .await
-                .unwrap()
-                .se()
-                .await
-                .unwrap();
-            let msg2 = msg2.to_vec();
-            let (_, recv) = i_hs.read(&msg2).unwrap().e().await.unwrap();
-            let i_transport = recv.ee().await.unwrap().se().await.unwrap();
+            let (_, recv) = r_hs.recv().e().unwrap();
+            let recv = recv.es().unwrap();
+            let (_, recv) = recv.s().unwrap();
+            let recv = recv.ss().unwrap();
+            let r_hs = recv.psk(&psk).unwrap();
+
+            let (r_transport, _) = r_hs.e().unwrap().ee().unwrap().se().unwrap().into_parts();
+            let (_, recv) = i_hs.recv().e().unwrap();
+            let (i_transport, _) = recv.ee().unwrap().se().unwrap().into_parts();
 
             assert_eq!(i_transport.session_id(), r_transport.session_id());
             hashes.push(i_transport.session_id().as_ref().to_vec());
@@ -1563,38 +1640,39 @@ mod tests {
         // revealed static key matches the expected peer.
         let wrong_static = provider.generate::<P256>().unwrap();
 
-        let i_hs =
-            Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
+        let (i_pipe, r_pipe) = Pipe::pair();
+        let i_hs = SyncHandshake::<Channel, Initiator, _, _, _, _>::initiate(
+            EphemeralOnly::new(StdRng::from_os_rng()),
+            &[],
+            i_pipe.clone(),
+        )
+        .set_rs(responder_pub);
 
-        let mut msg1_buf = [0u8;
-            noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: true, keyed: false, tokens: [E, Es, S, Ss, Psk],)];
-        let (msg1, i_hs) = i_hs
-            .e(&mut msg1_buf)
-            .await
+        let i_hs = i_hs
+            .e()
             .unwrap()
             .es()
-            .await
             .unwrap()
             .s(wrong_static)
-            .await
             .unwrap()
             .ss()
-            .await
             .unwrap()
             .psk(&psk)
-            .await
-            .unwrap();
-        let msg1 = msg1.to_vec();
-
-        let r_hs = Channel::respond(EphemeralOnly::new(StdRng::from_os_rng()), &[])
-            .set_s(responder_static)
             .unwrap();
 
-        let (_, recv) = r_hs.read(&msg1).unwrap().e().await.unwrap();
-        let recv = recv.es().await.unwrap();
-        let (revealed_pub, recv) = recv.s().await.unwrap();
-        let recv = recv.ss().await.unwrap();
-        let r_hs = recv.psk(&psk).await.unwrap();
+        let r_hs = SyncHandshake::<Channel, Responder, _, _, _, _>::respond(
+            EphemeralOnly::new(StdRng::from_os_rng()),
+            &[],
+            r_pipe.clone(),
+        )
+        .set_s(responder_static)
+        .unwrap();
+
+        let (_, recv) = r_hs.recv().e().unwrap();
+        let recv = recv.es().unwrap();
+        let (revealed_pub, recv) = recv.s().unwrap();
+        let recv = recv.ss().unwrap();
+        let r_hs = recv.psk(&psk).unwrap();
 
         // The responder decrypted the wrong initiator static key.
         assert_ne!(revealed_pub, initiator_pub);
@@ -1602,21 +1680,9 @@ mod tests {
         // Complete the handshake — msg2 still works because the `se`
         // token uses DH(wrong_s, responder_e), which both sides compute
         // consistently.
-        let mut msg2_buf = [0u8;
-            noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: true, keyed: true, tokens: [E, Ee, Se],)];
-        let (msg2, r_transport) = r_hs
-            .e(&mut msg2_buf)
-            .await
-            .unwrap()
-            .ee()
-            .await
-            .unwrap()
-            .se()
-            .await
-            .unwrap();
-        let msg2 = msg2.to_vec();
-        let (_, recv) = i_hs.read(&msg2).unwrap().e().await.unwrap();
-        let i_transport = recv.ee().await.unwrap().se().await.unwrap();
+        let (r_transport, _) = r_hs.e().unwrap().ee().unwrap().se().unwrap().into_parts();
+        let (_, recv) = i_hs.recv().e().unwrap();
+        let (i_transport, _) = recv.ee().unwrap().se().unwrap().into_parts();
 
         // Transport works — keys are derived consistently from the wrong
         // static key. The responder must reject this identity at the
@@ -1629,8 +1695,8 @@ mod tests {
 
     // ── Corrupted msg1 (tampered ephemeral in IKpsk1) ─────────────────
 
-    #[tokio::test]
-    async fn ikpsk1_corrupted_msg1_rejected() {
+    #[test]
+    fn ikpsk1_corrupted_msg1_rejected() {
         let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
 
         let initiator_static = provider.generate::<P256>().unwrap();
@@ -1638,53 +1704,57 @@ mod tests {
         let responder_pub = provider.public(&responder_static).unwrap();
         let psk = Psk::from_bytes([0xDD; 32]);
 
-        let i_hs =
-            Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
+        let (i_pipe, r_pipe) = Pipe::pair();
+        let i_hs = SyncHandshake::<Channel, Initiator, _, _, _, _>::initiate(
+            EphemeralOnly::new(StdRng::from_os_rng()),
+            &[],
+            i_pipe.clone(),
+        )
+        .set_rs(responder_pub);
 
-        let mut msg1_buf = [0u8;
-            noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: true, keyed: false, tokens: [E, Es, S, Ss, Psk],)];
-        let (msg1, _) = i_hs
-            .e(&mut msg1_buf)
-            .await
+        let _i_hs = i_hs
+            .e()
             .unwrap()
             .es()
-            .await
             .unwrap()
             .s(initiator_static)
-            .await
             .unwrap()
             .ss()
-            .await
             .unwrap()
             .psk(&psk)
-            .await
             .unwrap();
-        let mut corrupted = msg1.to_vec();
+        // `take_written` drains the linked queue so only the tampered copy
+        // reaches the responder.
+        let mut corrupted = i_pipe.take_written();
         // Corrupt a byte in the ephemeral public key.
         corrupted[5] ^= 0xFF;
 
-        let r_hs = Channel::respond(EphemeralOnly::new(StdRng::from_os_rng()), &[])
-            .set_s(responder_static)
-            .unwrap();
+        r_pipe.feed(&corrupted);
+        let r_hs = SyncHandshake::<Channel, Responder, _, _, _, _>::respond(
+            EphemeralOnly::new(StdRng::from_os_rng()),
+            &[],
+            r_pipe.clone(),
+        )
+        .set_s(responder_static)
+        .unwrap();
 
         // Responder reads msg1 — corruption may produce an invalid curve
         // point (caught at `e()`) or a valid but wrong point (caught at
         // `es()` when the payload tag fails). Either way, the handshake
         // must not complete.
-        let read = r_hs.read(&corrupted).unwrap();
-        match read.e().await {
+        match r_hs.recv().e() {
             Err(_) => {} // invalid point — rejected at e() token
             Ok((_, recv)) => {
                 // Valid point but wrong — es DH + payload tag catches it.
-                assert!(recv.es().await.is_err());
+                assert!(recv.es().is_err());
             }
         }
     }
 
     // ── Corrupted msg2 (tampered ephemeral in IKpsk1) ─────────────────
 
-    #[tokio::test]
-    async fn ikpsk1_corrupted_msg2_rejected() {
+    #[test]
+    fn ikpsk1_corrupted_msg2_rejected() {
         let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
 
         let initiator_static = provider.generate::<P256>().unwrap();
@@ -1692,68 +1762,63 @@ mod tests {
         let responder_pub = provider.public(&responder_static).unwrap();
         let psk = Psk::from_bytes([0xDD; 32]);
 
-        let i_hs =
-            Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
-        let r_hs = Channel::respond(EphemeralOnly::new(StdRng::from_os_rng()), &[])
-            .set_s(responder_static)
-            .unwrap();
+        let (i_pipe, r_pipe) = Pipe::pair();
+        let i_hs = SyncHandshake::<Channel, Initiator, _, _, _, _>::initiate(
+            EphemeralOnly::new(StdRng::from_os_rng()),
+            &[],
+            i_pipe.clone(),
+        )
+        .set_rs(responder_pub);
+        let r_hs = SyncHandshake::<Channel, Responder, _, _, _, _>::respond(
+            EphemeralOnly::new(StdRng::from_os_rng()),
+            &[],
+            r_pipe.clone(),
+        )
+        .set_s(responder_static)
+        .unwrap();
 
-        let mut msg1_buf = [0u8;
-            noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: true, keyed: false, tokens: [E, Es, S, Ss, Psk],)];
-        let (msg1, i_hs) = i_hs
-            .e(&mut msg1_buf)
-            .await
+        // msg1 flows through cleanly so the responder can produce msg2.
+        let i_hs = i_hs
+            .e()
             .unwrap()
             .es()
-            .await
             .unwrap()
             .s(initiator_static)
-            .await
             .unwrap()
             .ss()
-            .await
             .unwrap()
             .psk(&psk)
-            .await
             .unwrap();
-        let msg1 = msg1.to_vec();
-        let (_, recv) = r_hs.read(&msg1).unwrap().e().await.unwrap();
-        let recv = recv.es().await.unwrap();
-        let (_, recv) = recv.s().await.unwrap();
-        let recv = recv.ss().await.unwrap();
-        let r_hs = recv.psk(&psk).await.unwrap();
+        let (_, recv) = r_hs.recv().e().unwrap();
+        let recv = recv.es().unwrap();
+        let (_, recv) = recv.s().unwrap();
+        let recv = recv.ss().unwrap();
+        let r_hs = recv.psk(&psk).unwrap();
 
-        let mut msg2_buf = [0u8;
-            noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: true, keyed: true, tokens: [E, Ee, Se],)];
-        let (msg2, _) = r_hs
-            .e(&mut msg2_buf)
-            .await
-            .unwrap()
-            .ee()
-            .await
-            .unwrap()
-            .se()
-            .await
-            .unwrap();
-        let mut corrupted = msg2.to_vec();
+        // msg2 is captured off the responder's wire, tampered, then fed to
+        // the initiator. `take_written` drains the linked queue so only the
+        // tampered copy reaches the initiator.
+        let (_r_transport, _) = r_hs.e().unwrap().ee().unwrap().se().unwrap().into_parts();
+        let mut corrupted = r_pipe.take_written();
         // Corrupt a byte in the responder's ephemeral public key.
         corrupted[3] ^= 0xFF;
 
+        i_pipe.feed(&corrupted);
+
         // Corruption may produce an invalid curve point (caught at `e()`)
         // or a valid but wrong point (caught at `ee()` payload tag).
-        let read = i_hs.read(&corrupted).unwrap();
-        match read.e().await {
+        match i_hs.recv().e() {
             Err(_) => {} // invalid point — rejected at e() token
             Ok((_, recv)) => {
-                assert!(recv.ee().await.is_err());
+                assert!(recv.ee().is_err());
             }
         }
     }
 
     // ── Transport replay detection (nonce desync) ─────────────────────
 
-    #[tokio::test]
-    async fn transport_replayed_message_rejected() {
+    #[test]
+    fn transport_replayed_message_rejected() {
         let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
 
         let initiator_static = provider.generate::<P256>().unwrap();
@@ -1762,52 +1827,41 @@ mod tests {
         let psk = Psk::from_bytes([0xEE; 32]);
 
         // Complete handshake.
-        let i_hs =
-            Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
-        let r_hs = Channel::respond(EphemeralOnly::new(StdRng::from_os_rng()), &[])
-            .set_s(responder_static)
-            .unwrap();
+        let (i_pipe, r_pipe) = Pipe::pair();
+        let i_hs = SyncHandshake::<Channel, Initiator, _, _, _, _>::initiate(
+            EphemeralOnly::new(StdRng::from_os_rng()),
+            &[],
+            i_pipe.clone(),
+        )
+        .set_rs(responder_pub);
+        let r_hs = SyncHandshake::<Channel, Responder, _, _, _, _>::respond(
+            EphemeralOnly::new(StdRng::from_os_rng()),
+            &[],
+            r_pipe.clone(),
+        )
+        .set_s(responder_static)
+        .unwrap();
 
-        let mut msg1_buf = [0u8;
-            noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: true, keyed: false, tokens: [E, Es, S, Ss, Psk],)];
-        let (msg1, i_hs) = i_hs
-            .e(&mut msg1_buf)
-            .await
+        let i_hs = i_hs
+            .e()
             .unwrap()
             .es()
-            .await
             .unwrap()
             .s(initiator_static)
-            .await
             .unwrap()
             .ss()
-            .await
             .unwrap()
             .psk(&psk)
-            .await
             .unwrap();
-        let msg1 = msg1.to_vec();
-        let (_, recv) = r_hs.read(&msg1).unwrap().e().await.unwrap();
-        let recv = recv.es().await.unwrap();
-        let (_, recv) = recv.s().await.unwrap();
-        let recv = recv.ss().await.unwrap();
-        let r_hs = recv.psk(&psk).await.unwrap();
+        let (_, recv) = r_hs.recv().e().unwrap();
+        let recv = recv.es().unwrap();
+        let (_, recv) = recv.s().unwrap();
+        let recv = recv.ss().unwrap();
+        let r_hs = recv.psk(&psk).unwrap();
 
-        let mut msg2_buf = [0u8;
-            noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: true, keyed: true, tokens: [E, Ee, Se],)];
-        let (msg2, r_transport) = r_hs
-            .e(&mut msg2_buf)
-            .await
-            .unwrap()
-            .ee()
-            .await
-            .unwrap()
-            .se()
-            .await
-            .unwrap();
-        let msg2 = msg2.to_vec();
-        let (_, recv) = i_hs.read(&msg2).unwrap().e().await.unwrap();
-        let i_transport = recv.ee().await.unwrap().se().await.unwrap();
+        let (r_transport, _) = r_hs.e().unwrap().ee().unwrap().se().unwrap().into_parts();
+        let (_, recv) = i_hs.recv().e().unwrap();
+        let (i_transport, _) = recv.ee().unwrap().se().unwrap().into_parts();
 
         let mut i_transport = i_transport;
         let mut r_transport = r_transport;
@@ -1828,8 +1882,8 @@ mod tests {
 
     // ── Large payload transport ───────────────────────────────────────
 
-    #[tokio::test]
-    async fn transport_enforces_max_message_length() {
+    #[test]
+    fn transport_enforces_max_message_length() {
         let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
 
         let initiator_static = provider.generate::<P256>().unwrap();
@@ -1838,52 +1892,41 @@ mod tests {
         let psk = Psk::from_bytes([0xFF; 32]);
 
         // Complete handshake.
-        let i_hs =
-            Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
-        let r_hs = Channel::respond(EphemeralOnly::new(StdRng::from_os_rng()), &[])
-            .set_s(responder_static)
-            .unwrap();
+        let (i_pipe, r_pipe) = Pipe::pair();
+        let i_hs = SyncHandshake::<Channel, Initiator, _, _, _, _>::initiate(
+            EphemeralOnly::new(StdRng::from_os_rng()),
+            &[],
+            i_pipe.clone(),
+        )
+        .set_rs(responder_pub);
+        let r_hs = SyncHandshake::<Channel, Responder, _, _, _, _>::respond(
+            EphemeralOnly::new(StdRng::from_os_rng()),
+            &[],
+            r_pipe.clone(),
+        )
+        .set_s(responder_static)
+        .unwrap();
 
-        let mut msg1_buf = [0u8;
-            noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: true, keyed: false, tokens: [E, Es, S, Ss, Psk],)];
-        let (msg1, i_hs) = i_hs
-            .e(&mut msg1_buf)
-            .await
+        let i_hs = i_hs
+            .e()
             .unwrap()
             .es()
-            .await
             .unwrap()
             .s(initiator_static)
-            .await
             .unwrap()
             .ss()
-            .await
             .unwrap()
             .psk(&psk)
-            .await
             .unwrap();
-        let msg1 = msg1.to_vec();
-        let (_, recv) = r_hs.read(&msg1).unwrap().e().await.unwrap();
-        let recv = recv.es().await.unwrap();
-        let (_, recv) = recv.s().await.unwrap();
-        let recv = recv.ss().await.unwrap();
-        let r_hs = recv.psk(&psk).await.unwrap();
+        let (_, recv) = r_hs.recv().e().unwrap();
+        let recv = recv.es().unwrap();
+        let (_, recv) = recv.s().unwrap();
+        let recv = recv.ss().unwrap();
+        let r_hs = recv.psk(&psk).unwrap();
 
-        let mut msg2_buf = [0u8;
-            noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: true, keyed: true, tokens: [E, Ee, Se],)];
-        let (msg2, r_transport) = r_hs
-            .e(&mut msg2_buf)
-            .await
-            .unwrap()
-            .ee()
-            .await
-            .unwrap()
-            .se()
-            .await
-            .unwrap();
-        let msg2 = msg2.to_vec();
-        let (_, recv) = i_hs.read(&msg2).unwrap().e().await.unwrap();
-        let i_transport = recv.ee().await.unwrap().se().await.unwrap();
+        let (r_transport, _) = r_hs.e().unwrap().ee().unwrap().se().unwrap().into_parts();
+        let (_, recv) = i_hs.recv().e().unwrap();
+        let (i_transport, _) = recv.ee().unwrap().se().unwrap().into_parts();
 
         let mut i_transport = i_transport;
         let mut r_transport = r_transport;
@@ -1922,8 +1965,8 @@ mod tests {
 
     // ── Rekey tests ────────────────────────────────────────────────
 
-    #[tokio::test]
-    async fn transport_rekey_then_communicate() {
+    #[test]
+    fn transport_rekey_then_communicate() {
         let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
 
         let initiator_static = provider.generate::<P256>().unwrap();
@@ -1932,52 +1975,41 @@ mod tests {
         let psk = Psk::from_bytes([0x11; 32]);
 
         // Complete handshake.
-        let i_hs =
-            Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
-        let r_hs = Channel::respond(EphemeralOnly::new(StdRng::from_os_rng()), &[])
-            .set_s(responder_static)
-            .unwrap();
+        let (i_pipe, r_pipe) = Pipe::pair();
+        let i_hs = SyncHandshake::<Channel, Initiator, _, _, _, _>::initiate(
+            EphemeralOnly::new(StdRng::from_os_rng()),
+            &[],
+            i_pipe.clone(),
+        )
+        .set_rs(responder_pub);
+        let r_hs = SyncHandshake::<Channel, Responder, _, _, _, _>::respond(
+            EphemeralOnly::new(StdRng::from_os_rng()),
+            &[],
+            r_pipe.clone(),
+        )
+        .set_s(responder_static)
+        .unwrap();
 
-        let mut msg1_buf = [0u8;
-            noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: true, keyed: false, tokens: [E, Es, S, Ss, Psk],)];
-        let (msg1, i_hs) = i_hs
-            .e(&mut msg1_buf)
-            .await
+        let i_hs = i_hs
+            .e()
             .unwrap()
             .es()
-            .await
             .unwrap()
             .s(initiator_static)
-            .await
             .unwrap()
             .ss()
-            .await
             .unwrap()
             .psk(&psk)
-            .await
             .unwrap();
-        let msg1 = msg1.to_vec();
-        let (_, recv) = r_hs.read(&msg1).unwrap().e().await.unwrap();
-        let recv = recv.es().await.unwrap();
-        let (_, recv) = recv.s().await.unwrap();
-        let recv = recv.ss().await.unwrap();
-        let r_hs = recv.psk(&psk).await.unwrap();
+        let (_, recv) = r_hs.recv().e().unwrap();
+        let recv = recv.es().unwrap();
+        let (_, recv) = recv.s().unwrap();
+        let recv = recv.ss().unwrap();
+        let r_hs = recv.psk(&psk).unwrap();
 
-        let mut msg2_buf = [0u8;
-            noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: true, keyed: true, tokens: [E, Ee, Se],)];
-        let (msg2, r_transport) = r_hs
-            .e(&mut msg2_buf)
-            .await
-            .unwrap()
-            .ee()
-            .await
-            .unwrap()
-            .se()
-            .await
-            .unwrap();
-        let msg2 = msg2.to_vec();
-        let (_, recv) = i_hs.read(&msg2).unwrap().e().await.unwrap();
-        let i_transport = recv.ee().await.unwrap().se().await.unwrap();
+        let (r_transport, _) = r_hs.e().unwrap().ee().unwrap().se().unwrap().into_parts();
+        let (_, recv) = i_hs.recv().e().unwrap();
+        let (i_transport, _) = recv.ee().unwrap().se().unwrap().into_parts();
 
         let mut i_transport = i_transport;
         let mut r_transport = r_transport;
@@ -2004,8 +2036,8 @@ mod tests {
         assert_eq!(&pt[..pt_len], b"reply after rekey");
     }
 
-    #[tokio::test]
-    async fn transport_rekey_desync_rejected() {
+    #[test]
+    fn transport_rekey_desync_rejected() {
         let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
 
         let initiator_static = provider.generate::<P256>().unwrap();
@@ -2014,52 +2046,41 @@ mod tests {
         let psk = Psk::from_bytes([0x22; 32]);
 
         // Complete handshake.
-        let i_hs =
-            Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
-        let r_hs = Channel::respond(EphemeralOnly::new(StdRng::from_os_rng()), &[])
-            .set_s(responder_static)
-            .unwrap();
+        let (i_pipe, r_pipe) = Pipe::pair();
+        let i_hs = SyncHandshake::<Channel, Initiator, _, _, _, _>::initiate(
+            EphemeralOnly::new(StdRng::from_os_rng()),
+            &[],
+            i_pipe.clone(),
+        )
+        .set_rs(responder_pub);
+        let r_hs = SyncHandshake::<Channel, Responder, _, _, _, _>::respond(
+            EphemeralOnly::new(StdRng::from_os_rng()),
+            &[],
+            r_pipe.clone(),
+        )
+        .set_s(responder_static)
+        .unwrap();
 
-        let mut msg1_buf = [0u8;
-            noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: true, keyed: false, tokens: [E, Es, S, Ss, Psk],)];
-        let (msg1, i_hs) = i_hs
-            .e(&mut msg1_buf)
-            .await
+        let i_hs = i_hs
+            .e()
             .unwrap()
             .es()
-            .await
             .unwrap()
             .s(initiator_static)
-            .await
             .unwrap()
             .ss()
-            .await
             .unwrap()
             .psk(&psk)
-            .await
             .unwrap();
-        let msg1 = msg1.to_vec();
-        let (_, recv) = r_hs.read(&msg1).unwrap().e().await.unwrap();
-        let recv = recv.es().await.unwrap();
-        let (_, recv) = recv.s().await.unwrap();
-        let recv = recv.ss().await.unwrap();
-        let r_hs = recv.psk(&psk).await.unwrap();
+        let (_, recv) = r_hs.recv().e().unwrap();
+        let recv = recv.es().unwrap();
+        let (_, recv) = recv.s().unwrap();
+        let recv = recv.ss().unwrap();
+        let r_hs = recv.psk(&psk).unwrap();
 
-        let mut msg2_buf = [0u8;
-            noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: true, keyed: true, tokens: [E, Ee, Se],)];
-        let (msg2, r_transport) = r_hs
-            .e(&mut msg2_buf)
-            .await
-            .unwrap()
-            .ee()
-            .await
-            .unwrap()
-            .se()
-            .await
-            .unwrap();
-        let msg2 = msg2.to_vec();
-        let (_, recv) = i_hs.read(&msg2).unwrap().e().await.unwrap();
-        let i_transport = recv.ee().await.unwrap().se().await.unwrap();
+        let (r_transport, _) = r_hs.e().unwrap().ee().unwrap().se().unwrap().into_parts();
+        let (_, recv) = i_hs.recv().e().unwrap();
+        let (i_transport, _) = recv.ee().unwrap().se().unwrap().into_parts();
 
         let mut i_transport = i_transport;
         let mut r_transport = r_transport;
@@ -2086,8 +2107,8 @@ mod tests {
 
     // ── Prologue tests ────────────────────────────────────────────────
 
-    #[tokio::test]
-    async fn matching_prologue_succeeds() {
+    #[test]
+    fn matching_prologue_succeeds() {
         let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
 
         let responder_static = provider.generate::<P256>().unwrap();
@@ -2097,18 +2118,26 @@ mod tests {
 
         type NoiseSeal = N;
 
-        let sealer = NoiseSeal::initiate(EphemeralOnly::new(StdRng::from_os_rng()), prologue)
-            .set_rs(responder_pub);
-        let mut msg_buf = [0u8;
-            noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: false, keyed: false, tokens: [E, Es],)];
-        let (msg, mut i_transport) = sealer.e(&mut msg_buf).await.unwrap().es().await.unwrap();
-        let msg = msg.to_vec();
+        let (i_pipe, r_pipe) = Pipe::pair();
+        let sealer = SyncHandshake::<NoiseSeal, Initiator, _, _, _, _>::initiate(
+            EphemeralOnly::new(StdRng::from_os_rng()),
+            prologue,
+            i_pipe.clone(),
+        )
+        .set_rs(responder_pub);
+        let (mut i_transport, _) = sealer.e().unwrap().es().unwrap().into_parts();
+        let msg = i_pipe.take_written();
 
-        let opener = NoiseSeal::respond(EphemeralOnly::new(StdRng::from_os_rng()), prologue)
-            .set_s(responder_static)
-            .unwrap();
-        let (_, recv) = opener.read(&msg).unwrap().e().await.unwrap();
-        let mut r_transport = recv.es().await.unwrap();
+        r_pipe.feed(&msg);
+        let opener = SyncHandshake::<NoiseSeal, Responder, _, _, _, _>::respond(
+            EphemeralOnly::new(StdRng::from_os_rng()),
+            prologue,
+            r_pipe.clone(),
+        )
+        .set_s(responder_static)
+        .unwrap();
+        let (_, recv) = opener.recv().e().unwrap();
+        let (mut r_transport, _) = recv.es().unwrap().into_parts();
 
         // Transport works with matching prologue.
         let mut ct = [0u8; 64];
@@ -2118,8 +2147,8 @@ mod tests {
         assert_eq!(&pt[..pt_len], b"hello");
     }
 
-    #[tokio::test]
-    async fn mismatched_prologue_rejected() {
+    #[test]
+    fn mismatched_prologue_rejected() {
         let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
 
         let responder_static = provider.generate::<P256>().unwrap();
@@ -2127,22 +2156,30 @@ mod tests {
 
         type NoiseSeal = N;
 
+        let (i_pipe, r_pipe) = Pipe::pair();
         // Initiator uses prologue "v1", responder uses "v2".
-        let sealer = NoiseSeal::initiate(EphemeralOnly::new(StdRng::from_os_rng()), b"v1")
-            .set_rs(responder_pub);
-        let mut msg_buf = [0u8;
-            noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: false, keyed: false, tokens: [E, Es],)];
-        let (msg, _) = sealer.e(&mut msg_buf).await.unwrap().es().await.unwrap();
-        let msg = msg.to_vec();
+        let sealer = SyncHandshake::<NoiseSeal, Initiator, _, _, _, _>::initiate(
+            EphemeralOnly::new(StdRng::from_os_rng()),
+            b"v1",
+            i_pipe.clone(),
+        )
+        .set_rs(responder_pub);
+        let (_i_transport, _) = sealer.e().unwrap().es().unwrap().into_parts();
+        let msg = i_pipe.take_written();
 
-        let opener = NoiseSeal::respond(EphemeralOnly::new(StdRng::from_os_rng()), b"v2")
-            .set_s(responder_static)
-            .unwrap();
-        let (_, recv) = opener.read(&msg).unwrap().e().await.unwrap();
+        r_pipe.feed(&msg);
+        let opener = SyncHandshake::<NoiseSeal, Responder, _, _, _, _>::respond(
+            EphemeralOnly::new(StdRng::from_os_rng()),
+            b"v2",
+            r_pipe.clone(),
+        )
+        .set_s(responder_static)
+        .unwrap();
+        let (_, recv) = opener.recv().e().unwrap();
 
         // The es token will fail because the handshake hashes diverge
         // due to different prologues — the payload AEAD tag won't match.
-        assert!(recv.es().await.is_err());
+        assert!(recv.es().is_err());
     }
 
     // ── Output buffer too small ─────────────────────────────────────
@@ -2185,7 +2222,7 @@ mod tests {
 
         /// Complete an IKpsk1 handshake with the given keys and PSK,
         /// returning both transport states.
-        async fn full_ikpsk1_handshake(
+        fn full_ikpsk1_handshake(
             initiator_static: P256r1PrivateKey,
             responder_static: P256r1PrivateKey,
             psk: Psk,
@@ -2193,52 +2230,41 @@ mod tests {
             let provider = EphemeralOnly::new(StdRng::from_os_rng());
             let responder_pub = provider.public(&responder_static).unwrap();
 
-            let i_hs = Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[])
-                .set_rs(responder_pub);
-            let r_hs = Channel::respond(EphemeralOnly::new(StdRng::from_os_rng()), &[])
-                .set_s(responder_static)
-                .unwrap();
+            let (i_pipe, r_pipe) = Pipe::pair();
+            let i_hs = SyncHandshake::<Channel, Initiator, _, _, _, _>::initiate(
+                EphemeralOnly::new(StdRng::from_os_rng()),
+                &[],
+                i_pipe.clone(),
+            )
+            .set_rs(responder_pub);
+            let r_hs = SyncHandshake::<Channel, Responder, _, _, _, _>::respond(
+                EphemeralOnly::new(StdRng::from_os_rng()),
+                &[],
+                r_pipe.clone(),
+            )
+            .set_s(responder_static)
+            .unwrap();
 
-            let mut msg1_buf = [0u8;
-                noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: true, keyed: false, tokens: [E, Es, S, Ss, Psk],)];
-            let (msg1, i_hs) = i_hs
-                .e(&mut msg1_buf)
-                .await
+            let i_hs = i_hs
+                .e()
                 .unwrap()
                 .es()
-                .await
                 .unwrap()
                 .s(initiator_static)
-                .await
                 .unwrap()
                 .ss()
-                .await
                 .unwrap()
                 .psk(&psk)
-                .await
                 .unwrap();
-            let msg1 = msg1.to_vec();
-            let (_, recv) = r_hs.read(&msg1).unwrap().e().await.unwrap();
-            let recv = recv.es().await.unwrap();
-            let (_, recv) = recv.s().await.unwrap();
-            let recv = recv.ss().await.unwrap();
-            let r_hs = recv.psk(&psk).await.unwrap();
+            let (_, recv) = r_hs.recv().e().unwrap();
+            let recv = recv.es().unwrap();
+            let (_, recv) = recv.s().unwrap();
+            let recv = recv.ss().unwrap();
+            let r_hs = recv.psk(&psk).unwrap();
 
-            let mut msg2_buf = [0u8;
-                noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: true, keyed: true, tokens: [E, Ee, Se],)];
-            let (msg2, r_transport) = r_hs
-                .e(&mut msg2_buf)
-                .await
-                .unwrap()
-                .ee()
-                .await
-                .unwrap()
-                .se()
-                .await
-                .unwrap();
-            let msg2 = msg2.to_vec();
-            let (_, recv) = i_hs.read(&msg2).unwrap().e().await.unwrap();
-            let i_transport = recv.ee().await.unwrap().se().await.unwrap();
+            let (r_transport, _) = r_hs.e().unwrap().ee().unwrap().se().unwrap().into_parts();
+            let (_, recv) = i_hs.recv().e().unwrap();
+            let (i_transport, _) = recv.ee().unwrap().se().unwrap().into_parts();
 
             (i_transport, r_transport)
         }
@@ -2250,30 +2276,22 @@ mod tests {
                 plaintext in proptest::collection::vec(any::<u8>(), 0..4096),
                 psk in any::<[u8; 32]>().prop_map(Psk::from_bytes),
             ) {
-                let rt = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .unwrap();
-                rt.block_on(async {
-                    let i_sk = EphemeralOnly::new(StdRng::from_os_rng()).generate::<P256>().unwrap();
-                    let r_sk = EphemeralOnly::new(StdRng::from_os_rng()).generate::<P256>().unwrap();
+                let i_sk = EphemeralOnly::new(StdRng::from_os_rng()).generate::<P256>().unwrap();
+                let r_sk = EphemeralOnly::new(StdRng::from_os_rng()).generate::<P256>().unwrap();
 
-                    let (mut i_t, mut r_t) = full_ikpsk1_handshake(i_sk, r_sk, psk).await;
+                let (mut i_t, mut r_t) = full_ikpsk1_handshake(i_sk, r_sk, psk);
 
-                    // Initiator → responder.
-                    let mut ct = vec![0u8; plaintext.len() + 16];
-                    let ct_len = i_t.send(&plaintext, &mut ct).unwrap();
-                    let mut pt = vec![0u8; plaintext.len()];
-                    let pt_len = r_t.receive(&ct[..ct_len], &mut pt).unwrap();
-                    prop_assert_eq!(&pt[..pt_len], &plaintext[..]);
+                // Initiator → responder.
+                let mut ct = vec![0u8; plaintext.len() + 16];
+                let ct_len = i_t.send(&plaintext, &mut ct).unwrap();
+                let mut pt = vec![0u8; plaintext.len()];
+                let pt_len = r_t.receive(&ct[..ct_len], &mut pt).unwrap();
+                prop_assert_eq!(&pt[..pt_len], &plaintext[..]);
 
-                    // Responder → initiator.
-                    let ct_len = r_t.send(&plaintext, &mut ct).unwrap();
-                    let pt_len = i_t.receive(&ct[..ct_len], &mut pt).unwrap();
-                    prop_assert_eq!(&pt[..pt_len], &plaintext[..]);
-
-                    Ok(())
-                })?;
+                // Responder → initiator.
+                let ct_len = r_t.send(&plaintext, &mut ct).unwrap();
+                let pt_len = i_t.receive(&ct[..ct_len], &mut pt).unwrap();
+                prop_assert_eq!(&pt[..pt_len], &plaintext[..]);
             }
 
             /// Corrupting any single byte in a transport ciphertext causes
@@ -2284,29 +2302,21 @@ mod tests {
                 psk in any::<[u8; 32]>().prop_map(Psk::from_bytes),
                 corrupt_pos_seed in any::<usize>(),
             ) {
-                let rt = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .unwrap();
-                rt.block_on(async {
-                    let i_sk = EphemeralOnly::new(StdRng::from_os_rng()).generate::<P256>().unwrap();
-                    let r_sk = EphemeralOnly::new(StdRng::from_os_rng()).generate::<P256>().unwrap();
+                let i_sk = EphemeralOnly::new(StdRng::from_os_rng()).generate::<P256>().unwrap();
+                let r_sk = EphemeralOnly::new(StdRng::from_os_rng()).generate::<P256>().unwrap();
 
-                    let (mut i_t, mut r_t) = full_ikpsk1_handshake(i_sk, r_sk, psk).await;
+                let (mut i_t, mut r_t) = full_ikpsk1_handshake(i_sk, r_sk, psk);
 
-                    let mut ct = vec![0u8; plaintext.len() + 16];
-                    let ct_len = i_t.send(&plaintext, &mut ct).unwrap();
+                let mut ct = vec![0u8; plaintext.len() + 16];
+                let ct_len = i_t.send(&plaintext, &mut ct).unwrap();
 
-                    // Corrupt a single byte at a random position.
-                    let pos = corrupt_pos_seed % ct_len;
-                    ct[pos] ^= 0x01;
+                // Corrupt a single byte at a random position.
+                let pos = corrupt_pos_seed % ct_len;
+                ct[pos] ^= 0x01;
 
-                    let mut pt = vec![0u8; plaintext.len()];
-                    let result = r_t.receive(&ct[..ct_len], &mut pt);
-                    prop_assert!(result.is_err());
-
-                    Ok(())
-                })?;
+                let mut pt = vec![0u8; plaintext.len()];
+                let result = r_t.receive(&ct[..ct_len], &mut pt);
+                prop_assert!(result.is_err());
             }
 
             /// Random bytes fed as a handshake msg1 are always rejected.
@@ -2314,31 +2324,28 @@ mod tests {
             fn random_msg1_rejected(
                 garbage in proptest::collection::vec(any::<u8>(), 162..163),
             ) {
-                let rt = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .unwrap();
-                rt.block_on(async {
-                    let r_sk = EphemeralOnly::new(StdRng::from_os_rng()).generate::<P256>().unwrap();
-                    let r_hs = Channel::respond(EphemeralOnly::new(StdRng::from_os_rng()), &[])
-                        .set_s(r_sk)
-                        .unwrap();
+                let r_sk = EphemeralOnly::new(StdRng::from_os_rng()).generate::<P256>().unwrap();
+                let (_unused, r_pipe) = Pipe::pair();
+                r_pipe.feed(&garbage);
+                let r_hs = SyncHandshake::<Channel, Responder, _, _, _, _>::respond(
+                    EphemeralOnly::new(StdRng::from_os_rng()),
+                    &[],
+                    r_pipe.clone(),
+                )
+                .set_s(r_sk)
+                .unwrap();
 
-                    // Random bytes of the correct length — should fail at
-                    // e() (invalid point), or at s() (AEAD tag mismatch on
-                    // the encrypted static key). In IKpsk1, es() just does
-                    // DH and mixes — no tag check — so the failure is at s().
-                    let read = r_hs.read(&garbage).unwrap();
-                    match read.e().await {
-                        Err(_) => {} // invalid point
-                        Ok((_, recv)) => {
-                            let recv = recv.es().await.unwrap();
-                            prop_assert!(recv.s().await.is_err());
-                        }
+                // Random bytes of the correct length — should fail at
+                // e() (invalid point), or at s() (AEAD tag mismatch on
+                // the encrypted static key). In IKpsk1, es() just does
+                // DH and mixes — no tag check — so the failure is at s().
+                match r_hs.recv().e() {
+                    Err(_) => {} // invalid point
+                    Ok((_, recv)) => {
+                        let recv = recv.es().unwrap();
+                        prop_assert!(recv.s().is_err());
                     }
-
-                    Ok(())
-                })?;
+                }
             }
 
             /// AEAD: encrypt then decrypt with random key, nonce, AD, and
@@ -2398,7 +2405,7 @@ mod tests {
     mod single_e_send_finalizer_tests {
         use super::super::tokens::{Cons, E, Ee, Message, Nil, ToInitiator, ToResponder};
         use super::super::{Blake2b, ChaChaPoly, Noise, P256};
-        use super::super::{HandshakeState, Initiator, Pattern, Responder};
+        use super::super::{Initiator, Pattern, Responder};
         use super::super::{SyncHandshake, SyncTransport};
         use crate::provider::EphemeralOnly;
         use rand::{SeedableRng, rngs::StdRng};
@@ -2437,78 +2444,97 @@ mod tests {
 
         /// Variant 3: a single `-> e` as the final (only) message drives
         /// straight to a `Transport` on both sides, with matching sessions.
-        #[tokio::test]
-        async fn single_e_last_message_finalizes_to_transport() {
-            // Initiator: send the single `-> e` message.
-            let initiator = HandshakeState::<SingleEProto, Initiator, _, _, _>::new(
+        #[test]
+        fn single_e_last_message_finalizes_to_transport() {
+            // Initiator: stream the single `-> e` message into a `Vec`;
+            // `.e()` must finalize directly to `SyncTransport` (variant 3).
+            let initiator = SyncHandshake::<SingleEProto, Initiator, _, _, _, _>::initiate(
                 EphemeralOnly::new(StdRng::from_os_rng()),
                 &[],
+                Vec::<u8>::new(),
             );
+            let initiator_transport: SyncTransport<_, Vec<u8>> = initiator.e().unwrap();
+            let (initiator_transport, msg) = initiator_transport.into_parts();
             // -> e is 65 bytes (PUBLIC_KEY_SIZE, no payload tag — state is
             // never keyed in this pattern).
-            let mut msg_buf = [0u8; 65];
-            let (msg, initiator_transport) = initiator.e(&mut msg_buf).await.unwrap();
             assert_eq!(msg.len(), 65, "a bare `-> e` must be exactly 65 bytes");
 
-            // Responder: read the single `-> e` message → Transport.
-            let responder = HandshakeState::<SingleEProto, Responder, _, _, _>::new(
+            // Responder: read the single `-> e` message → `SyncTransport`.
+            let responder = SyncHandshake::<SingleEProto, Responder, _, _, _, _>::respond(
                 EphemeralOnly::new(StdRng::from_os_rng()),
                 &[],
+                Cursor::new(msg),
             );
-            let msg = msg.to_vec();
-            let (_revealed_e, responder_transport) =
-                responder.read(&msg).unwrap().e().await.unwrap();
+            let (_revealed_e, mut responder_transport) = responder.recv().e().unwrap();
 
             // Both sides derived the same session.
             assert_eq!(
                 initiator_transport.session_id(),
-                responder_transport.session_id(),
+                responder_transport.transport().session_id(),
                 "initiator and responder must derive a matching session",
             );
         }
 
         /// Variant 2: a single `-> e` followed by another message advances
-        /// to the next `HandshakeState`; the full `-> e` / `<- e, ee`
-        /// handshake completes with matching sessions.
-        #[tokio::test]
-        async fn single_e_more_messages_advances_handshake() {
-            // Initiator msg1: -> e (single E, more messages remain).
-            let initiator = HandshakeState::<EThenEeProto, Initiator, _, _, _>::new(
+        /// to the next `SyncHandshake`; the full `-> e` / `<- e, ee`
+        /// handshake completes with matching sessions. Driven hiss↔hiss over
+        /// a shared in-memory `Pipe`.
+        #[test]
+        fn single_e_more_messages_advances_handshake() {
+            let (i2r, r2i) = (
+                std::rc::Rc::new(std::cell::RefCell::new(
+                    std::collections::VecDeque::<u8>::new(),
+                )),
+                std::rc::Rc::new(std::cell::RefCell::new(
+                    std::collections::VecDeque::<u8>::new(),
+                )),
+            );
+            let init_stream = Pipe {
+                inbound: r2i.clone(),
+                outbound: i2r.clone(),
+            };
+            let resp_stream = Pipe {
+                inbound: i2r.clone(),
+                outbound: r2i.clone(),
+            };
+
+            // Initiator msg1: -> e (single E, more messages remain) must
+            // advance to the next `SyncHandshake` (variant 2).
+            let initiator = SyncHandshake::<EThenEeProto, Initiator, _, _, _, _>::initiate(
                 EphemeralOnly::new(StdRng::from_os_rng()),
                 &[],
+                init_stream,
             );
-            let mut msg1_buf = [0u8; 65];
-            // The single-`E` variant-2 finalizer returns (&[u8], next state).
-            let (msg1, initiator) = initiator.e(&mut msg1_buf).await.unwrap();
-            assert_eq!(msg1.len(), 65, "a bare `-> e` must be exactly 65 bytes");
-            let msg1 = msg1.to_vec();
+            let initiator = initiator.e().unwrap();
+            assert_eq!(
+                i2r.borrow().len(),
+                65,
+                "a bare `-> e` must be exactly 65 bytes"
+            );
 
             // Responder reads msg1 (-> e), then sends msg2 (<- e, ee).
-            let responder = HandshakeState::<EThenEeProto, Responder, _, _, _>::new(
+            let responder = SyncHandshake::<EThenEeProto, Responder, _, _, _, _>::respond(
                 EphemeralOnly::new(StdRng::from_os_rng()),
                 &[],
+                resp_stream,
             );
-            let (_revealed_e, responder) = responder.read(&msg1).unwrap().e().await.unwrap();
+            let (_revealed_e, responder) = responder.recv().e().unwrap();
 
             // <- e, ee : e (65) + ee (keys) + payload tag (16) = 81 bytes.
-            let mut msg2_buf = [0u8; 81];
-            let (msg2, responder_transport) = responder
-                .e(&mut msg2_buf)
-                .await
-                .unwrap()
-                .ee()
-                .await
-                .unwrap();
-            assert_eq!(msg2.len(), 81);
-            let msg2 = msg2.to_vec();
+            let mut responder_transport = responder.e().unwrap().ee().unwrap();
+            assert_eq!(
+                r2i.borrow().len(),
+                81,
+                "`<- e, ee` must be exactly 81 bytes"
+            );
 
-            // Initiator reads msg2 (<- e, ee) → Transport.
-            let (_revealed_e, initiator) = initiator.read(&msg2).unwrap().e().await.unwrap();
-            let initiator_transport = initiator.ee().await.unwrap();
+            // Initiator reads msg2 (<- e, ee) → `SyncTransport`.
+            let (_revealed_e, initiator) = initiator.recv().e().unwrap();
+            let mut initiator_transport = initiator.ee().unwrap();
 
             assert_eq!(
-                initiator_transport.session_id(),
-                responder_transport.session_id(),
+                initiator_transport.transport().session_id(),
+                responder_transport.transport().session_id(),
                 "initiator and responder must derive a matching session",
             );
         }

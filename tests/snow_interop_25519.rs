@@ -13,6 +13,9 @@
 //! the handshake completes, the handshake hashes match, and transport
 //! messages decrypt across implementations.
 
+mod common;
+use common::PeerStream;
+
 use hiss::noise::*;
 use hiss::provider::EphemeralOnly;
 use hiss::provider::ProviderExt;
@@ -26,8 +29,8 @@ type XX25519 = Noise<pattern::XX, X25519, ChaChaPoly, Blake2b>;
 
 // ── N: our initiator ↔ snow responder ───────────────────────────
 
-#[tokio::test]
-async fn n_hiss_initiator_snow_responder() {
+#[test]
+fn n_hiss_initiator_snow_responder() {
     let proto = "Noise_N_25519_ChaChaPoly_BLAKE2b";
 
     let snow_builder = snow::Builder::new(proto.parse().unwrap());
@@ -40,13 +43,18 @@ async fn n_hiss_initiator_snow_responder() {
         .build_responder()
         .unwrap();
 
-    let sealer =
-        N25519::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
+    let stream = PeerStream::new();
+    let sealer = SyncHandshake::<N25519, Initiator, _, _, _, _>::initiate(
+        EphemeralOnly::new(StdRng::from_os_rng()),
+        &[],
+        stream.clone(),
+    )
+    .set_rs(responder_pub);
 
     // msg1: -> e, es (one-way seal, then transport mode)
-    let mut msg_buf = [0u8; 256];
-    let (msg, mut transport) = sealer.e(&mut msg_buf).await.unwrap().es().await.unwrap();
-    let msg = msg.to_vec();
+    let chain = sealer.e().unwrap().es().unwrap();
+    let (mut transport, _) = chain.into_parts();
+    let msg = stream.take_written();
 
     let payload = b"x25519 N interop";
     let mut sealed = [0u8; 256];
@@ -66,8 +74,8 @@ async fn n_hiss_initiator_snow_responder() {
 
 // ── IK: our initiator ↔ snow responder ──────────────────────────
 
-#[tokio::test]
-async fn ik_hiss_initiator_snow_responder() {
+#[test]
+fn ik_hiss_initiator_snow_responder() {
     let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
     let initiator_static = provider.generate::<X25519>().unwrap();
 
@@ -83,25 +91,25 @@ async fn ik_hiss_initiator_snow_responder() {
         .build_responder()
         .unwrap();
 
-    let i_hs =
-        IK25519::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
+    let stream = PeerStream::new();
+    let i_hs = SyncHandshake::<IK25519, Initiator, _, _, _, _>::initiate(
+        EphemeralOnly::new(StdRng::from_os_rng()),
+        &[],
+        stream.clone(),
+    )
+    .set_rs(responder_pub);
 
     // msg1: -> e, es, s, ss
-    let mut msg1_buf = [0u8; 256];
-    let (msg1, i_hs) = i_hs
-        .e(&mut msg1_buf)
-        .await
+    let i_hs = i_hs
+        .e()
         .unwrap()
         .es()
-        .await
         .unwrap()
         .s(initiator_static)
-        .await
         .unwrap()
         .ss()
-        .await
         .unwrap();
-    let msg1 = msg1.to_vec();
+    let msg1 = stream.take_written();
 
     let mut buf = [0u8; 256];
     snow_responder.read_message(&msg1, &mut buf).unwrap();
@@ -109,8 +117,10 @@ async fn ik_hiss_initiator_snow_responder() {
     // msg2: <- e, ee, se
     let mut msg2 = [0u8; 256];
     let msg2_len = snow_responder.write_message(&[], &mut msg2).unwrap();
-    let (_, recv) = i_hs.read(&msg2[..msg2_len]).unwrap().e().await.unwrap();
-    let i_transport = recv.ee().await.unwrap().se().await.unwrap();
+    stream.feed(&msg2[..msg2_len]);
+    let (_, recv) = i_hs.recv().e().unwrap();
+    let chain = recv.ee().unwrap().se().unwrap();
+    let (mut i_transport, _) = chain.into_parts();
 
     assert_eq!(
         i_transport.session_id().as_ref(),
@@ -118,7 +128,6 @@ async fn ik_hiss_initiator_snow_responder() {
     );
 
     let mut snow_responder = snow_responder.into_transport_mode().unwrap();
-    let mut i_transport = i_transport;
 
     // Transport: bidirectional exchange.
     let plaintext = b"hello from hiss IK 25519 initiator";
@@ -138,8 +147,8 @@ async fn ik_hiss_initiator_snow_responder() {
 
 // ── IK: snow initiator ↔ our responder ──────────────────────────
 
-#[tokio::test]
-async fn ik_snow_initiator_hiss_responder() {
+#[test]
+fn ik_snow_initiator_hiss_responder() {
     let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
     let responder_static = provider.generate::<X25519>().unwrap();
     let responder_pub = provider.public(&responder_static).unwrap();
@@ -157,18 +166,24 @@ async fn ik_snow_initiator_hiss_responder() {
         .build_initiator()
         .unwrap();
 
-    let r_hs = IK25519::respond(EphemeralOnly::new(StdRng::from_os_rng()), &[])
-        .set_s(responder_static)
-        .unwrap();
+    let stream = PeerStream::new();
+    let r_hs = SyncHandshake::<IK25519, Responder, _, _, _, _>::respond(
+        EphemeralOnly::new(StdRng::from_os_rng()),
+        &[],
+        stream.clone(),
+    )
+    .set_s(responder_static)
+    .unwrap();
 
     // msg1: -> e, es, s, ss (snow initiator sends)
     let mut msg1 = [0u8; 256];
     let msg1_len = snow_initiator.write_message(&[], &mut msg1).unwrap();
+    stream.feed(&msg1[..msg1_len]);
 
-    let (_, recv) = r_hs.read(&msg1[..msg1_len]).unwrap().e().await.unwrap();
-    let recv = recv.es().await.unwrap();
-    let (revealed_initiator_pub, recv) = recv.s().await.unwrap();
-    let r_hs = recv.ss().await.unwrap();
+    let (_, recv) = r_hs.recv().e().unwrap();
+    let recv = recv.es().unwrap();
+    let (revealed_initiator_pub, recv) = recv.s().unwrap();
+    let r_hs = recv.ss().unwrap();
 
     assert_eq!(
         revealed_initiator_pub.as_ref(),
@@ -176,18 +191,9 @@ async fn ik_snow_initiator_hiss_responder() {
     );
 
     // msg2: <- e, ee, se (our responder sends)
-    let mut msg2_buf = [0u8; 256];
-    let (msg2, r_transport) = r_hs
-        .e(&mut msg2_buf)
-        .await
-        .unwrap()
-        .ee()
-        .await
-        .unwrap()
-        .se()
-        .await
-        .unwrap();
-    let msg2 = msg2.to_vec();
+    let chain = r_hs.e().unwrap().ee().unwrap().se().unwrap();
+    let (mut r_transport, _) = chain.into_parts();
+    let msg2 = stream.take_written();
 
     let mut buf = [0u8; 256];
     snow_initiator.read_message(&msg2, &mut buf).unwrap();
@@ -198,7 +204,6 @@ async fn ik_snow_initiator_hiss_responder() {
     );
 
     let mut snow_initiator = snow_initiator.into_transport_mode().unwrap();
-    let mut r_transport = r_transport;
 
     let plaintext = b"hello from snow IK 25519 initiator";
     let mut ct = [0u8; 256];
@@ -217,8 +222,8 @@ async fn ik_snow_initiator_hiss_responder() {
 
 // ── XX: our initiator ↔ snow responder ──────────────────────────
 
-#[tokio::test]
-async fn xx_hiss_initiator_snow_responder() {
+#[test]
+fn xx_hiss_initiator_snow_responder() {
     let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
     let initiator_static = provider.generate::<X25519>().unwrap();
     let initiator_pub = provider.public(&initiator_static).unwrap();
@@ -236,12 +241,16 @@ async fn xx_hiss_initiator_snow_responder() {
         .build_responder()
         .unwrap();
 
-    let i_hs = XX25519::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]);
+    let stream = PeerStream::new();
+    let i_hs = SyncHandshake::<XX25519, Initiator, _, _, _, _>::initiate(
+        EphemeralOnly::new(StdRng::from_os_rng()),
+        &[],
+        stream.clone(),
+    );
 
     // msg1: -> e (bare ephemeral, cipher never keyed)
-    let mut msg1_buf = [0u8; 256];
-    let (msg1, i_hs) = i_hs.e(&mut msg1_buf).await.unwrap();
-    let msg1 = msg1.to_vec();
+    let i_hs = i_hs.e().unwrap();
+    let msg1 = stream.take_written();
 
     let mut buf = [0u8; 256];
     snow_responder.read_message(&msg1, &mut buf).unwrap();
@@ -249,25 +258,20 @@ async fn xx_hiss_initiator_snow_responder() {
     // msg2: <- e, ee, s, es (snow responder's static is encrypted)
     let mut msg2 = [0u8; 256];
     let msg2_len = snow_responder.write_message(&[], &mut msg2).unwrap();
-    let (_, recv) = i_hs.read(&msg2[..msg2_len]).unwrap().e().await.unwrap();
-    let recv = recv.ee().await.unwrap();
-    let (revealed_responder_pub, recv) = recv.s().await.unwrap();
+    stream.feed(&msg2[..msg2_len]);
+    let (_, recv) = i_hs.recv().e().unwrap();
+    let recv = recv.ee().unwrap();
+    let (revealed_responder_pub, recv) = recv.s().unwrap();
     assert_eq!(
         revealed_responder_pub.as_bytes(),
         responder_static_pub.as_bytes(),
     );
-    let i_hs = recv.es().await.unwrap();
+    let i_hs = recv.es().unwrap();
 
     // msg3: -> s, se (our initiator's static is encrypted)
-    let mut msg3_buf = [0u8; 256];
-    let (msg3, i_transport) = i_hs
-        .s(&mut msg3_buf, initiator_static)
-        .await
-        .unwrap()
-        .se()
-        .await
-        .unwrap();
-    let msg3 = msg3.to_vec();
+    let chain = i_hs.s(initiator_static).unwrap().se().unwrap();
+    let (mut i_transport, _) = chain.into_parts();
+    let msg3 = stream.take_written();
 
     let mut buf = [0u8; 256];
     snow_responder.read_message(&msg3, &mut buf).unwrap();
@@ -282,7 +286,6 @@ async fn xx_hiss_initiator_snow_responder() {
     );
 
     let mut snow_responder = snow_responder.into_transport_mode().unwrap();
-    let mut i_transport = i_transport;
 
     let plaintext = b"hello from hiss XX 25519 initiator";
     let mut ct = [0u8; 256];
@@ -301,8 +304,8 @@ async fn xx_hiss_initiator_snow_responder() {
 
 // ── XX: snow initiator ↔ our responder ──────────────────────────
 
-#[tokio::test]
-async fn xx_snow_initiator_hiss_responder() {
+#[test]
+fn xx_snow_initiator_hiss_responder() {
     let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
     let responder_static = provider.generate::<X25519>().unwrap();
     let responder_pub = provider.public(&responder_static).unwrap();
@@ -318,29 +321,30 @@ async fn xx_snow_initiator_hiss_responder() {
         .build_initiator()
         .unwrap();
 
-    let r_hs = XX25519::respond(EphemeralOnly::new(StdRng::from_os_rng()), &[]);
+    let stream = PeerStream::new();
+    let r_hs = SyncHandshake::<XX25519, Responder, _, _, _, _>::respond(
+        EphemeralOnly::new(StdRng::from_os_rng()),
+        &[],
+        stream.clone(),
+    );
 
     // msg1: -> e (snow initiator sends)
     let mut msg1 = [0u8; 256];
     let msg1_len = snow_initiator.write_message(&[], &mut msg1).unwrap();
-    let (_, recv) = r_hs.read(&msg1[..msg1_len]).unwrap().e().await.unwrap();
+    stream.feed(&msg1[..msg1_len]);
+    let (_, recv) = r_hs.recv().e().unwrap();
 
     // msg2: <- e, ee, s, es (our responder's static is encrypted)
-    let mut msg2_buf = [0u8; 256];
-    let (msg2, r_hs) = recv
-        .e(&mut msg2_buf)
-        .await
+    let r_hs = recv
+        .e()
         .unwrap()
         .ee()
-        .await
         .unwrap()
         .s(responder_static)
-        .await
         .unwrap()
         .es()
-        .await
         .unwrap();
-    let msg2 = msg2.to_vec();
+    let msg2 = stream.take_written();
 
     let mut buf = [0u8; 256];
     snow_initiator.read_message(&msg2, &mut buf).unwrap();
@@ -353,8 +357,10 @@ async fn xx_snow_initiator_hiss_responder() {
     // msg3: -> s, se (snow initiator's static is encrypted)
     let mut msg3 = [0u8; 256];
     let msg3_len = snow_initiator.write_message(&[], &mut msg3).unwrap();
-    let (revealed_initiator_pub, recv) = r_hs.read(&msg3[..msg3_len]).unwrap().s().await.unwrap();
-    let r_transport = recv.se().await.unwrap();
+    stream.feed(&msg3[..msg3_len]);
+    let (revealed_initiator_pub, recv) = r_hs.recv().s().unwrap();
+    let chain = recv.se().unwrap();
+    let (mut r_transport, _) = chain.into_parts();
 
     assert_eq!(
         revealed_initiator_pub.as_ref(),
@@ -366,7 +372,6 @@ async fn xx_snow_initiator_hiss_responder() {
     );
 
     let mut snow_initiator = snow_initiator.into_transport_mode().unwrap();
-    let mut r_transport = r_transport;
 
     let plaintext = b"hello from snow XX 25519 initiator";
     let mut ct = [0u8; 256];
