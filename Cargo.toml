@@ -13,6 +13,14 @@ documentation = "https://docs.rs/hiss"
 keywords = ["noise", "cryptography", "handshake", "secure-enclave", "p256"]
 categories = ["cryptography", "network-programming"]
 
+# docs.rs builds with every feature so the `async-io` driver is documented,
+# and passes `--cfg docsrs` so the `#[doc(cfg(...))]` feature/platform badges
+# (gated behind `cfg_attr(docsrs, ...)`) render. Apple-only items still only
+# appear on an Apple target; the default docs.rs (Linux) build omits them.
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
 
 [dependencies]
 cryptoxide = { version = "0.5.1", default-features = false, features = ["chacha", "poly1305", "blake2", "sha2", "hmac", "ed25519", "x25519"] }
@@ -58,3 +66,7 @@ tokio = { version = "1.50", features = ["macros", "rt", "rt-multi-thread", "net"
 [[bench]]
 name = "noise"
 harness = false
+
+[[example]]
+name = "tcp_xx_channel"
+required-features = ["async-io"]
