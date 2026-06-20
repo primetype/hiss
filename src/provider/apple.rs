@@ -57,6 +57,18 @@ const EPHEMERAL_LABEL: &str = "hiss.ephemeral.p256";
 /// descriptor — the per-caller namespace lives in the service name.
 const ED25519_SEED_ACCOUNT: &str = "device-identity";
 
+/// Handle to a P-256 private key managed by Apple's Security framework.
+///
+/// The handle wraps a `SecKey`; the private scalar itself is never held
+/// in process memory. For Secure-Enclave-backed keys the scalar is
+/// non-extractable and every operation ([`dh`](Self::dh),
+/// [`sign`](Self::sign)) runs inside the enclave; for the software-backed
+/// ephemeral variant ([`generate_ephemeral`](Self::generate_ephemeral))
+/// the scalar lives in a software `SecKey` and never crosses the FFI
+/// boundary either. `deletable` records whether the key was persisted to
+/// the Keychain and so is removable by [`delete`](Self::delete);
+/// non-persisted (ephemeral) keys are not.
+//
 // `Clone` here is a CoreFoundation retain of the `SecKey` handle — no
 // secret material is copied (the key stays in the keychain / Secure
 // Enclave). It is required so the async impl can move the handle into a
@@ -94,6 +106,14 @@ impl P256r1PrivateKey {
         Self { key, deletable }
     }
 
+    /// Generate a software-backed ephemeral P-256 key.
+    ///
+    /// The key is created with `Token::Software` and is never persisted
+    /// to the Keychain — it lives only for the lifetime of this handle and
+    /// is dropped with it. There is no Secure Enclave involvement and no
+    /// authentication prompt. Suitable for Noise handshake ephemeral keys,
+    /// which are used once and discarded; for a hardware-backed key see
+    /// [`generate_secure_enclave_ephemeral`](Self::generate_secure_enclave_ephemeral).
     pub fn generate_ephemeral() -> Result<Self, Error> {
         let mut attributes = GenerateKeyOptions::default();
         attributes
@@ -240,6 +260,12 @@ impl P256r1PrivateKey {
         }
     }
 
+    /// Derive the P-256 public key for this private key.
+    ///
+    /// Reads the public key from the `SecKey` and returns its uncompressed
+    /// external representation. This is a local accessor — the public
+    /// point is always available to the framework, so it incurs no Secure
+    /// Enclave round-trip and no authentication prompt.
     pub fn public(&self) -> Result<P256r1PublicKey, Error> {
         let data = self
             .key
@@ -251,6 +277,17 @@ impl P256r1PrivateKey {
         P256r1PublicKey::from_bytes(data.bytes())
     }
 
+    /// Perform ECDH against `public_key`, returning the raw shared secret.
+    ///
+    /// Uses `kSecKeyAlgorithmECDHKeyExchangeStandard`, whose output is the
+    /// 32-byte x-coordinate of the shared point with no KDF applied — the
+    /// representation Noise requires. For a Secure-Enclave-backed key the
+    /// scalar multiplication is carried out in-enclave and the private
+    /// scalar never leaves hardware; only the resulting secret is returned.
+    /// The peer's public bytes are rebuilt into a `SecKey` using this key's
+    /// own public-key attributes as the template (both are P-256 public
+    /// keys). Fails if the key does not advertise support for the exchange
+    /// algorithm or if the agreed secret is not exactly 32 bytes.
     pub fn dh(&self, public_key: &P256r1PublicKey) -> Result<SharedSecret, Error> {
         let algorithm = Algorithm::ECDHKeyExchangeStandard;
 
@@ -287,6 +324,14 @@ impl P256r1PrivateKey {
         Ok(SharedSecret::new(bytes))
     }
 
+    /// Sign `message` with ECDSA over P-256, SHA-256 digesting the message.
+    ///
+    /// Uses `kSecKeyAlgorithmECDSASignatureMessageX962SHA256`: the
+    /// framework hashes `message` and produces an ASN.1/X9.62 DER
+    /// signature, which is decoded into the fixed-width
+    /// [`P256Signature`]. For a
+    /// Secure-Enclave-backed key the signing scalar multiplication runs
+    /// in-enclave and the private scalar never leaves hardware.
     pub fn sign(&self, message: &[u8]) -> Result<P256Signature, Error> {
         let signature = self
             .key
@@ -352,7 +397,10 @@ pub enum SeedError {
     #[error(
         "Secure Enclave P-256 identity key {label:?} not found (establish it before sealing the Ed25519 seed)"
     )]
-    IdentityKeyMissing { label: String },
+    IdentityKeyMissing {
+        /// Keychain label of the absent SE P-256 identity key.
+        label: String,
+    },
 
     /// A Secure Enclave P-256 key operation failed.
     #[error(transparent)]
@@ -374,7 +422,11 @@ pub enum SeedError {
         "stored Ed25519 seed envelope has wrong length: expected {expected} bytes, got {got}",
         expected = SEALED_SIZE
     )]
-    WrongSize { got: usize },
+    WrongSize {
+        /// Actual length of the stored envelope, in bytes (the expected
+        /// length is the internal `SEALED_SIZE`).
+        got: usize,
+    },
 }
 
 /// Build the data-protection-Keychain generic-password query for the

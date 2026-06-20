@@ -13,6 +13,9 @@ mod sealed {
 ///
 /// Binds a participant to its send and receive directions and
 /// determines key selection for asymmetric DH tokens.
+///
+/// This is a sealed trait, implemented only by [`Initiator`] and
+/// [`Responder`]; downstream crates cannot add further roles.
 pub trait Role: sealed::Sealed {
     /// The direction this role writes (sends) messages.
     type SendDir;

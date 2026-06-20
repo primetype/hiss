@@ -2,7 +2,7 @@
 //!
 //! These provider-driven free functions perform the Noise per-token
 //! cryptography on the runtime [`HandshakeInner`] state. The async
-//! driver ([`AsyncHandshake`](super::io_async::AsyncHandshake)) and the
+//! driver (`AsyncHandshake` (feature `async-io`)) and the
 //! internal seal helpers ([`seal`](super::seal)) call them directly; the
 //! blocking driver ([`SyncHandshake`](super::io_sync::SyncHandshake))
 //! reuses the provider-free helpers here (`recv_e`/`recv_s`/`send_s`/

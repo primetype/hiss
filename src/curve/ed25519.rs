@@ -55,11 +55,16 @@ use super::{Curve, DhCurve, SharedSecret, SigningCurve};
 
 // ── Errors ─────────────────────────────────────────────────────
 
+/// Errors produced by the Ed25519 signing and DH curve.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
+    /// A public-key byte string was not the expected 32 bytes; the wrapped
+    /// value is the length supplied.
     #[error("invalid public key length: expected 32 bytes, got {0}")]
     InvalidPublicKeyLength(usize),
+    /// A signature byte string was not the expected 64 bytes; the wrapped
+    /// value is the length supplied.
     #[error("invalid signature length: expected 64 bytes, got {0}")]
     InvalidSignatureLength(usize),
     /// A platform entropy/key operation failed (Apple `SecRandom` seed path).

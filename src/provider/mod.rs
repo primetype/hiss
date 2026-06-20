@@ -39,8 +39,10 @@ use crate::curve::x25519::{SoftwareX25519PrivateKey, X25519, X25519PublicKey};
 use crate::curve::{Curve, DhCurve, SigningCurve};
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg_attr(docsrs, doc(cfg(any(target_os = "macos", target_os = "ios"))))]
 pub mod apple;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg_attr(docsrs, doc(cfg(any(target_os = "macos", target_os = "ios"))))]
 pub use apple::{AppleSecureEnclave, SeedError};
 
 // ── Provider trait family ────────────────────────────────────────
@@ -86,6 +88,14 @@ pub trait CryptoKeyProvider<C: Curve> {
     fn generate_static_key(&mut self) -> Result<Self::PrivateKey, Self::Error>;
 
     /// Generate an ephemeral key pair for a single handshake, synchronously.
+    ///
+    /// Mints a fresh per-handshake keypair that is used once and then
+    /// discarded with the handshake — it is never persisted. This is
+    /// distinct from a long-term static identity key
+    /// ([`generate_static_key`](Self::generate_static_key)): a backend may
+    /// keep static keys in hardware or on disk, but the ephemeral key is
+    /// expected to be cheap and transient. Takes `&mut self` for the same
+    /// reason: a backend that owns its CSPRNG advances it here.
     fn generate_ephemeral_key(&mut self) -> Result<Self::PrivateKey, Self::Error>;
 }
 

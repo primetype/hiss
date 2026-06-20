@@ -36,6 +36,7 @@ impl From<Vec<u8>> for SessionId {
     }
 }
 
+/// Renders the session id as lowercase hex.
 impl fmt::Display for SessionId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&hex::encode(&self.0))

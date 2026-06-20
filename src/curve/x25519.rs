@@ -45,9 +45,13 @@ use super::{Curve, DhCurve, SharedSecret};
 
 // ── Errors ─────────────────────────────────────────────────────
 
+/// Errors produced by the X25519 DH curve.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
+    /// A public-key byte string was not the expected 32 bytes; the wrapped
+    /// value is the length supplied. Decoding never fails otherwise — every
+    /// 32-byte string is a valid Curve25519 u-coordinate (RFC 7748).
     #[error("invalid public key length: expected 32 bytes, got {0}")]
     InvalidPublicKeyLength(usize),
 }

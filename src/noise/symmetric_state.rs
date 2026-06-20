@@ -92,6 +92,10 @@ impl<Ci: Cipher, H: Hash> SymmetricState<Ci, H> {
     }
 
     /// Returns `true` if the embedded CipherState has a key.
+    ///
+    /// Callers check this to learn whether a static key written by the
+    /// `s` token will be sent encrypted (with an AEAD tag, once a key
+    /// has been established) or in the clear.
     pub fn has_key(&self) -> bool {
         self.cipher_state.has_key()
     }

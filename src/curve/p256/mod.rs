@@ -79,21 +79,41 @@ impl SigningCurve for P256 {
 
 // ── Errors ──────────────────────────────────────────────────────
 
+/// Errors raised by P-256 key parsing, ECDSA signing/verification, and
+/// ECDH on this curve.
+///
+/// Marked `#[non_exhaustive]`: the [`Platform`](Error::Platform) variant
+/// only exists on Apple targets, so matches must include a wildcard arm.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
+    /// A coordinate did not decode to a canonical P-256 field element
+    /// (the big-endian value was `>= p`, the field prime).
     #[error("invalid field element")]
     InvalidFieldElement,
+    /// The supplied coordinates (or decompressed prefix) do not lie on the
+    /// P-256 curve, or encode the point at infinity.
     #[error("invalid curve point")]
     InvalidPoint,
+    /// ECDH yielded a degenerate result — the shared point was the identity,
+    /// which a contributory key agreement must reject (e.g. a low-order or
+    /// otherwise malicious peer key).
     #[error("ECDH produced a degenerate shared secret (identity or low-order peer key)")]
     InvalidSharedSecret,
+    /// The private-key scalar is zero or `>= n` (the curve order); a valid
+    /// P-256 private key is a scalar in `[1, n - 1]`.
     #[error("invalid private key: must be a non-zero scalar less than the P-256 curve order")]
     InvalidPrivateKey,
+    /// The leading SEC1 encoding prefix byte was not one of `0x04`
+    /// (uncompressed), `0x02`, or `0x03` (compressed). Carries the offending
+    /// byte.
     #[error("unknown point encoding prefix 0x{0:02x}")]
     UnknownPrefix(u8),
+    /// The public-key buffer was shorter than the length implied by its SEC1
+    /// prefix (65 bytes for `0x04`, 33 for `0x02`/`0x03`).
     #[error("invalid public key length")]
     InvalidPublicKeyLength,
+    /// The raw signature buffer was not exactly 64 bytes (`r ‖ s`).
     #[error("invalid signature length")]
     InvalidSignatureLength,
     /// The signature's ASN.1/DER structure is invalid (strict DER).
@@ -106,8 +126,12 @@ pub enum Error {
     /// A signature component (`r` or `s`) encodes a negative integer.
     #[error("ECDSA signature component is a negative integer")]
     SignatureComponentNegative,
+    /// Rejection sampling of a private-key scalar exhausted its retry budget
+    /// without the RNG producing a value in `[1, n - 1]`.
     #[error("the RNG repeatedly failed to produce a valid P-256 scalar")]
     ScalarSamplingFailed,
+    /// A platform key-store operation failed (Apple targets only); carries the
+    /// underlying Security-framework error description.
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     #[error("{0}")]
     Platform(String),
@@ -115,6 +139,12 @@ pub enum Error {
 
 // ── Public key ──────────────────────────────────────────────────
 
+/// A P-256 (secp256r1) public key.
+///
+/// Stored internally as the 65-byte uncompressed SEC1 encoding
+/// (`0x04 ‖ X ‖ Y`), regardless of the encoding it was parsed from. Any
+/// value of this type has therefore already been validated as a non-identity
+/// point on the curve at construction time (see [`from_bytes`](Self::from_bytes)).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct P256r1PublicKey([u8; 65]);
 
@@ -123,6 +153,18 @@ impl P256r1PublicKey {
         Self(point_to_bytes(point))
     }
 
+    /// Decode the stored SEC1 encoding into a curve [`Point`].
+    ///
+    /// Parses the coordinates as field elements and reconstructs the affine
+    /// point, validating that it lies on the curve (uncompressed input) or
+    /// that the x-coordinate decompresses with the encoded sign (compressed
+    /// input). Returns [`Error::InvalidFieldElement`] for a non-canonical
+    /// coordinate, [`Error::InvalidPoint`] for an off-curve point, or
+    /// [`Error::UnknownPrefix`] for an unrecognised prefix byte.
+    ///
+    /// In practice this never fails for a value obtained through
+    /// [`from_bytes`](Self::from_bytes), whose bytes are already a validated,
+    /// on-curve uncompressed encoding.
     pub fn to_point(&self) -> Result<Point, Error> {
         let prefix = self.0[0];
         let x = FieldElement::from_slice(&self.0[1..33]).ok_or(Error::InvalidFieldElement)?;
@@ -141,6 +183,10 @@ impl P256r1PublicKey {
         Ok(Point::from(pa))
     }
 
+    /// Borrow the 65-byte uncompressed SEC1 encoding (`0x04 ‖ X ‖ Y`).
+    ///
+    /// For the 33-byte compressed form, use
+    /// [`to_compressed`](Self::to_compressed).
     pub fn to_bytes(&self) -> &[u8] {
         &self.0
     }
@@ -156,6 +202,27 @@ impl P256r1PublicKey {
         out
     }
 
+    /// Parse a SEC1-encoded P-256 public key, validating it lies on the curve.
+    ///
+    /// Accepts either encoding, dispatched on the leading prefix byte:
+    ///
+    /// * `0x04` — uncompressed, 65 bytes (`0x04 ‖ X ‖ Y`).
+    /// * `0x02` / `0x03` — compressed, 33 bytes (prefix ‖ `X`), with the
+    ///   prefix selecting the even (`0x02`) or odd (`0x03`) y-coordinate.
+    ///
+    /// The length is checked against the prefix before any indexing, so
+    /// truncated or empty input yields [`Error::InvalidPublicKeyLength`]
+    /// rather than a panic; trailing bytes beyond the encoding's expected
+    /// length are ignored. Coordinates must be canonical field elements
+    /// (big-endian value `< p`) or [`Error::InvalidFieldElement`] is
+    /// returned. The decoded point is validated: an uncompressed key must
+    /// satisfy the curve equation and a compressed key must decompress, and
+    /// the point at infinity (e.g. all-zero coordinates) is rejected — all as
+    /// [`Error::InvalidPoint`]. An unrecognised prefix yields
+    /// [`Error::UnknownPrefix`].
+    ///
+    /// On success the key is re-serialised to the canonical 65-byte
+    /// uncompressed form for internal storage.
     pub fn from_bytes(public_key: &[u8]) -> Result<Self, Error> {
         // Validate length against the encoding before indexing, so
         // truncated/empty input yields an error rather than a panic.
@@ -186,6 +253,20 @@ impl P256r1PublicKey {
         Ok(Self(point_to_bytes(point)))
     }
 
+    /// Verify an ECDSA signature over `message` under this public key.
+    ///
+    /// Hashes `message` with SHA-256 and reduces the digest modulo the curve
+    /// order to the scalar `e` (matching the signer), then performs the
+    /// standard ECDSA check: parse `(r, s)` from the 64-byte signature, reject
+    /// any non-canonical or zero component, compute
+    /// `R = (e·s⁻¹)·G + (r·s⁻¹)·Q`, and accept iff `x(R) mod n == r`.
+    ///
+    /// Returns `true` on a valid signature and `false` otherwise (bad
+    /// component, wrong key, or altered message). Both low- and high-`s`
+    /// signatures are accepted — low-S is enforced on the *signing* path, not
+    /// here. The scalar multiplications are variable-time, which is sound
+    /// because every input on the verify path (signature, message, public
+    /// key) is public.
     pub fn verify(&self, signature: P256Signature, message: impl AsRef<[u8]>) -> bool {
         let point = self
             .to_point()
@@ -267,10 +348,23 @@ impl fmt::Debug for P256r1PublicKey {
 
 // ── Signature ───────────────────────────────────────────────────
 
+/// A P-256 ECDSA signature in the fixed-width raw `(r, s)` encoding:
+/// 64 bytes, the 32-byte big-endian `r` followed by the 32-byte big-endian
+/// `s`.
+///
+/// This type holds the bytes verbatim; the scalars are range-checked only
+/// when the signature is verified (see
+/// [`P256r1PublicKey::verify`]). Conversion to and from the ASN.1/DER
+/// encoding used by Apple's Security framework is available internally.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Packed)]
 pub struct P256Signature(#[packed(accessor = false)] [u8; 64]);
 
 impl P256Signature {
+    /// Build a signature from its 64-byte raw `r ‖ s` encoding.
+    ///
+    /// Returns [`Error::InvalidSignatureLength`] unless the input is exactly
+    /// 64 bytes. No range or curve validation of the `(r, s)` scalars is
+    /// performed here — that happens during verification.
     pub fn try_from_bytes(bytes: impl AsRef<[u8]>) -> Result<Self, Error> {
         let arr: [u8; 64] = bytes
             .as_ref()
@@ -516,7 +610,14 @@ pub(crate) fn ecdsa_sign_rfc6979_inner(
     }
 }
 
-/// Deterministic ECDSA signature (RFC 6979 nonce, low-S normalized).
+/// Deterministic ECDSA signature over `message`, returned as a
+/// [`P256Signature`].
+///
+/// The public signing entry point: derives the nonce per RFC 6979 (no RNG, so
+/// the signature is a deterministic function of the key and message) and
+/// applies low-S normalisation, giving each `(key, message)` pair one
+/// canonical, non-malleable signature. See [`ecdsa_sign_rfc6979_inner`] for
+/// the full contract.
 pub(crate) fn ecdsa_sign_rfc6979(d_bytes: &[u8; 32], message: &[u8]) -> P256Signature {
     P256Signature(ecdsa_sign_rfc6979_inner(d_bytes, message, true))
 }

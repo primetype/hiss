@@ -19,9 +19,14 @@ use eccoxide::curve::sec2::p256r1::{Point, Scalar};
 use rand_core::{CryptoRng, RngCore};
 use std::fmt;
 
+/// Software (`eccoxide`-backed) secp256r1 private key — the canonical
+/// big-endian encoding of the scalar `d`, in `[1, n-1]`.
+///
+/// This is the pure-software P-256 backend; the bytes are zeroised on drop.
 pub struct P256r1PrivateKey([u8; Self::SIZE]);
 
 impl P256r1PrivateKey {
+    /// Length in bytes of the secp256r1 private scalar (32).
     pub const SIZE: usize = 32;
 
     /// Upper bound on rejection-sampling iterations when generating a
@@ -91,6 +96,7 @@ impl P256r1PrivateKey {
         Self::scalar_of(&self.0).expect("private key validated on construction")
     }
 
+    /// Derive the corresponding public key `d·G`.
     pub fn public(&self) -> P256r1PublicKey {
         // Public key is `d·G`. Use the fixed-base comb multiply of the
         // generator: constant-time and ~4x faster than the general

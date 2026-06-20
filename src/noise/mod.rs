@@ -208,6 +208,7 @@ pub mod error;
 pub(crate) mod handshake;
 pub mod hash;
 #[cfg(feature = "async-io")]
+#[cfg_attr(docsrs, doc(cfg(feature = "async-io")))]
 #[allow(clippy::type_complexity)]
 pub mod io_async;
 #[allow(clippy::type_complexity)]
@@ -229,6 +230,7 @@ pub use self::cipher_state::CipherState;
 pub use self::curve::{Curve, DhCurve, P256, X25519};
 pub use self::error::HandshakeError;
 #[cfg(feature = "async-io")]
+#[cfg_attr(docsrs, doc(cfg(feature = "async-io")))]
 pub use self::io_async::{AsyncHandshake, AsyncReceiving, AsyncSending, AsyncTransport};
 pub use self::io_sync::{SyncHandshake, SyncReceiving, SyncSending, SyncTransport};
 // Protocol re-exported from this module (defined below on Noise).
@@ -302,8 +304,9 @@ impl<P, Cu, Ci, H> Default for Noise<P, Cu, Ci, H> {
 /// A fully specified Noise protocol — pattern, curve, cipher, and hash.
 ///
 /// Implemented by [`Noise<P, Cu, Ci, H>`]. Used as a single type
-/// parameter on the [`SyncHandshake`]/`AsyncHandshake` drivers
-/// instead of spreading four separate generic parameters.
+/// parameter on the [`SyncHandshake`]/`AsyncHandshake` (feature
+/// `async-io`) drivers instead of spreading four separate generic
+/// parameters.
 pub trait Protocol {
     /// The handshake pattern (e.g. [`IKpsk1`]).
     type Pattern: Pattern;

@@ -33,6 +33,11 @@ pub fn zeroize_bytes(bytes: &mut [u8]) {
 }
 
 /// Zero a fixed-size array using volatile writes.
+///
+/// A convenience wrapper that forwards to [`zeroize_bytes`] over the
+/// array as a slice; the same volatile-write plus compiler-fence
+/// guarantee therefore applies, so the zero-fill cannot be elided as
+/// a dead store.
 pub fn zeroize_array<const N: usize>(arr: &mut [u8; N]) {
     zeroize_bytes(arr.as_mut_slice());
 }

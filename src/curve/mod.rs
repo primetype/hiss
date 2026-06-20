@@ -102,10 +102,18 @@ pub trait SigningCurve: Curve {
 pub struct SharedSecret([u8; 32]);
 
 impl SharedSecret {
+    /// Wrap the raw 32-byte ECDH output (the shared point's x-coordinate).
+    ///
+    /// Takes ownership of the bytes so the wrapper governs their lifetime;
+    /// the backing array is zeroed on drop (see the [`Drop`] impl).
     pub fn new(bytes: [u8; 32]) -> Self {
         Self(bytes)
     }
 
+    /// Borrow the raw shared-secret bytes.
+    ///
+    /// The borrow does not copy the secret out; callers must not retain the
+    /// bytes beyond the wrapper, which zeroes them on drop.
     pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }

@@ -14,21 +14,41 @@
 //! [`ASN1Reader`] walks a byte slice non-destructively.
 //! `ASN1Writer` (test-only) builds a DER blob from scratch.
 
+/// An error raised while decoding (or, in tests, encoding) DER.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum Asn1Error {
+    /// The reader was empty where a tag–length–value triple was expected.
     #[error("unexpected end of data")]
     UnexpectedEnd,
+    /// The tag octet at the cursor did not match the expected universal tag
+    /// (`0x30` for SEQUENCE, `0x02` for INTEGER).
     #[error("expected tag 0x{expected:02x}, found 0x{found:02x}")]
-    UnexpectedTag { expected: u8, found: u8 },
+    UnexpectedTag {
+        /// The tag octet the reader required.
+        expected: u8,
+        /// The tag octet actually found at the cursor.
+        found: u8,
+    },
+    /// The declared length runs past the end of the buffer, or a length
+    /// octet was absent — i.e. the encoding is shorter than it claims. Also
+    /// raised for an INTEGER with a zero-length content field.
     #[error("data truncated")]
     Truncated,
+    /// Bytes remain after the SEQUENCE that was expected to span the whole
+    /// input; a standalone signature must consume the buffer exactly.
     #[error("trailing data after structure")]
     TrailingData,
+    /// The length used the long form (`0x81…`) or indefinite form (`0x80`)
+    /// where the short form is mandatory — always non-minimal for the
+    /// sub-128-byte structures this codec decodes.
     #[error("non-minimal length encoding (long-form or indefinite length)")]
     NonMinimalLength,
+    /// An INTEGER carried a superfluous leading `0x00` or `0xff` octet not
+    /// required to encode the sign bit (X.690 §8.3.2).
     #[error("non-minimal integer encoding (superfluous leading 0x00/0xff)")]
     NonMinimalInteger,
+    /// A value exceeded the codec's accepted size.
     #[error("value too large: {0} bytes")]
     #[allow(dead_code)]
     TooLarge(usize),

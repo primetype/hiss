@@ -234,7 +234,17 @@ where
 //  `HandshakeInner` through the type-state token chain.
 // ═══════════════════════════════════════════════════════════════
 
-/// Asynchronous handshake state between messages. See the module docs.
+/// Asynchronous handshake state between messages — the resting point
+/// from which the next message is sent or received. See the module docs.
+///
+/// The type parameters encode the handshake position at compile time:
+/// `N` is the protocol (suite + pattern), `R` the role
+/// (`Initiator`/`Responder`), `CP` the DH provider and `Io` the owned
+/// stream. `Stage` is the list of pre-messages still to process (each
+/// `set_s`/`set_rs` consumes one and is unavailable once it is `Nil`),
+/// and `Msgs` is the list of handshake messages not yet sent or
+/// received; only the token method that matches the head of `Msgs` is in
+/// scope, so an out-of-order step is a compile error.
 pub struct AsyncHandshake<N, R, Stage, Msgs, CP, Io>
 where
     N: Protocol,
@@ -245,7 +255,15 @@ where
     _marker: PhantomData<fn() -> (N, R, Stage, Msgs)>,
 }
 
-/// Asynchronous state within an outgoing message.
+/// Asynchronous state part-way through an outgoing message.
+///
+/// Reached from [`AsyncHandshake`] once a send message has begun.
+/// `Tokens` is the list of tokens still to write in the current message
+/// and `MsgRest` the messages that follow it; the other parameters carry
+/// the same meaning as on [`AsyncHandshake`]. Each token method consumes
+/// the head of `Tokens`; emptying it closes the message (flushing its
+/// tail) and yields either the next [`AsyncHandshake`] or, on the final
+/// message, the [`AsyncTransport`].
 pub struct AsyncSending<N, R, Tokens, MsgRest, CP, Io>
 where
     N: Protocol,
@@ -256,7 +274,14 @@ where
     _marker: PhantomData<fn() -> (N, R, Tokens, MsgRest)>,
 }
 
-/// Asynchronous state within an incoming message.
+/// Asynchronous state part-way through an incoming message.
+///
+/// Reached from [`AsyncHandshake::recv`]. `Tokens` is the list of tokens
+/// still to read in the current message and `MsgRest` the messages that
+/// follow it; the other parameters carry the same meaning as on
+/// [`AsyncHandshake`]. Each token method consumes the head of `Tokens`;
+/// emptying it verifies the message tail and yields either the next
+/// [`AsyncHandshake`] or, on the final message, the [`AsyncTransport`].
 pub struct AsyncReceiving<N, R, Tokens, MsgRest, CP, Io>
 where
     N: Protocol,
@@ -648,6 +673,7 @@ macro_rules! async_send_token {
         token: $Token:ty,
         method: $method:ident ($($arg:ident : $arg_ty:ty),*),
         bounds: [$($extra:tt)*],
+        doc: $doc:expr,
         body: |$inner:ident, $stream:ident| { $($logic:tt)* }
     ) => {
         // Variant 1: more tokens after this one.
@@ -660,6 +686,7 @@ macro_rules! async_send_token {
             Io: AsyncWrite + Unpin,
             $($extra)*
         {
+            #[doc = $doc]
             pub async fn $method(
                 mut self, $($arg: $arg_ty,)*
             ) -> Result<AsyncSending<N, $R, Cons<Next, More>, MsgRest, CP, Io>, HandshakeError> {
@@ -682,6 +709,7 @@ macro_rules! async_send_token {
             Io: AsyncWrite + Unpin,
             $($extra)*
         {
+            #[doc = $doc]
             pub async fn $method(
                 mut self, $($arg: $arg_ty,)*
             ) -> Result<AsyncHandshake<N, $R, Nil, Cons<NextMsg, MoreMsgs>, CP, Io>, HandshakeError> {
@@ -705,6 +733,7 @@ macro_rules! async_send_token {
             Io: AsyncWrite + Unpin,
             $($extra)*
         {
+            #[doc = $doc]
             pub async fn $method(
                 mut self, $($arg: $arg_ty,)*
             ) -> Result<AsyncTransport<N, Io>, HandshakeError> {
@@ -731,6 +760,7 @@ macro_rules! async_recv_token {
         token: $Token:ty,
         method: $method:ident ($($arg:ident : $arg_ty:ty),*),
         bounds: [$($extra:tt)*],
+        doc: $doc:expr,
         body: |$inner:ident, $stream:ident| { $($logic:tt)* }
     ) => {
         // Variant 1: more tokens.
@@ -743,6 +773,7 @@ macro_rules! async_recv_token {
             Io: AsyncRead + Unpin,
             $($extra)*
         {
+            #[doc = $doc]
             pub async fn $method(
                 mut self, $($arg: $arg_ty,)*
             ) -> Result<AsyncReceiving<N, $R, Cons<Next, More>, MsgRest, CP, Io>, HandshakeError> {
@@ -765,6 +796,7 @@ macro_rules! async_recv_token {
             Io: AsyncRead + Unpin,
             $($extra)*
         {
+            #[doc = $doc]
             pub async fn $method(
                 mut self, $($arg: $arg_ty,)*
             ) -> Result<AsyncHandshake<N, $R, Nil, Cons<NextMsg, MoreMsgs>, CP, Io>, HandshakeError> {
@@ -788,6 +820,7 @@ macro_rules! async_recv_token {
             Io: AsyncRead + Unpin,
             $($extra)*
         {
+            #[doc = $doc]
             pub async fn $method(
                 mut self, $($arg: $arg_ty,)*
             ) -> Result<AsyncTransport<N, Io>, HandshakeError> {
@@ -814,6 +847,7 @@ macro_rules! async_recv_reveal_token {
         token: $Token:ty,
         method: $method:ident ($($arg:ident : $arg_ty:ty),*),
         bounds: [$($extra:tt)*],
+        doc: $doc:expr,
         body: |$inner:ident, $stream:ident| { $($logic:tt)* }
     ) => {
         // Variant 1: more tokens after this one.
@@ -826,6 +860,7 @@ macro_rules! async_recv_reveal_token {
             Io: AsyncRead + Unpin,
             $($extra)*
         {
+            #[doc = $doc]
             #[allow(clippy::type_complexity)]
             pub async fn $method(
                 mut self, $($arg: $arg_ty,)*
@@ -849,6 +884,7 @@ macro_rules! async_recv_reveal_token {
             Io: AsyncRead + Unpin,
             $($extra)*
         {
+            #[doc = $doc]
             #[allow(clippy::type_complexity)]
             pub async fn $method(
                 mut self, $($arg: $arg_ty,)*
@@ -873,6 +909,7 @@ macro_rules! async_recv_reveal_token {
             Io: AsyncRead + Unpin,
             $($extra)*
         {
+            #[doc = $doc]
             #[allow(clippy::type_complexity)]
             pub async fn $method(
                 mut self, $($arg: $arg_ty,)*
@@ -896,18 +933,30 @@ macro_rules! async_recv_reveal_token {
 
 async_send_token! {
     role: Initiator, token: E, method: e(), bounds: [],
+    doc: "Process the `e` token: generate a fresh ephemeral key, write its \
+          public key to the wire, and mix it into the handshake hash (also \
+          mixing it into the chaining key in a PSK pattern).",
     body: |inner, stream| { async_stream_e(inner, stream).await?; }
 }
 async_send_token! {
     role: Responder, token: E, method: e(), bounds: [],
+    doc: "Process the `e` token: generate a fresh ephemeral key, write its \
+          public key to the wire, and mix it into the handshake hash (also \
+          mixing it into the chaining key in a PSK pattern).",
     body: |inner, stream| { async_stream_e(inner, stream).await?; }
 }
 async_recv_reveal_token! {
     role: Initiator, token: E, method: e(), bounds: [],
+    doc: "Process the `e` token: read the peer's ephemeral public key from \
+          the wire and mix it into the handshake hash (also mixing it into \
+          the chaining key in a PSK pattern). Returns the revealed key.",
     body: |inner, stream| { async_read_e(inner, stream).await? }
 }
 async_recv_reveal_token! {
     role: Responder, token: E, method: e(), bounds: [],
+    doc: "Process the `e` token: read the peer's ephemeral public key from \
+          the wire and mix it into the handshake hash (also mixing it into \
+          the chaining key in a PSK pattern). Returns the revealed key.",
     body: |inner, stream| { async_read_e(inner, stream).await? }
 }
 
@@ -917,18 +966,30 @@ async_recv_reveal_token! {
 
 async_send_token! {
     role: Initiator, token: S, method: s(static_key: CP::PrivateKey), bounds: [],
+    doc: "Process the `s` token: write our local static public key to the \
+          wire — encrypted once a key has been established by a prior DH \
+          token — and mix it into the handshake hash.",
     body: |inner, stream| { async_stream_s(inner, stream, static_key).await?; }
 }
 async_send_token! {
     role: Responder, token: S, method: s(static_key: CP::PrivateKey), bounds: [],
+    doc: "Process the `s` token: write our local static public key to the \
+          wire — encrypted once a key has been established by a prior DH \
+          token — and mix it into the handshake hash.",
     body: |inner, stream| { async_stream_s(inner, stream, static_key).await?; }
 }
 async_recv_reveal_token! {
     role: Initiator, token: S, method: s(), bounds: [],
+    doc: "Process the `s` token: read the peer's static public key from the \
+          wire — decrypting it once a key has been established by a prior DH \
+          token — and mix it into the handshake hash. Returns the revealed key.",
     body: |inner, stream| { async_read_s(inner, stream).await? }
 }
 async_recv_reveal_token! {
     role: Responder, token: S, method: s(), bounds: [],
+    doc: "Process the `s` token: read the peer's static public key from the \
+          wire — decrypting it once a key has been established by a prior DH \
+          token — and mix it into the handshake hash. Returns the revealed key.",
     body: |inner, stream| { async_read_s(inner, stream).await? }
 }
 
@@ -938,18 +999,34 @@ async_recv_reveal_token! {
 
 async_send_token! {
     role: Initiator, token: Ee, method: ee(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
+    doc: "Process the `ee` token: perform the Diffie–Hellman between our \
+          local ephemeral and the remote ephemeral, and mix the shared \
+          secret into the chaining key. Writes nothing to the wire; \
+          subsequent payloads are encrypted under the advanced key.",
     body: |inner, _stream| { do_ee(inner).await?; }
 }
 async_send_token! {
     role: Responder, token: Ee, method: ee(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
+    doc: "Process the `ee` token: perform the Diffie–Hellman between our \
+          local ephemeral and the remote ephemeral, and mix the shared \
+          secret into the chaining key. Writes nothing to the wire; \
+          subsequent payloads are encrypted under the advanced key.",
     body: |inner, _stream| { do_ee(inner).await?; }
 }
 async_recv_token! {
     role: Initiator, token: Ee, method: ee(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
+    doc: "Process the `ee` token: perform the Diffie–Hellman between our \
+          local ephemeral and the remote ephemeral, and mix the shared \
+          secret into the chaining key. Reads nothing from the wire; \
+          subsequent payloads are decrypted under the advanced key.",
     body: |inner, _stream| { do_ee(inner).await?; }
 }
 async_recv_token! {
     role: Responder, token: Ee, method: ee(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
+    doc: "Process the `ee` token: perform the Diffie–Hellman between our \
+          local ephemeral and the remote ephemeral, and mix the shared \
+          secret into the chaining key. Reads nothing from the wire; \
+          subsequent payloads are decrypted under the advanced key.",
     body: |inner, _stream| { do_ee(inner).await?; }
 }
 
@@ -959,18 +1036,34 @@ async_recv_token! {
 
 async_send_token! {
     role: Initiator, token: Es, method: es(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
+    doc: "Process the `es` token (initiator): perform the Diffie–Hellman \
+          between our local ephemeral and the remote static, and mix the \
+          shared secret into the chaining key. Writes nothing to the wire; \
+          subsequent payloads are encrypted under the advanced key.",
     body: |inner, _stream| { do_es_initiator(inner).await?; }
 }
 async_recv_token! {
     role: Initiator, token: Es, method: es(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
+    doc: "Process the `es` token (initiator): perform the Diffie–Hellman \
+          between our local ephemeral and the remote static, and mix the \
+          shared secret into the chaining key. Reads nothing from the wire; \
+          subsequent payloads are decrypted under the advanced key.",
     body: |inner, _stream| { do_es_initiator(inner).await?; }
 }
 async_send_token! {
     role: Responder, token: Es, method: es(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
+    doc: "Process the `es` token (responder): perform the Diffie–Hellman \
+          between our local static and the remote ephemeral, and mix the \
+          shared secret into the chaining key. Writes nothing to the wire; \
+          subsequent payloads are encrypted under the advanced key.",
     body: |inner, _stream| { do_es_responder(inner).await?; }
 }
 async_recv_token! {
     role: Responder, token: Es, method: es(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
+    doc: "Process the `es` token (responder): perform the Diffie–Hellman \
+          between our local static and the remote ephemeral, and mix the \
+          shared secret into the chaining key. Reads nothing from the wire; \
+          subsequent payloads are decrypted under the advanced key.",
     body: |inner, _stream| { do_es_responder(inner).await?; }
 }
 
@@ -980,18 +1073,34 @@ async_recv_token! {
 
 async_send_token! {
     role: Initiator, token: Se, method: se(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
+    doc: "Process the `se` token (initiator): perform the Diffie–Hellman \
+          between our local static and the remote ephemeral, and mix the \
+          shared secret into the chaining key. Writes nothing to the wire; \
+          subsequent payloads are encrypted under the advanced key.",
     body: |inner, _stream| { do_se_initiator(inner).await?; }
 }
 async_recv_token! {
     role: Initiator, token: Se, method: se(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
+    doc: "Process the `se` token (initiator): perform the Diffie–Hellman \
+          between our local static and the remote ephemeral, and mix the \
+          shared secret into the chaining key. Reads nothing from the wire; \
+          subsequent payloads are decrypted under the advanced key.",
     body: |inner, _stream| { do_se_initiator(inner).await?; }
 }
 async_send_token! {
     role: Responder, token: Se, method: se(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
+    doc: "Process the `se` token (responder): perform the Diffie–Hellman \
+          between our local ephemeral and the remote static, and mix the \
+          shared secret into the chaining key. Writes nothing to the wire; \
+          subsequent payloads are encrypted under the advanced key.",
     body: |inner, _stream| { do_se_responder(inner).await?; }
 }
 async_recv_token! {
     role: Responder, token: Se, method: se(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
+    doc: "Process the `se` token (responder): perform the Diffie–Hellman \
+          between our local ephemeral and the remote static, and mix the \
+          shared secret into the chaining key. Reads nothing from the wire; \
+          subsequent payloads are decrypted under the advanced key.",
     body: |inner, _stream| { do_se_responder(inner).await?; }
 }
 
@@ -1001,18 +1110,34 @@ async_recv_token! {
 
 async_send_token! {
     role: Initiator, token: Ss, method: ss(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
+    doc: "Process the `ss` token: perform the Diffie–Hellman between our \
+          local static and the remote static, and mix the shared secret \
+          into the chaining key. Writes nothing to the wire; subsequent \
+          payloads are encrypted under the advanced key.",
     body: |inner, _stream| { do_ss(inner).await?; }
 }
 async_send_token! {
     role: Responder, token: Ss, method: ss(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
+    doc: "Process the `ss` token: perform the Diffie–Hellman between our \
+          local static and the remote static, and mix the shared secret \
+          into the chaining key. Writes nothing to the wire; subsequent \
+          payloads are encrypted under the advanced key.",
     body: |inner, _stream| { do_ss(inner).await?; }
 }
 async_recv_token! {
     role: Initiator, token: Ss, method: ss(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
+    doc: "Process the `ss` token: perform the Diffie–Hellman between our \
+          local static and the remote static, and mix the shared secret \
+          into the chaining key. Reads nothing from the wire; subsequent \
+          payloads are decrypted under the advanced key.",
     body: |inner, _stream| { do_ss(inner).await?; }
 }
 async_recv_token! {
     role: Responder, token: Ss, method: ss(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
+    doc: "Process the `ss` token: perform the Diffie–Hellman between our \
+          local static and the remote static, and mix the shared secret \
+          into the chaining key. Reads nothing from the wire; subsequent \
+          payloads are decrypted under the advanced key.",
     body: |inner, _stream| { do_ss(inner).await?; }
 }
 
@@ -1022,18 +1147,34 @@ async_recv_token! {
 
 async_send_token! {
     role: Initiator, token: Psk, method: psk(psk_key: &crate::psk::Psk), bounds: [],
+    doc: "Process the `psk` token: mix the 32-byte pre-shared key into both \
+          the chaining key and the handshake hash (Noise's `MixKeyAndHash`). \
+          Writes nothing to the wire; subsequent payloads are encrypted \
+          under the advanced key.",
     body: |inner, _stream| { do_psk(inner, psk_key)?; }
 }
 async_send_token! {
     role: Responder, token: Psk, method: psk(psk_key: &crate::psk::Psk), bounds: [],
+    doc: "Process the `psk` token: mix the 32-byte pre-shared key into both \
+          the chaining key and the handshake hash (Noise's `MixKeyAndHash`). \
+          Writes nothing to the wire; subsequent payloads are encrypted \
+          under the advanced key.",
     body: |inner, _stream| { do_psk(inner, psk_key)?; }
 }
 async_recv_token! {
     role: Initiator, token: Psk, method: psk(psk_key: &crate::psk::Psk), bounds: [],
+    doc: "Process the `psk` token: mix the 32-byte pre-shared key into both \
+          the chaining key and the handshake hash (Noise's `MixKeyAndHash`). \
+          Reads nothing from the wire; subsequent payloads are decrypted \
+          under the advanced key.",
     body: |inner, _stream| { do_psk(inner, psk_key)?; }
 }
 async_recv_token! {
     role: Responder, token: Psk, method: psk(psk_key: &crate::psk::Psk), bounds: [],
+    doc: "Process the `psk` token: mix the 32-byte pre-shared key into both \
+          the chaining key and the handshake hash (Noise's `MixKeyAndHash`). \
+          Reads nothing from the wire; subsequent payloads are decrypted \
+          under the advanced key.",
     body: |inner, _stream| { do_psk(inner, psk_key)?; }
 }
 

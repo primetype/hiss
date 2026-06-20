@@ -79,8 +79,11 @@ pub enum HandshakeError {
     RekeyWithoutKey,
 
     /// An I/O error occurred while reading or writing the handshake
-    /// transcript over a [`std::io`] (or, behind the `async-io`
-    /// feature, a `tokio::io`) stream.
+    /// transcript. This variant is always present: the blocking
+    /// [`SyncHandshake`](super::io_sync::SyncHandshake) driver surfaces
+    /// [`std::io`] failures through it,
+    /// and the `AsyncHandshake` driver (feature `async-io`) surfaces
+    /// `tokio::io` failures through it.
     #[error("handshake I/O error: {0}")]
     Io(#[from] std::io::Error),
 }
