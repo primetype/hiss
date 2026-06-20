@@ -103,9 +103,9 @@ assert_eq!(&opened, payload);
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-The same protocol can be driven with explicit buffers (the `HandshakeState` core) instead
-of an owned stream, and — with the `async-io` feature — over `tokio::io` via
-`AsyncHandshake`. The mutual-authentication patterns (`K`, `Kpsk0`, `IKpsk1`, `IK`) follow the
+The buffer / no-syscall case is just an in-memory `Io` (a `Cursor`, `Vec`, or
+`&mut [u8]`), as the example above shows; with the `async-io` feature the same chain runs
+over `tokio::io` via `AsyncHandshake`. The mutual-authentication patterns (`K`, `Kpsk0`, `IKpsk1`, `IK`) follow the
 same builder shape with additional pre-message setters; `NK` is interactive and
 responder-authenticated (the initiator is anonymous) and likewise pre-knows the
 responder's static key via `set_rs`. `XK` is a three-message, mutually-authenticated

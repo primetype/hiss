@@ -100,66 +100,68 @@
 //! only available once the pre-message list reaches [`Nil`] — all
 //! required keys must be provided first.
 //!
-//! ## 4. Handshake state machine
+//! ## 4. Handshake drivers (the type-state machine)
 //!
-//! Three state types form a type-state machine:
+//! The handshake is driven over an I/O stream by one of two drivers,
+//! split on the only irreducible axis — synchronous vs asynchronous I/O:
 //!
-//! - **[`HandshakeState`]** — between messages. Offers `e()` /
-//!   `s()` (to start sending) or `read()` (to start receiving),
-//!   depending on the next message direction and role.
-//! - **[`Sending`]** — within a send message. Each token method
-//!   appends data to an internal buffer and advances the token
+//! - [`SyncHandshake`] — blocking [`std::io::Read`]/[`std::io::Write`].
+//! - [`AsyncHandshake`] — `tokio` `AsyncRead`/`AsyncWrite` (feature
+//!   `async-io`).
+//!
+//! Each driver is a type-state machine over three states, parameterised
+//! by the remaining pre-message / token / message Cons-lists:
+//!
+//! - **`*Handshake`** — between messages. Offers `e()` / `s()` / `psk()`
+//!   (to start sending) or `recv()` (to start receiving), depending on
+//!   the next message direction and role.
+//! - **`*Sending`** — within a send message. Each token method streams
+//!   that token's bytes to the wire and advances the token Cons-list.
+//! - **`*Receiving`** — within a receive message. Each token method
+//!   reads exactly that token's bytes off the wire and advances the
 //!   Cons-list.
-//! - **[`Receiving`]** — within a receive message. Each token
-//!   method reads data from the buffer and advances the token
-//!   Cons-list.
 //!
-//! When the last token in a message is processed, the return type
-//! changes automatically:
+//! When the last token of the last message is processed, the chain
+//! yields a [`SyncTransport`]/[`AsyncTransport`] bundling the
+//! post-handshake [`Transport`] with the stream it ran over. Revealing
+//! tokens (`e`/`s`) additionally hand back the revealed public key.
 //!
-//! **Sending** (building an outgoing message):
-//! - More messages remain → `(Box<[u8]>, HandshakeState<…>)`
-//! - Last message complete → `(Box<[u8]>, Transport<N>)`
+//! This is encoded via three non-overlapping `impl` blocks per token per
+//! context (send/recv), selected by the Cons-list tail. The compiler
+//! picks the right one — no `match`, no `if`, no runtime check.
 //!
-//! **Receiving** (consuming an incoming message):
-//! - More messages remain → `HandshakeState<…>`
-//! - Last message complete → `Transport<N>`
-//!
-//! On the receiving side the caller already provided the bytes via
-//! `read(&msg)`, so there is nothing to hand back — only the next
-//! state (or for revealing tokens like `e`/`s`, the revealed public
-//! key paired with the next state).
-//!
-//! This is encoded via three non-overlapping `impl` blocks per token
-//! per context (send/recv), selected by the Cons-list tail. The
-//! compiler picks the right one — no `match`, no `if`, no runtime
-//! check.
+//! The **buffer / no-syscall** use case is just an in-memory `Io`: hand
+//! the driver a [`std::io::Cursor`], a `Vec`, or `&mut [u8]` and the
+//! whole handshake runs without any actual I/O (this is how the seal
+//! helpers and most tests drive it).
 //!
 //! # Compile-time message sizes
 //!
 //! Because every component size is a `const` — public key size from
 //! the [`Curve`], tag size from the [`Cipher`], hash length from the
 //! [`Hash`] — the exact byte size of every handshake message is
-//! known at compile time. For `Noise_IKpsk1_P256_ChaChaPoly_BLAKE2b`:
+//! known at compile time (see [`noise_message_size!`](crate::noise_message_size)).
+//! For `Noise_IKpsk1_P256_ChaChaPoly_BLAKE2b`:
 //!
 //! | Message | Contents                                   | Size (bytes)              |
 //! |---------|--------------------------------------------|---------------------------|
 //! | msg1    | `e_pub` + `encrypted(s_pub)` + payload tag | 65 + (65 + 16) + 16 = 162 |
 //! | msg2    | `e_pub` + payload tag                      | 65 + 16 = 81              |
 //!
-//! # Async crypto provider
+//! # Pluggable crypto provider
 //!
-//! Token methods are `async` because the
-//! [`DhProviderAsync`](crate::provider::DhProviderAsync) trait is
-//! async-native. This allows pluggable crypto backends:
+//! The drivers are generic over the crypto provider, so the per-token DH
+//! and key generation can use any backend:
 //!
 //! - **Software** (`eccoxide`/`cryptoxide`) — resolves immediately.
-//! - **Secure Enclave** (Apple Security framework) — suspends until the
-//!   hardware completes; may prompt for biometric authentication.
+//! - **Secure Enclave** (Apple Security framework) — the blocking
+//!   Security-framework calls run on the calling thread for the
+//!   [`SyncHandshake`], or are offloaded to a worker for the
+//!   [`AsyncHandshake`]; may prompt for biometric authentication.
 //!
-//! The handshake state machine is a single `async` function that
-//! `await`s each crypto operation. The runtime handles scheduling
-//! transparently.
+//! [`SyncHandshake`] takes a synchronous
+//! [`DhProvider`](crate::provider::DhProvider); [`AsyncHandshake`] takes
+//! a [`DhProviderAsync`](crate::provider::DhProviderAsync).
 //!
 //! # Usage
 //!
@@ -168,47 +170,34 @@
 //!
 //! type Channel = IKpsk1;
 //!
-//! // ── Initiator ───────────────────────────────────────────
-//! let hs = Channel::initiate(provider, &[])
+//! // ── Initiator (blocking) over a stream ───────────────────
+//! let i = Channel::sync_initiator(provider, &[], stream)
 //!     .set_rs(responder_pub);                     // <- s pre-message
 //!
-//! let (msg1, hs) = hs
-//!     .e().await?                                 // -> e
-//!     .es().await?                                //    es
-//!     .s(initiator_static).await?                 //    s
-//!     .ss().await?                                //    ss
-//!     .psk(&psk).await?;                          //    psk
+//! let i = i
+//!     .e()?                                       // -> e
+//!     .es()?                                      //    es
+//!     .s(initiator_static)?                       //    s
+//!     .ss()?                                      //    ss
+//!     .psk(&psk)?;                                //    psk (msg1 streamed)
 //!
-//! let (re, recv) = hs                             // <- e, ee, se
-//!     .read(&msg2)?
-//!     .e().await?;                                // remote ephemeral revealed
-//! let transport = recv
-//!     .ee().await?
-//!     .se().await?;
+//! let (re, recv) = i.recv().e()?;                 // <- e, ee, se
+//! let transport = recv.ee()?.se()?;               // -> SyncTransport
 //!
-//! // ── Responder ───────────────────────────────────────────
-//! let hs = Channel::respond(provider, &[])
+//! // ── Responder (blocking) over a stream ───────────────────
+//! let r = Channel::sync_responder(provider, &[], stream)
 //!     .set_s(responder_static)?;                  // <- s pre-message
 //!
-//! let (re, recv) = hs                             // -> e, es, s, ss, psk
-//!     .read(&msg1)?
-//!     .e().await?;                                // remote ephemeral revealed
-//! let recv = recv
-//!     .es().await?;
-//! let (rs, recv) = recv
-//!     .s().await?;                                // remote static revealed
-//! let recv = recv
-//!     .ss().await?;
-//! let hs = recv
-//!     .psk(&psk).await?;
+//! let (re, recv) = r.recv().e()?;                 // -> e, es, s, ss, psk
+//! let recv = recv.es()?;
+//! let (rs, recv) = recv.s()?;                     // remote static revealed
+//! let r = recv.ss()?.psk(&psk)?;
 //!
-//! let (msg2, transport) = hs
-//!     .e().await?                                 // <- e, ee, se
-//!     .ee().await?
-//!     .se().await?;
+//! let transport = r.e()?.ee()?.se()?;             // <- e, ee, se → SyncTransport
 //! ```
 //!
-//! [`DhProviderAsync`]: crate::provider::DhProviderAsync
+//! The [`AsyncHandshake`] (feature `async-io`) is the identical chain
+//! with `async_initiator`/`async_responder` and `.await` on each token.
 
 pub mod alias;
 pub(crate) mod buffers;
@@ -313,7 +302,7 @@ impl<P, Cu, Ci, H> Default for Noise<P, Cu, Ci, H> {
 /// A fully specified Noise protocol — pattern, curve, cipher, and hash.
 ///
 /// Implemented by [`Noise<P, Cu, Ci, H>`]. Used as a single type
-/// parameter on [`HandshakeState`], [`Sending`], and [`Receiving`]
+/// parameter on the [`SyncHandshake`]/[`AsyncHandshake`] drivers
 /// instead of spreading four separate generic parameters.
 pub trait Protocol {
     /// The handshake pattern (e.g. [`IKpsk1`]).
@@ -2347,16 +2336,14 @@ mod tests {
     // A send message consisting of exactly one `e` token (`-> e`) must be
     // finalizable. None of the shipped patterns have such a message, so
     // these tests define throwaway local patterns to exercise the two
-    // single-`E` finalizers added to the send entry point:
+    // single-`E` finalizers on the send entry point:
     //
-    //   * variant 3 — single `-> e` as the last message → `Transport`;
-    //   * variant 2 — single `-> e` with more messages → next
-    //     `HandshakeState`.
+    //   * variant 3 — single `-> e` as the last message → transport;
+    //   * variant 2 — single `-> e` with more messages → next handshake
+    //     state.
     //
-    // Each finalizer is driven hiss↔hiss across all three drivers: the
-    // async buffer core (the `.e(&mut output)` API where the bug lived)
-    // plus both streaming drivers (`SyncHandshake` and, under
-    // `async-io`, `AsyncHandshake`).
+    // Each finalizer is driven hiss↔hiss across both drivers:
+    // `SyncHandshake` and, under `async-io`, `AsyncHandshake`.
     mod single_e_send_finalizer_tests {
         use super::super::tokens::{Cons, E, Ee, Message, Nil, ToInitiator, ToResponder};
         use super::super::{Blake2b, ChaChaPoly, Noise, P256};
@@ -2382,7 +2369,7 @@ mod tests {
         // A two-message pattern: `-> e` / `<- e, ee` (NN's shape, kept
         // local). The initiator's first message is a single `e`, which
         // exercises the single-`E` more-messages finalizer (variant 2 →
-        // next HandshakeState).
+        // next handshake state).
         struct EThenEe;
         impl Pattern for EThenEe {
             const NAME: &'static str = "EThenEe";
@@ -2494,13 +2481,13 @@ mod tests {
             );
         }
 
-        // ── Streaming-driver coverage ─────────────────────────────
+        // ── Async-driver coverage ─────────────────────────────────
         //
-        // The buffer-core tests above exercise the finalizers in
-        // `process.rs`. The two single-`E` finalizers also exist in the
-        // streaming drivers (`SyncHandshake`, `AsyncHandshake`), where
-        // they were previously only compile-checked. The tests below
-        // drive a single-`e` send hiss↔hiss over each streaming driver.
+        // The two single-`E` finalizers exist in both drivers. The tests
+        // above drive them over `SyncHandshake`; the tests below repeat
+        // the same two finalizers over `AsyncHandshake` (the
+        // `single_e_*_sync_streaming` pair additionally covers the sync
+        // driver over a shared `Pipe`).
 
         /// A single-threaded in-memory bidirectional byte pipe (mirrors
         /// the one in `io_sync::tests`): reads pull from one shared queue,

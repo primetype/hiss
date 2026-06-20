@@ -326,7 +326,7 @@ impl P256r1PrivateKey {
 /// ephemeral keys use a software-backed `SecKey` (no persistence). Ed25519
 /// is software-signed — the enclave has no Ed25519 support — and its
 /// 32-byte seed is sealed to this device's SE P-256 public key (a
-/// 129-byte Noise-N envelope, see [`crate::noise::seal`]) and stored in
+/// 129-byte Noise-N envelope; the internal `noise::seal` helper) and stored in
 /// the same data-protection Keychain under the service
 /// `{namespace}.ed25519` ([`store_seed`](Self::store_seed) /
 /// [`load_seed`](Self::load_seed)). Both platforms (macOS and iOS) use
