@@ -1,0 +1,84 @@
+name: Check
+
+# Stage 1 of the pipeline: the static gate. Formatting, lints, intra-doc
+# links, MSRV and the supply-chain audit. The `Test` and `Coverage`
+# workflows trigger on this workflow's completion (via `workflow_run`) and
+# only run their jobs when this one concluded successfully.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  clippy-doc:
+    name: clippy + doc-links (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # macOS compiles the Apple Secure Enclave backend (target-gated);
+        # ubuntu does not. Lint and doc both so neither path rots.
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: clippy (all features, all targets)
+        run: cargo clippy --all-features --all-targets -- -D warnings
+      # `cargo doc` caches, and items behind `async-io` only break the
+      # default build (the 0005 lesson) — so clean and check BOTH feature
+      # sets with warnings-as-errors to catch broken intra-doc links.
+      - name: doc intra-links (default features)
+        run: cargo clean --doc && cargo doc --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+      - name: doc intra-links (all features)
+        run: cargo clean --doc && cargo doc --no-deps --all-features
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  msrv:
+    # Pinned to the declared MSRV (Cargo.toml `rust-version`). Policy:
+    # a recent stable, floored at `stable - 3`; bump both in lockstep.
+    name: MSRV (1.96)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.96"
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo check on the declared MSRV
+        run: cargo check --all-features --all-targets
+
+  deny:
+    name: cargo-deny (advisories · licenses · bans · sources)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check

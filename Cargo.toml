@@ -2,7 +2,10 @@
 name = "hiss"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+# MSRV policy: pinned to a recent stable release, floored at `stable - 3` —
+# i.e. bump only once it falls more than three releases behind current
+# stable. Keep this in lockstep with the `msrv` job in .github/workflows.
+rust-version = "1.96"
 authors = ["Nicolas Di Prima <nicolas@primetype.co.uk>"]
 license = "MIT OR Apache-2.0"
 description = "Static, type-level Noise Protocol Framework with pluggable hardware-backed crypto."

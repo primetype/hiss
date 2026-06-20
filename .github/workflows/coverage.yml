@@ -1,0 +1,41 @@
+name: Coverage
+
+# Stage 3 of the pipeline. Triggers on completion of the `Check` workflow
+# and runs only when Check succeeded. Measures coverage with
+# cargo-llvm-cov and fails if it drops below the agreed floor.
+#
+# Runs on macOS (per the locked Q11 decision) so the Apple Secure Enclave
+# backend compiles, then excludes it — together with the wycheproof test
+# corpus and the compile-time `well_formed` guard (structurally 0% at
+# runtime) — from the measured total. Floor: 80% lines / 75% regions.
+# (Diff-based "vs the base commit" regression checking is deferred until a
+# GitHub remote + Codecov token exist.)
+
+on:
+  workflow_run:
+    workflows: ["Check"]
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  coverage:
+    name: llvm-cov (floor 80% lines / 75% regions)
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - name: coverage (gated total, enforced floor)
+        run: >
+          cargo llvm-cov --all-features
+          --ignore-filename-regex 'provider/apple\.rs|wycheproof\.rs|well_formed\.rs'
+          --fail-under-lines 80
+          --fail-under-regions 75

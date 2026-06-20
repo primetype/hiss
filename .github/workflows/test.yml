@@ -1,0 +1,34 @@
+name: Test
+
+# Stage 2 of the pipeline. Triggers on completion of the `Check` workflow
+# and runs only when Check succeeded. Tests the exact commit Check
+# validated (workflow_run checks out the default branch by default, so we
+# pin the ref to the triggering commit).
+
+on:
+  workflow_run:
+    workflows: ["Check"]
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: test (default features)
+        run: cargo test
+      - name: test (all features)
+        run: cargo test --all-features

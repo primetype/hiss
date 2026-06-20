@@ -1,0 +1,41 @@
+# cargo-deny configuration — the supply-chain gate run by the `Check` CI
+# workflow (roadmap A4.1). Run locally with `cargo deny check`.
+# Schema v2 (cargo-deny 0.14+).
+
+[advisories]
+version = 2
+# RUSTSEC advisories deny by default. To accept one, add its ID here with
+# a comment explaining why.
+ignore = []
+
+[licenses]
+version = 2
+# Permissive licenses present across the dependency graph (dev deps
+# included). Derived from `cargo metadata`. AND-expressions require every
+# listed license: "Apache-2.0 AND ISC" and "(MIT OR Apache-2.0) AND
+# Unicode-3.0" are why ISC and Unicode-3.0 appear below; BSD-3-Clause and
+# Zlib are the only crates licensed solely under those terms.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+]
+confidence-threshold = 0.8
+
+[bans]
+# Large dev trees routinely pull duplicate versions of small crates; that
+# is not worth failing CI over. Real concerns (a banned crate) go here.
+multiple-versions = "warn"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+# eccoxide carries the constant-time P-256 scalar-mul fix only on its git
+# master; A1.5 tracks switching to a crates.io release once one ships.
+# Until then, allow this single git source.
+allow-git = ["https://github.com/vincenthz/eccoxide"]
