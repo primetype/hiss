@@ -55,57 +55,95 @@ unnecessary for the targeted use cases; `snow` omits it for the same reason.
 
 ## Quickstart
 
-The `N` pattern lets an initiator seal a message to a recipient's known static public
-key. The streaming `SyncHandshake` driver owns any `std::io::Read`/`Write` (a TCP
-socket, an in-memory buffer, …) and advances the handshake over it.
+The `N` pattern is a one-way, sender-anonymous seal: anyone who knows a recipient's static
+public key can send it one confidential, authenticated message, with no reply. The whole
+exchange is the single Noise message `-> e, es`; we build it over `X25519` in five steps.
+(This mirrors the crate-level doctest, which compiles and runs each step.)
+
+### 1. The recipient's static key pair
+
+`N` authenticates the recipient, so it owns a long-term static key pair and the sender must
+already know its public half (shared out of band). `X25519` is Diffie–Hellman over
+Curve25519 (RFC 7748) — the curve Noise calls `25519`.
 
 ```rust
 use hiss::provider::{EphemeralOnly, ProviderExt};
-use hiss::noise::{Blake2b, ChaChaPoly, Initiator, Noise, P256, Responder, SyncHandshake, pattern};
+use hiss::noise::X25519;
 
-// Spell out the protocol once as a type alias. (The ready-made
-// `noise::N` alias is exactly this; here we name the suite in full.)
-type Seal = Noise<pattern::N, P256, ChaChaPoly, Blake2b>;
+// `EphemeralOnly` is the software backend; it wraps a CSPRNG.
+let mut recipient = EphemeralOnly::new(rand::rng());
 
-// Each party owns a software provider holding its own CSPRNG — `rand::rng()`
-// here; pass a seeded RNG instead for deterministic tests. The recipient's
-// static P-256 key has its public half known to the sender.
-let mut provider = EphemeralOnly::new(rand::rng());
-let recipient_static = provider.generate::<P256>()?;
-let recipient_pub = provider.public(&recipient_static)?;
+let recipient_static = recipient.generate::<X25519>()?; // secret half — never shared
+let recipient_pub = recipient.public(&recipient_static)?; // public half — the sender knows this
+```
 
-// ── Initiator: run the handshake, then seal a payload ───────────────────────
-let handshake = SyncHandshake::<Seal, Initiator, _, _, _, _>::initiate(
-    EphemeralOnly::new(rand::rng()),
-    &[],                 // prologue
-    Vec::<u8>::new(),    // writer: anything implementing std::io::Write
+### 2. The sender begins `N` and pins the recipient's static
+
+The sender drives the `Initiator` side. `N`'s initiator is anonymous — no static key of
+its own — so the recipient learns only that the sender knew its public key. `set_rs`
+supplies that known key (`N`'s `<- s` pre-message).
+
+```rust
+use hiss::noise::{Blake2b, ChaChaPoly, Initiator, Noise, SyncHandshake, pattern};
+
+// The full protocol name: Noise_N_25519_ChaChaPoly_BLAKE2b.
+type NoiseN = Noise<pattern::N, X25519, ChaChaPoly, Blake2b>;
+
+let handshake = SyncHandshake::<NoiseN, Initiator, _, _, _, _>::initiate(
+    EphemeralOnly::new(rand::rng()), // the sender's own RNG
+    &[],                             // prologue: shared context, if any
+    Vec::<u8>::new(),                // the sink the message bytes are written to
 )
 .set_rs(recipient_pub);
+```
 
-let (mut sender, wire) = handshake.e()?.es()?.into_parts();
+### 3. Write the message (`-> e, es`) and seal the payload
 
-let payload = b"attack at dawn!!";
-let mut sealed = [0u8; 32]; // 16-byte payload + 16-byte AEAD tag
-let n = sender.send(payload, &mut sealed)?;
+`e` writes a fresh ephemeral public key to the wire; `es` mixes
+`DH(ephemeral, recipient-static)` into the cipher key. After `es` the channel is keyed, so
+`into_parts` returns the live sender and the handshake message; the payload then rides in
+the first transport record.
 
-// ── Responder: read the handshake, then open the payload ────────────────────
-let handshake = SyncHandshake::<Seal, Responder, _, _, _, _>::respond(
-    provider,                             // the recipient drives the responder side
-    &[],                                  // prologue (must match)
-    std::io::Cursor::new(wire),           // reader: anything implementing std::io::Read
+```rust
+let (mut sender, message) = handshake.e()?.es()?.into_parts();
+
+let quote = b"Not all those who wander are lost.";
+let mut sealed = vec![0u8; quote.len() + 16]; // +16 for the AEAD tag
+let n = sender.send(quote, &mut sealed)?;
+```
+
+### 4. The recipient receives the message
+
+The recipient drives the `Responder` side with its static private key (`set_s`) and replays
+the same tokens, recomputing the identical `es` secret without ever putting a key on the
+wire.
+
+```rust
+use hiss::noise::Responder;
+
+let handshake = SyncHandshake::<NoiseN, Responder, _, _, _, _>::respond(
+    recipient,                     // drives this side, holding the static key
+    &[],                           // the same prologue
+    std::io::Cursor::new(message), // read the sender's message
 )
 .set_s(recipient_static)?;
 
-let (_revealed_ephemeral, recv) = handshake.recv().e()?;
+let (_their_ephemeral, recv) = handshake.recv().e()?;
 let mut transport = recv.es()?;
+```
 
-// Both ends derived the same session.
-assert_eq!(sender.session_id(), transport.transport().session_id());
+### 5. Decrypt
 
-let mut opened = [0u8; 16];
-transport.transport().receive(&sealed[..n], &mut opened)?;
-assert_eq!(&opened, payload);
-# Ok::<(), Box<dyn std::error::Error>>(())
+Both ends now hold the same transport key, so the recipient opens the sealed record —
+authenticated end to end: only someone who knew the recipient's public key could have
+produced it.
+
+```rust
+let mut opened = vec![0u8; sealed.len()];
+let m = transport.transport().receive(&sealed[..n], &mut opened)?;
+opened.truncate(m);
+
+assert_eq!(&opened, quote); // "Not all those who wander are lost."
 ```
 
 The buffer / no-syscall case is just an in-memory `Io` (a `Cursor`, `Vec`, or
