@@ -1391,3 +1391,192 @@ async fn nn_snow_initiator_hiss_responder() {
     let pt_len = snow_initiator.read_message(&ct[..ct_len], &mut pt).unwrap();
     assert_eq!(&pt[..pt_len], reply);
 }
+
+// ── XX: our initiator ↔ snow responder ──────────────────────────
+
+#[tokio::test]
+async fn xx_hiss_initiator_snow_responder() {
+    let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
+    let initiator_static = provider.generate::<P256>().unwrap();
+    let initiator_pub = provider.public(&initiator_static).unwrap();
+
+    let proto = "Noise_XX_P256_ChaChaPoly_BLAKE2b";
+
+    // ── Snow responder setup: own static, no pre-known peer static ──
+    let snow_responder_builder = snow::Builder::new(proto.parse().unwrap());
+    let snow_responder_keypair = snow_responder_builder.generate_keypair().unwrap();
+    let responder_static_pub =
+        P256::public_key_from_bytes(&snow_responder_keypair.public).unwrap();
+
+    let mut snow_responder = snow_responder_builder
+        .local_private_key(&snow_responder_keypair.private)
+        .unwrap()
+        .build_responder()
+        .unwrap();
+
+    // ── Our initiator setup (no pre-messages: neither static pre-known) ──
+    type Channel = XX;
+
+    let i_hs = Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]);
+
+    // msg1: -> e (single-`e` send finalizer; 65 bytes, cipher never keyed)
+    let mut msg1_buf = [0u8; 65];
+    let (msg1, i_hs) = i_hs.e(&mut msg1_buf).await.unwrap();
+    let msg1 = msg1.to_vec();
+
+    let mut buf = [0u8; 256];
+    snow_responder.read_message(&msg1, &mut buf).unwrap();
+
+    // msg2: <- e, ee, s, es (snow responder sends; its static is encrypted)
+    let mut msg2 = [0u8; 256];
+    let msg2_len = snow_responder.write_message(&[], &mut msg2).unwrap();
+    let (_, recv) = i_hs.read(&msg2[..msg2_len]).unwrap().e().await.unwrap();
+    let recv = recv.ee().await.unwrap();
+    let (revealed_responder_pub, recv) = recv.s().await.unwrap();
+    // The static snow revealed (encrypted in msg2) must match snow's.
+    assert_eq!(
+        revealed_responder_pub.to_bytes(),
+        responder_static_pub.to_bytes(),
+    );
+    let i_hs = recv.es().await.unwrap();
+
+    // msg3: -> s, se (our initiator sends; its static is encrypted)
+    let mut msg3_buf = [0u8; 97];
+    let (msg3, i_transport) = i_hs
+        .s(&mut msg3_buf, initiator_static)
+        .await
+        .unwrap()
+        .se()
+        .await
+        .unwrap();
+    let msg3 = msg3.to_vec();
+
+    let mut buf = [0u8; 256];
+    snow_responder.read_message(&msg3, &mut buf).unwrap();
+
+    // The static snow received (encrypted in msg3) must match ours.
+    assert_eq!(
+        snow_responder.get_remote_static().unwrap(),
+        initiator_pub.to_bytes(),
+    );
+
+    assert_eq!(
+        i_transport.session_id().as_ref(),
+        snow_responder.get_handshake_hash(),
+    );
+
+    let mut snow_responder = snow_responder.into_transport_mode().unwrap();
+    let mut i_transport = i_transport;
+
+    // Transport: bidirectional exchange.
+    let plaintext = b"hello from hiss XX initiator";
+    let mut ct = [0u8; 256];
+    let ct_len = i_transport.send(plaintext, &mut ct).unwrap();
+    let mut pt = [0u8; 256];
+    let pt_len = snow_responder.read_message(&ct[..ct_len], &mut pt).unwrap();
+    assert_eq!(&pt[..pt_len], plaintext);
+
+    let reply = b"hello from snow XX responder";
+    let mut ct = [0u8; 256];
+    let ct_len = snow_responder.write_message(reply, &mut ct).unwrap();
+    let mut pt = [0u8; 256];
+    let pt_len = i_transport.receive(&ct[..ct_len], &mut pt).unwrap();
+    assert_eq!(&pt[..pt_len], reply);
+}
+
+// ── XX: snow initiator ↔ our responder ──────────────────────────
+
+#[tokio::test]
+async fn xx_snow_initiator_hiss_responder() {
+    let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
+    let responder_static = provider.generate::<P256>().unwrap();
+    let responder_pub = provider.public(&responder_static).unwrap();
+
+    let proto = "Noise_XX_P256_ChaChaPoly_BLAKE2b";
+
+    // ── Snow initiator setup: own static, no pre-known peer static ──
+    let snow_initiator_builder = snow::Builder::new(proto.parse().unwrap());
+    let snow_initiator_keypair = snow_initiator_builder.generate_keypair().unwrap();
+
+    let mut snow_initiator = snow_initiator_builder
+        .local_private_key(&snow_initiator_keypair.private)
+        .unwrap()
+        .build_initiator()
+        .unwrap();
+
+    // ── Our responder setup (no pre-messages: neither static pre-known) ──
+    type Channel = XX;
+
+    let r_hs = Channel::respond(EphemeralOnly::new(StdRng::from_os_rng()), &[]);
+
+    // msg1: -> e (snow initiator sends)
+    let mut msg1 = [0u8; 256];
+    let msg1_len = snow_initiator.write_message(&[], &mut msg1).unwrap();
+
+    // Our responder reads msg1.
+    let (_, recv) = r_hs.read(&msg1[..msg1_len]).unwrap().e().await.unwrap();
+
+    // msg2: <- e, ee, s, es (our responder sends; its static is encrypted)
+    let mut msg2_buf = [0u8; 162];
+    let (msg2, r_hs) = recv
+        .e(&mut msg2_buf)
+        .await
+        .unwrap()
+        .ee()
+        .await
+        .unwrap()
+        .s(responder_static)
+        .await
+        .unwrap()
+        .es()
+        .await
+        .unwrap();
+    let msg2 = msg2.to_vec();
+
+    let mut buf = [0u8; 256];
+    snow_initiator.read_message(&msg2, &mut buf).unwrap();
+
+    // The static snow received in msg2 (encrypted) must match ours.
+    assert_eq!(
+        snow_initiator.get_remote_static().unwrap(),
+        responder_pub.to_bytes(),
+    );
+
+    // msg3: -> s, se (snow initiator sends; its static is encrypted)
+    let mut msg3 = [0u8; 256];
+    let msg3_len = snow_initiator.write_message(&[], &mut msg3).unwrap();
+
+    // Our responder reads msg3; the `s` token reveals the initiator static.
+    let (revealed_initiator_pub, recv) =
+        r_hs.read(&msg3[..msg3_len]).unwrap().s().await.unwrap();
+    let r_transport = recv.se().await.unwrap();
+
+    // The revealed initiator static must match snow's.
+    assert_eq!(
+        revealed_initiator_pub.to_bytes(),
+        snow_initiator_keypair.public.as_slice(),
+    );
+
+    assert_eq!(
+        r_transport.session_id().as_ref(),
+        snow_initiator.get_handshake_hash(),
+    );
+
+    let mut snow_initiator = snow_initiator.into_transport_mode().unwrap();
+    let mut r_transport = r_transport;
+
+    // Transport: bidirectional exchange.
+    let plaintext = b"hello from snow XX initiator";
+    let mut ct = [0u8; 256];
+    let ct_len = snow_initiator.write_message(plaintext, &mut ct).unwrap();
+    let mut pt = [0u8; 256];
+    let pt_len = r_transport.receive(&ct[..ct_len], &mut pt).unwrap();
+    assert_eq!(&pt[..pt_len], plaintext);
+
+    let reply = b"hello from hiss XX responder";
+    let mut ct = [0u8; 256];
+    let ct_len = r_transport.send(reply, &mut ct).unwrap();
+    let mut pt = [0u8; 256];
+    let pt_len = snow_initiator.read_message(&ct[..ct_len], &mut pt).unwrap();
+    assert_eq!(&pt[..pt_len], reply);
+}

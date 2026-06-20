@@ -35,7 +35,7 @@ This `0.1` targets one cipher suite and a fixed set of patterns:
 
 | Axis    | Supported |
 |---------|-----------|
-| Patterns | `N`, `K`, `Kpsk0`, `IKpsk1`, `IK`, `NK`, `IX`, `XK`, `NN` |
+| Patterns | `N`, `K`, `Kpsk0`, `IKpsk1`, `IK`, `NK`, `IX`, `XK`, `NN`, `XX` |
 | Curve   | NIST **P-256** (secp256r1) |
 | Cipher  | **ChaCha20-Poly1305** |
 | Hash    | **BLAKE2b** |
@@ -119,6 +119,11 @@ clear, the responder's encrypted). `NN` is the **unauthenticated** interactive p
 both parties are anonymous (no static keys, no pre-message setters), so it offers
 confidentiality only against a passive eavesdropper — there is no protection against an
 active man-in-the-middle — with full forward secrecy once the ephemerals are mixed.
+`XX` is the **canonical** three-message, mutually-authenticated pattern: like `IX` it has
+**no pre-message setters** — neither side pre-knows the other's static — but unlike `IX`
+**both** statics are transmitted *encrypted* during the handshake (after `ee` keys the
+cipher), so **both identities are hidden from a passive eavesdropper**. Both parties send
+their static keys via `s` tokens; full forward secrecy follows the `ee` DH.
 
 ## Providers
 

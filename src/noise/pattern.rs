@@ -370,3 +370,53 @@ impl Pattern for NN {
 }
 
 assert_well_formed!(NN);
+
+// ── XX ──────────────────────────────────────────────────────────
+
+/// `XX` — the canonical interactive, mutually-authenticated handshake
+/// over **three messages** with **no pre-messages**. Both parties
+/// transmit their static keys *during* the handshake, and both do so
+/// **encrypted** (after `ee` keys the cipher), so **both identities are
+/// hidden from a passive eavesdropper**.
+///
+/// The initiator is authenticated to the responder via `se`; the
+/// responder is authenticated to the initiator via `es`. Neither side
+/// needs to pre-know the other's static key — unlike [`XK`] (which
+/// pre-knows the responder's static via a pre-message), XX learns both
+/// statics on the wire. Once `ee` mixes both ephemerals, the session
+/// has **full forward secrecy**.
+///
+/// msg1 (`-> e`) drives the single-`e` send finalizer (the cipher is
+/// never keyed in msg1, so the message is the bare ephemeral with no
+/// payload tag); msg3 (`-> s, se`) drives the `s`-first send entry,
+/// sending the initiator's static encrypted.
+///
+/// ```text
+/// XX:
+///   -> e
+///   <- e, ee, s, es
+///   -> s, se
+/// ```
+pub struct XX;
+
+impl Pattern for XX {
+    const NAME: &'static str = "XX";
+    const NUM_MESSAGES: usize = 3;
+    const HAS_PSK: bool = false;
+
+    // No pre-messages: neither party pre-knows the other's static.
+    type PreMessages = Nil;
+
+    // -> e
+    // <- e, ee, s, es
+    // -> s, se
+    type Messages = Cons<
+        Message<ToResponder, Cons<E, Nil>>,
+        Cons<
+            Message<ToInitiator, Cons<E, Cons<Ee, Cons<S, Cons<Es, Nil>>>>>,
+            Cons<Message<ToResponder, Cons<S, Cons<Se, Nil>>>, Nil>,
+        >,
+    >;
+}
+
+assert_well_formed!(XX);

@@ -2,7 +2,7 @@
 //!
 //! Where `src/noise/mod.rs` has hand-picked single-corruption tests, this
 //! file sweeps the adversarial space deterministically (via the
-//! [`ScriptedRng`] ephemeral-injection harness) across all nine supported
+//! [`ScriptedRng`] ephemeral-injection harness) across all ten supported
 //! patterns:
 //!
 //! * **tamper** — flip *every* byte of *every* handshake message → the
@@ -50,6 +50,9 @@ const XK_MSG2: usize = 81; // XK msg2: e + ee (keyed) + tag
 const XK_MSG3: usize = 97; // XK msg3: encrypted s (keyed) + se + tag
 const NN_MSG1: usize = 65; // NN msg1: bare e (cipher never keyed → no tag)
 const NN_MSG2: usize = 81; // NN msg2: e + ee (keys cipher) + tag
+const XX_MSG1: usize = 65; // XX msg1: bare e (cipher never keyed → no tag)
+const XX_MSG2: usize = 162; // XX msg2: e + ee keys cipher + encrypted s + es + tag
+const XX_MSG3: usize = 97; // XX msg3: encrypted s (keyed) + se + tag
 
 /// Transform applied to a handshake message before the peer reads it.
 type Xform<'a> = dyn Fn(usize, Vec<u8>) -> Vec<u8> + 'a;
@@ -432,6 +435,61 @@ async fn run_nn(xform: &Xform<'_>) -> Result<(), ()> {
     Ok(())
 }
 
+async fn run_xx(xform: &Xform<'_>) -> Result<(), ()> {
+    // XX has no pre-messages: neither static is pre-known. Both parties
+    // transmit their statics in-handshake, encrypted (after `ee`).
+    // msg1 is a bare `-> e` (the single-`e` send finalizer).
+    let i = XX::initiate(EphemeralOnly::new(ScriptedRng::new(&[&INIT_EPHEMERAL])), &[]);
+    let mut b1 = [0u8; 256];
+    let (msg1, i) = i.e(&mut b1).await.unwrap();
+    let msg1 = xform(0, msg1.to_vec());
+
+    // Responder reads msg1 (-> e).
+    let r = XX::respond(EphemeralOnly::new(ScriptedRng::new(&[&RESP_EPHEMERAL])), &[]);
+    let (_, recv) = r.read(&msg1).map_err(|_| ())?.e().await.map_err(|_| ())?;
+
+    // msg2: <- e, ee, s, es — the responder's static is sent encrypted
+    // (after ee), genuine.
+    let mut b2 = [0u8; 256];
+    let (msg2, r) = recv
+        .e(&mut b2)
+        .await
+        .unwrap()
+        .ee()
+        .await
+        .unwrap()
+        .s(private_key(&RESP_STATIC))
+        .await
+        .unwrap()
+        .es()
+        .await
+        .unwrap();
+    let msg2 = xform(1, msg2.to_vec());
+
+    // Initiator reads msg2 (<- e, ee, s, es); the `s` reveals the
+    // responder static.
+    let (_, recv) = i.read(&msg2).map_err(|_| ())?.e().await.map_err(|_| ())?;
+    let recv = recv.ee().await.map_err(|_| ())?;
+    let (_, recv) = recv.s().await.map_err(|_| ())?;
+    let i = recv.es().await.map_err(|_| ())?;
+
+    // msg3: -> s, se — the initiator's static is sent encrypted (after ee).
+    let mut b3 = [0u8; 256];
+    let (msg3, _i_transport) = i
+        .s(&mut b3, private_key(&INIT_STATIC))
+        .await
+        .unwrap()
+        .se()
+        .await
+        .unwrap();
+    let msg3 = xform(2, msg3.to_vec());
+
+    // Responder reads msg3; the `s` reveals the initiator static.
+    let (_, recv) = r.read(&msg3).map_err(|_| ())?.s().await.map_err(|_| ())?;
+    recv.se().await.map_err(|_| ())?;
+    Ok(())
+}
+
 // ── Sweep helpers ────────────────────────────────────────────────
 
 /// Assert that the genuine handshake completes, then that flipping any
@@ -548,6 +606,21 @@ async fn nn_msg1_tamper_truncation_sweep() {
 #[tokio::test]
 async fn nn_msg2_tamper_truncation_sweep() {
     sweep("NN msg2", 1, NN_MSG2, |xf| async move { run_nn(&*xf).await }).await;
+}
+
+#[tokio::test]
+async fn xx_msg1_tamper_truncation_sweep() {
+    sweep("XX msg1", 0, XX_MSG1, |xf| async move { run_xx(&*xf).await }).await;
+}
+
+#[tokio::test]
+async fn xx_msg2_tamper_truncation_sweep() {
+    sweep("XX msg2", 1, XX_MSG2, |xf| async move { run_xx(&*xf).await }).await;
+}
+
+#[tokio::test]
+async fn xx_msg3_tamper_truncation_sweep() {
+    sweep("XX msg3", 2, XX_MSG3, |xf| async move { run_xx(&*xf).await }).await;
 }
 
 // ── Wrong PSK ────────────────────────────────────────────────────

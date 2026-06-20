@@ -61,3 +61,10 @@ pub type XK = Noise<pattern::XK, P256, ChaChaPoly, Blake2b>;
 /// handshake: both parties are anonymous (no static keys). Confidentiality
 /// holds only against a passive eavesdropper; full forward secrecy after `ee`.
 pub type NN = Noise<pattern::NN, P256, ChaChaPoly, Blake2b>;
+
+/// `Noise_XX_P256_ChaChaPoly_BLAKE2b` — the canonical interactive,
+/// three-message mutual authentication with no pre-messages; both
+/// statics are exchanged during the handshake, **encrypted**, so both
+/// identities are hidden from a passive eavesdropper. Full forward
+/// secrecy after `ee`.
+pub type XX = Noise<pattern::XX, P256, ChaChaPoly, Blake2b>;

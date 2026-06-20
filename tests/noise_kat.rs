@@ -1,8 +1,8 @@
 //! Frozen Noise known-answer-test (KAT) vectors.
 //!
 //! The vectors in `tests/vectors/noise/p256_chachapoly_blake2b.json` are
-//! **frozen** byte-for-byte expectations for the nine supported patterns
-//! (N, K, Kpsk0, IKpsk1, IK, NK, IX, XK, NN) over `P256 / ChaChaPoly / BLAKE2b`, produced from
+//! **frozen** byte-for-byte expectations for the ten supported patterns
+//! (N, K, Kpsk0, IKpsk1, IK, NK, IX, XK, NN, XX) over `P256 / ChaChaPoly / BLAKE2b`, produced from
 //! the `snow` reference implementation with fixed keys and pinned
 //! ephemerals (`generate_noise_kat_vectors`, `#[ignore]`).
 //!
@@ -506,6 +506,67 @@ async fn noise_kat_nn() {
     assert_eq!(&pt[..pn], TRANSPORT_R2I, "NN transport r->i plaintext");
 }
 
+#[tokio::test]
+async fn noise_kat_xx() {
+    let file = load_vectors();
+    let v = vector(&file, "Noise_XX_P256_ChaChaPoly_BLAKE2b");
+
+    let provider = EphemeralOnly::new(ScriptedRng::new(&[&INIT_EPHEMERAL]));
+    // XX has no pre-messages: neither static is pre-known. Both parties
+    // transmit their statics in-handshake (encrypted, after `ee`).
+    let hs = XX::initiate(provider, &[]);
+
+    // msg1: -> e (single-`e` send finalizer; cipher never keyed → 65 bytes)
+    let mut buf1 = [0u8; 256];
+    let (msg1, hs) = hs.e(&mut buf1).await.unwrap();
+    assert_eq!(msg1.to_vec(), decode(&v.messages[0].ciphertext), "XX msg1");
+
+    // msg2: <- e, ee, s, es (read the frozen responder message). The `s`
+    // token reveals the responder's static key (sent encrypted after ee).
+    let msg2 = decode(&v.messages[1].ciphertext);
+    let (_, recv) = hs.read(&msg2).unwrap().e().await.unwrap();
+    let recv = recv.ee().await.unwrap();
+    let (revealed_resp_pub, recv) = recv.s().await.unwrap();
+    assert_eq!(
+        revealed_resp_pub.to_bytes(),
+        public_key(&RESP_STATIC).to_bytes(),
+        "XX revealed responder static"
+    );
+    let hs = recv.es().await.unwrap();
+
+    // msg3: -> s, se — the initiator's static is sent encrypted (after ee).
+    let mut buf3 = [0u8; 256];
+    let (msg3, mut transport) = hs
+        .s(&mut buf3, private_key(&INIT_STATIC))
+        .await
+        .unwrap()
+        .se()
+        .await
+        .unwrap();
+    assert_eq!(msg3.to_vec(), decode(&v.messages[2].ciphertext), "XX msg3");
+
+    assert_eq!(
+        transport.session_id().as_ref(),
+        decode(&v.handshake_hash),
+        "XX handshake hash"
+    );
+
+    // transport: initiator -> responder (we produce it)
+    let mut ct = [0u8; 256];
+    let n = transport.send(TRANSPORT_I2R, &mut ct).unwrap();
+    assert_eq!(
+        &ct[..n],
+        decode(&v.transport[0].ciphertext),
+        "XX transport i->r"
+    );
+
+    // transport: responder -> initiator (we decrypt the frozen ciphertext)
+    let r2i = decode(&v.transport[1].ciphertext);
+    let mut pt = [0u8; 256];
+    let pn = transport.receive(&r2i, &mut pt).unwrap();
+    assert_eq!(&pt[..pn], TRANSPORT_R2I, "XX transport r->i plaintext");
+}
+
 // ── Generator (reference: snow) ──────────────────────────────────
 
 #[cfg(test)]
@@ -966,6 +1027,27 @@ mod generate {
         two_message_vector(proto, None, None, init, resp)
     }
 
+    fn vector_xx() -> Vector {
+        let proto = "Noise_XX_P256_ChaChaPoly_BLAKE2b";
+        // XX: no pre-messages. Both sides carry a local static (sent
+        // in-handshake, encrypted after `ee`) and neither pre-knows the
+        // other's static, so there is no `remote_public_key` on either
+        // builder.
+        let init = snow::Builder::new(proto.parse().unwrap())
+            .local_private_key(&INIT_STATIC)
+            .unwrap()
+            .fixed_ephemeral_key_for_testing_only(&INIT_EPHEMERAL)
+            .build_initiator()
+            .unwrap();
+        let resp = snow::Builder::new(proto.parse().unwrap())
+            .local_private_key(&RESP_STATIC)
+            .unwrap()
+            .fixed_ephemeral_key_for_testing_only(&RESP_EPHEMERAL)
+            .build_responder()
+            .unwrap();
+        three_message_vector(proto, Some(hh(&INIT_STATIC)), None, init, resp)
+    }
+
     /// Regenerate the frozen vectors from snow. Ignored: run manually with
     /// `cargo test --test noise_kat generate_noise_kat_vectors -- --ignored`.
     #[test]
@@ -975,7 +1057,7 @@ mod generate {
             note: "Noise KAT vectors for P256/ChaChaPoly/BLAKE2b, generated \
                    from snow with fixed keys + pinned ephemerals. One-way \
                    patterns freeze msg1 + the initiator->responder transport; \
-                   the interactive patterns (IKpsk1, IK, NK, IX, XK, NN) freeze every \
+                   the interactive patterns (IKpsk1, IK, NK, IX, XK, NN, XX) freeze every \
                    handshake message + both transport directions. \
                    Provenance: agreement with snow (no spec P-256 vectors exist)."
                 .to_string(),
@@ -989,6 +1071,7 @@ mod generate {
                 vector_ix(),
                 vector_xk(),
                 vector_nn(),
+                vector_xx(),
             ],
         };
         let json = serde_json::to_string_pretty(&file).unwrap();
