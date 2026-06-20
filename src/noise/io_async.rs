@@ -511,8 +511,16 @@ where
 // ═══════════════════════════════════════════════════════════════
 
 // Start a send message whose first token is E.
-impl<N, R, Tokens, MsgRest, Dir, CP, Io>
-    AsyncHandshake<N, R, Nil, Cons<Message<Dir, Cons<E, Tokens>>, MsgRest>, CP, Io>
+// Start a send message whose first token is E.
+//
+// Split into three mutually-exclusive impls mirroring the
+// `async_send_token!` finalizer variants, so a bare single-`E` send
+// message (`-> e`) can be finalized — the generic entry would leave such
+// a message in `AsyncSending<…, Nil, …>` with no method to close it.
+
+// Variant 1: more tokens follow `E` in this message.
+impl<N, R, Next, More, MsgRest, Dir, CP, Io>
+    AsyncHandshake<N, R, Nil, Cons<Message<Dir, Cons<E, Cons<Next, More>>>, MsgRest>, CP, Io>
 where
     N: Protocol,
     R: Role<SendDir = Dir>,
@@ -523,12 +531,57 @@ where
     /// Generate and stream our ephemeral public key (`e`).
     pub async fn e(
         mut self,
-    ) -> Result<AsyncSending<N, R, Tokens, MsgRest, CP, Io>, HandshakeError> {
+    ) -> Result<AsyncSending<N, R, Cons<Next, More>, MsgRest, CP, Io>, HandshakeError> {
         async_stream_e(&mut self.inner, &mut self.stream).await?;
         Ok(AsyncSending {
             inner: self.inner,
             stream: self.stream,
             _marker: PhantomData,
+        })
+    }
+}
+
+// Variant 2: `E` is the only token and more messages remain.
+impl<N, R, NextMsg, MoreMsgs, Dir, CP, Io>
+    AsyncHandshake<N, R, Nil, Cons<Message<Dir, Cons<E, Nil>>, Cons<NextMsg, MoreMsgs>>, CP, Io>
+where
+    N: Protocol,
+    R: Role<SendDir = Dir>,
+    CP: CryptoProviderAsync<N::Curve>,
+    <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
+    Io: AsyncWrite + Unpin,
+{
+    /// Stream a single-`E` message (`-> e`) when more messages follow.
+    pub async fn e(
+        mut self,
+    ) -> Result<AsyncHandshake<N, R, Nil, Cons<NextMsg, MoreMsgs>, CP, Io>, HandshakeError> {
+        async_stream_e(&mut self.inner, &mut self.stream).await?;
+        send_message_tail_async(&mut self.inner, &mut self.stream).await?;
+        Ok(AsyncHandshake {
+            inner: self.inner,
+            stream: self.stream,
+            _marker: PhantomData,
+        })
+    }
+}
+
+// Variant 3: `E` is the only token in the last message.
+impl<N, R, Dir, CP, Io> AsyncHandshake<N, R, Nil, Cons<Message<Dir, Cons<E, Nil>>, Nil>, CP, Io>
+where
+    N: Protocol,
+    R: Role<SendDir = Dir>,
+    CP: CryptoProviderAsync<N::Curve>,
+    <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
+    Io: AsyncWrite + Unpin,
+{
+    /// Stream a single-`E` message (`-> e`) as the final handshake message.
+    pub async fn e(mut self) -> Result<AsyncTransport<N, Io>, HandshakeError> {
+        async_stream_e(&mut self.inner, &mut self.stream).await?;
+        send_message_tail_async(&mut self.inner, &mut self.stream).await?;
+        let transport = recv_to_transport::<N, R, CP>(self.inner);
+        Ok(AsyncTransport {
+            transport,
+            stream: self.stream,
         })
     }
 }

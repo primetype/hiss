@@ -829,14 +829,23 @@ recv_token! {
 
 // When the first token of a send message is E.
 // Only available in the Ready stage.
-impl<N, R, Tokens, MsgRest, Dir, CP>
-    HandshakeState<N, R, Nil, Cons<Message<Dir, Cons<E, Tokens>>, MsgRest>, CP>
+//
+// The entry is split into three mutually-exclusive impls mirroring the
+// `send_token!` finalizer variants, so a bare single-`E` send message
+// (`-> e`) can be finalized — the generic entry would leave such a message
+// in `Sending<…, Nil, …>` with no method to close it.
+
+// Variant 1: more tokens follow `E` in this message — return `Sending`
+// with `E` consumed, exactly as the original generic entry did.
+impl<N, R, Next, More, MsgRest, Dir, CP>
+    HandshakeState<N, R, Nil, Cons<Message<Dir, Cons<E, Cons<Next, More>>>, MsgRest>, CP>
 where
     N: Protocol,
     R: Role<SendDir = Dir>,
     <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
     CP: CryptoProviderAsync<N::Curve>,
-    Cons<E, Tokens>: WireSize<N::Curve, N::Cipher, true> + WireSize<N::Curve, N::Cipher, false>,
+    Cons<E, Cons<Next, More>>:
+        WireSize<N::Curve, N::Cipher, true> + WireSize<N::Curve, N::Cipher, false>,
 {
     /// Start a send message with the `E` token.
     ///
@@ -845,7 +854,7 @@ where
     pub async fn e(
         self,
         output: &mut [u8],
-    ) -> Result<Sending<'_, N, R, Tokens, MsgRest, CP>, HandshakeError> {
+    ) -> Result<Sending<'_, N, R, Cons<Next, More>, MsgRest, CP>, HandshakeError> {
         let mut sending = self.begin_send(output);
         send_e(&mut sending.inner, &mut sending.buffer).await?;
         Ok(Sending {
@@ -853,6 +862,63 @@ where
             buffer: sending.buffer,
             _marker: PhantomData,
         })
+    }
+}
+
+// Variant 2: `E` is the only token and more messages remain — write the
+// ephemeral, close the empty payload, and advance to the next message.
+impl<N, R, NextMsg, MoreMsgs, Dir, CP>
+    HandshakeState<N, R, Nil, Cons<Message<Dir, Cons<E, Nil>>, Cons<NextMsg, MoreMsgs>>, CP>
+where
+    N: Protocol,
+    R: Role<SendDir = Dir>,
+    <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
+    CP: CryptoProviderAsync<N::Curve>,
+    Cons<E, Nil>: WireSize<N::Curve, N::Cipher, true> + WireSize<N::Curve, N::Cipher, false>,
+{
+    /// Send a single-`E` message (`-> e`) when more messages follow.
+    ///
+    /// `output` must be exactly the right size for this message.
+    /// Use [`noise_message_size!`](crate::noise_message_size) to compute the size at compile time.
+    pub async fn e(
+        self,
+        output: &mut [u8],
+    ) -> Result<
+        (
+            &[u8],
+            HandshakeState<N, R, Nil, Cons<NextMsg, MoreMsgs>, CP>,
+        ),
+        HandshakeError,
+    > {
+        let mut sending = self.begin_send(output);
+        send_e(&mut sending.inner, &mut sending.buffer).await?;
+        send_payload(&mut sending.inner, &mut sending.buffer)?;
+        Ok(send_to_handshake_state::<N, R, _, CP>(
+            sending.inner,
+            sending.buffer,
+        ))
+    }
+}
+
+// Variant 3: `E` is the only token in the last message — write the
+// ephemeral, close the empty payload, and split into the transport.
+impl<N, R, Dir, CP> HandshakeState<N, R, Nil, Cons<Message<Dir, Cons<E, Nil>>, Nil>, CP>
+where
+    N: Protocol,
+    R: Role<SendDir = Dir>,
+    <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
+    CP: CryptoProviderAsync<N::Curve>,
+    Cons<E, Nil>: WireSize<N::Curve, N::Cipher, true> + WireSize<N::Curve, N::Cipher, false>,
+{
+    /// Send a single-`E` message (`-> e`) as the final handshake message.
+    ///
+    /// `output` must be exactly the right size for this message.
+    /// Use [`noise_message_size!`](crate::noise_message_size) to compute the size at compile time.
+    pub async fn e(self, output: &mut [u8]) -> Result<(&[u8], Transport<N>), HandshakeError> {
+        let mut sending = self.begin_send(output);
+        send_e(&mut sending.inner, &mut sending.buffer).await?;
+        send_payload(&mut sending.inner, &mut sending.buffer)?;
+        Ok(send_to_transport::<N, R, CP>(sending.inner, sending.buffer))
     }
 }
 

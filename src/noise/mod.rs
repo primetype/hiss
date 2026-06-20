@@ -2358,4 +2358,332 @@ mod tests {
             }
         }
     }
+
+    // ── Single-`e` send finalizer regression tests ────────────────
+    //
+    // A send message consisting of exactly one `e` token (`-> e`) must be
+    // finalizable. None of the shipped patterns have such a message, so
+    // these tests define throwaway local patterns to exercise the two
+    // single-`E` finalizers added to the send entry point:
+    //
+    //   * variant 3 — single `-> e` as the last message → `Transport`;
+    //   * variant 2 — single `-> e` with more messages → next
+    //     `HandshakeState`.
+    //
+    // Each finalizer is driven hiss↔hiss across all three drivers: the
+    // async buffer core (the `.e(&mut output)` API where the bug lived)
+    // plus both streaming drivers (`SyncHandshake` and, under
+    // `async-io`, `AsyncHandshake`).
+    mod single_e_send_finalizer_tests {
+        use super::super::tokens::{Cons, Ee, Message, Nil, ToInitiator, ToResponder, E};
+        use super::super::{Blake2b, ChaChaPoly, Noise, P256};
+        use super::super::{HandshakeState, Initiator, Pattern, Responder};
+        use super::super::{SyncHandshake, SyncTransport};
+        use crate::provider::EphemeralOnly;
+        use rand::{SeedableRng, rngs::StdRng};
+        use std::io::Cursor;
+
+        // A bare one-message pattern: `-> e`. Exercises the single-`E`
+        // last-message finalizer (variant 3 → Transport).
+        struct SingleE;
+        impl Pattern for SingleE {
+            const NAME: &'static str = "SingleE";
+            const NUM_MESSAGES: usize = 1;
+            const HAS_PSK: bool = false;
+            type PreMessages = Nil;
+            // -> e
+            type Messages = Cons<Message<ToResponder, Cons<E, Nil>>, Nil>;
+        }
+        type SingleEProto = Noise<SingleE, P256, ChaChaPoly, Blake2b>;
+
+        // A two-message pattern: `-> e` / `<- e, ee` (NN's shape, kept
+        // local). The initiator's first message is a single `e`, which
+        // exercises the single-`E` more-messages finalizer (variant 2 →
+        // next HandshakeState).
+        struct EThenEe;
+        impl Pattern for EThenEe {
+            const NAME: &'static str = "EThenEe";
+            const NUM_MESSAGES: usize = 2;
+            const HAS_PSK: bool = false;
+            type PreMessages = Nil;
+            // -> e / <- e, ee
+            type Messages = Cons<
+                Message<ToResponder, Cons<E, Nil>>,
+                Cons<Message<ToInitiator, Cons<E, Cons<Ee, Nil>>>, Nil>,
+            >;
+        }
+        type EThenEeProto = Noise<EThenEe, P256, ChaChaPoly, Blake2b>;
+
+        /// Variant 3: a single `-> e` as the final (only) message drives
+        /// straight to a `Transport` on both sides, with matching sessions.
+        #[tokio::test]
+        async fn single_e_last_message_finalizes_to_transport() {
+            // Initiator: send the single `-> e` message.
+            let initiator = HandshakeState::<SingleEProto, Initiator, _, _, _>::new(
+                EphemeralOnly::new(StdRng::from_os_rng()),
+                &[],
+            );
+            // -> e is 65 bytes (PUBLIC_KEY_SIZE, no payload tag — state is
+            // never keyed in this pattern).
+            let mut msg_buf = [0u8; 65];
+            let (msg, initiator_transport) = initiator.e(&mut msg_buf).await.unwrap();
+            assert_eq!(msg.len(), 65, "a bare `-> e` must be exactly 65 bytes");
+
+            // Responder: read the single `-> e` message → Transport.
+            let responder = HandshakeState::<SingleEProto, Responder, _, _, _>::new(
+                EphemeralOnly::new(StdRng::from_os_rng()),
+                &[],
+            );
+            let msg = msg.to_vec();
+            let (_revealed_e, responder_transport) =
+                responder.read(&msg).unwrap().e().await.unwrap();
+
+            // Both sides derived the same session.
+            assert_eq!(
+                initiator_transport.session_id(),
+                responder_transport.session_id(),
+                "initiator and responder must derive a matching session",
+            );
+        }
+
+        /// Variant 2: a single `-> e` followed by another message advances
+        /// to the next `HandshakeState`; the full `-> e` / `<- e, ee`
+        /// handshake completes with matching sessions.
+        #[tokio::test]
+        async fn single_e_more_messages_advances_handshake() {
+            // Initiator msg1: -> e (single E, more messages remain).
+            let initiator = HandshakeState::<EThenEeProto, Initiator, _, _, _>::new(
+                EphemeralOnly::new(StdRng::from_os_rng()),
+                &[],
+            );
+            let mut msg1_buf = [0u8; 65];
+            // The single-`E` variant-2 finalizer returns (&[u8], next state).
+            let (msg1, initiator) = initiator.e(&mut msg1_buf).await.unwrap();
+            assert_eq!(msg1.len(), 65, "a bare `-> e` must be exactly 65 bytes");
+            let msg1 = msg1.to_vec();
+
+            // Responder reads msg1 (-> e), then sends msg2 (<- e, ee).
+            let responder = HandshakeState::<EThenEeProto, Responder, _, _, _>::new(
+                EphemeralOnly::new(StdRng::from_os_rng()),
+                &[],
+            );
+            let (_revealed_e, responder) = responder.read(&msg1).unwrap().e().await.unwrap();
+
+            // <- e, ee : e (65) + ee (keys) + payload tag (16) = 81 bytes.
+            let mut msg2_buf = [0u8; 81];
+            let (msg2, responder_transport) = responder
+                .e(&mut msg2_buf)
+                .await
+                .unwrap()
+                .ee()
+                .await
+                .unwrap();
+            assert_eq!(msg2.len(), 81);
+            let msg2 = msg2.to_vec();
+
+            // Initiator reads msg2 (<- e, ee) → Transport.
+            let (_revealed_e, initiator) = initiator.read(&msg2).unwrap().e().await.unwrap();
+            let initiator_transport = initiator.ee().await.unwrap();
+
+            assert_eq!(
+                initiator_transport.session_id(),
+                responder_transport.session_id(),
+                "initiator and responder must derive a matching session",
+            );
+        }
+
+        // ── Streaming-driver coverage ─────────────────────────────
+        //
+        // The buffer-core tests above exercise the finalizers in
+        // `process.rs`. The two single-`E` finalizers also exist in the
+        // streaming drivers (`SyncHandshake`, `AsyncHandshake`), where
+        // they were previously only compile-checked. The tests below
+        // drive a single-`e` send hiss↔hiss over each streaming driver.
+
+        /// A single-threaded in-memory bidirectional byte pipe (mirrors
+        /// the one in `io_sync::tests`): reads pull from one shared queue,
+        /// writes push to the other; the peer endpoint has them swapped.
+        #[derive(Clone)]
+        struct Pipe {
+            inbound: std::rc::Rc<std::cell::RefCell<std::collections::VecDeque<u8>>>,
+            outbound: std::rc::Rc<std::cell::RefCell<std::collections::VecDeque<u8>>>,
+        }
+
+        impl std::io::Read for Pipe {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                let mut q = self.inbound.borrow_mut();
+                let n = q.len().min(buf.len());
+                for slot in buf.iter_mut().take(n) {
+                    *slot = q.pop_front().unwrap();
+                }
+                Ok(n)
+            }
+        }
+
+        impl std::io::Write for Pipe {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.outbound.borrow_mut().extend(buf.iter().copied());
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        /// Variant 3 over `SyncHandshake`: a single `-> e` last message
+        /// must finalize straight to `SyncTransport` on the initiator, and
+        /// the responder must read it to `SyncTransport`, with matching
+        /// sessions.
+        #[test]
+        fn single_e_last_message_sync_streaming() {
+            // Initiator streams the single `-> e` message into a `Vec`;
+            // `.e()` must finalize directly to `SyncTransport` (variant 3).
+            let initiator = SyncHandshake::<SingleEProto, Initiator, _, _, _, _>::initiate(
+                EphemeralOnly::new(StdRng::from_os_rng()),
+                &[],
+                Vec::<u8>::new(),
+            );
+            let initiator_transport: SyncTransport<_, Vec<u8>> = initiator.e().unwrap();
+            let (initiator_transport, wire) = initiator_transport.into_parts();
+            // -> e is 65 bytes (no payload tag — state is never keyed).
+            assert_eq!(wire.len(), 65, "a bare `-> e` must be exactly 65 bytes");
+
+            // Responder reads the single `-> e` message → `SyncTransport`.
+            let responder = SyncHandshake::<SingleEProto, Responder, _, _, _, _>::respond(
+                EphemeralOnly::new(StdRng::from_os_rng()),
+                &[],
+                Cursor::new(wire),
+            );
+            let (_revealed_e, mut responder_transport) = responder.recv().e().unwrap();
+
+            assert_eq!(
+                initiator_transport.session_id(),
+                responder_transport.transport().session_id(),
+                "initiator and responder must derive a matching session",
+            );
+        }
+
+        /// Variant 2 over `SyncHandshake`: a single `-> e` msg1 must
+        /// advance to the next `SyncHandshake`; the full `-> e` /
+        /// `<- e, ee` handshake then completes with matching sessions.
+        /// Driven hiss↔hiss over a shared in-memory `Pipe`.
+        #[test]
+        fn single_e_more_messages_sync_streaming() {
+            let (i2r, r2i) = (
+                std::rc::Rc::new(std::cell::RefCell::new(std::collections::VecDeque::<u8>::new())),
+                std::rc::Rc::new(std::cell::RefCell::new(std::collections::VecDeque::<u8>::new())),
+            );
+            let init_stream = Pipe {
+                inbound: r2i.clone(),
+                outbound: i2r.clone(),
+            };
+            let resp_stream = Pipe {
+                inbound: i2r.clone(),
+                outbound: r2i.clone(),
+            };
+
+            // Initiator msg1: -> e (single E, more messages remain) must
+            // advance to the next `SyncHandshake` (variant 2).
+            let initiator = SyncHandshake::<EThenEeProto, Initiator, _, _, _, _>::initiate(
+                EphemeralOnly::new(StdRng::from_os_rng()),
+                &[],
+                init_stream,
+            );
+            let initiator = initiator.e().unwrap();
+            assert_eq!(i2r.borrow().len(), 65, "a bare `-> e` must be exactly 65 bytes");
+
+            // Responder reads msg1 (-> e), then sends msg2 (<- e, ee).
+            let responder = SyncHandshake::<EThenEeProto, Responder, _, _, _, _>::respond(
+                EphemeralOnly::new(StdRng::from_os_rng()),
+                &[],
+                resp_stream,
+            );
+            let (_revealed_e, responder) = responder.recv().e().unwrap();
+            let mut responder_transport = responder.e().unwrap().ee().unwrap();
+            assert_eq!(r2i.borrow().len(), 81, "`<- e, ee` must be exactly 81 bytes");
+
+            // Initiator reads msg2 (<- e, ee) → `SyncTransport`.
+            let (_revealed_e, initiator) = initiator.recv().e().unwrap();
+            let mut initiator_transport = initiator.ee().unwrap();
+
+            assert_eq!(
+                initiator_transport.transport().session_id(),
+                responder_transport.transport().session_id(),
+                "initiator and responder must derive a matching session",
+            );
+        }
+
+        /// Variant 3 over `AsyncHandshake`: a single `-> e` last message
+        /// must finalize straight to `AsyncTransport` on the initiator, and
+        /// the responder must read it to `AsyncTransport`, with matching
+        /// sessions.
+        #[cfg(feature = "async-io")]
+        #[tokio::test]
+        async fn single_e_last_message_async_streaming() {
+            use super::super::{AsyncHandshake, AsyncTransport};
+
+            let initiator = AsyncHandshake::<SingleEProto, Initiator, _, _, _, _>::initiate(
+                EphemeralOnly::new(StdRng::from_os_rng()),
+                &[],
+                Vec::<u8>::new(),
+            );
+            // `.e()` must finalize directly to `AsyncTransport` (variant 3).
+            let initiator_transport: AsyncTransport<_, Vec<u8>> = initiator.e().await.unwrap();
+            let (initiator_transport, wire) = initiator_transport.into_parts();
+            assert_eq!(wire.len(), 65, "a bare `-> e` must be exactly 65 bytes");
+
+            let responder = AsyncHandshake::<SingleEProto, Responder, _, _, _, _>::respond(
+                EphemeralOnly::new(StdRng::from_os_rng()),
+                &[],
+                Cursor::new(wire),
+            );
+            let (_revealed_e, mut responder_transport) = responder.recv().e().await.unwrap();
+
+            assert_eq!(
+                initiator_transport.session_id(),
+                responder_transport.transport().session_id(),
+                "initiator and responder must derive a matching session",
+            );
+        }
+
+        /// Variant 2 over `AsyncHandshake`: a single `-> e` msg1 must
+        /// advance to the next `AsyncHandshake`; the full `-> e` /
+        /// `<- e, ee` handshake then completes with matching sessions.
+        /// Driven hiss↔hiss over a `tokio::io::duplex` pair.
+        #[cfg(feature = "async-io")]
+        #[tokio::test]
+        async fn single_e_more_messages_async_streaming() {
+            use super::super::AsyncHandshake;
+
+            let (init_stream, resp_stream) = tokio::io::duplex(4096);
+
+            // Initiator msg1: -> e (single E, more messages remain) must
+            // advance to the next `AsyncHandshake` (variant 2).
+            let initiator = AsyncHandshake::<EThenEeProto, Initiator, _, _, _, _>::initiate(
+                EphemeralOnly::new(StdRng::from_os_rng()),
+                &[],
+                init_stream,
+            );
+            let initiator = initiator.e().await.unwrap();
+
+            // Responder reads msg1 (-> e), then sends msg2 (<- e, ee).
+            let responder = AsyncHandshake::<EThenEeProto, Responder, _, _, _, _>::respond(
+                EphemeralOnly::new(StdRng::from_os_rng()),
+                &[],
+                resp_stream,
+            );
+            let (_revealed_e, responder) = responder.recv().e().await.unwrap();
+            let mut responder_transport = responder.e().await.unwrap().ee().await.unwrap();
+
+            // Initiator reads msg2 (<- e, ee) → `AsyncTransport`.
+            let (_revealed_e, initiator) = initiator.recv().e().await.unwrap();
+            let mut initiator_transport = initiator.ee().await.unwrap();
+
+            assert_eq!(
+                initiator_transport.transport().session_id(),
+                responder_transport.transport().session_id(),
+                "initiator and responder must derive a matching session",
+            );
+        }
+    }
 }

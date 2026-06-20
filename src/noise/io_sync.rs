@@ -697,8 +697,15 @@ where
 // ═══════════════════════════════════════════════════════════════
 
 // Start a send message whose first token is E.
-impl<N, R, Tokens, MsgRest, Dir, CP, Io>
-    SyncHandshake<N, R, Nil, Cons<Message<Dir, Cons<E, Tokens>>, MsgRest>, CP, Io>
+//
+// Split into three mutually-exclusive impls mirroring the
+// `sync_send_token!` finalizer variants, so a bare single-`E` send
+// message (`-> e`) can be finalized — the generic entry would leave such
+// a message in `SyncSending<…, Nil, …>` with no method to close it.
+
+// Variant 1: more tokens follow `E` in this message.
+impl<N, R, Next, More, MsgRest, Dir, CP, Io>
+    SyncHandshake<N, R, Nil, Cons<Message<Dir, Cons<E, Cons<Next, More>>>, MsgRest>, CP, Io>
 where
     N: Protocol,
     R: Role<SendDir = Dir>,
@@ -707,12 +714,59 @@ where
     Io: Write,
 {
     /// Generate and stream our ephemeral public key (`e`).
-    pub fn e(mut self) -> Result<SyncSending<N, R, Tokens, MsgRest, CP, Io>, HandshakeError> {
+    pub fn e(
+        mut self,
+    ) -> Result<SyncSending<N, R, Cons<Next, More>, MsgRest, CP, Io>, HandshakeError> {
         sync_stream_e(&mut self.inner, &mut self.stream)?;
         Ok(SyncSending {
             inner: self.inner,
             stream: self.stream,
             _marker: PhantomData,
+        })
+    }
+}
+
+// Variant 2: `E` is the only token and more messages remain.
+impl<N, R, NextMsg, MoreMsgs, Dir, CP, Io>
+    SyncHandshake<N, R, Nil, Cons<Message<Dir, Cons<E, Nil>>, Cons<NextMsg, MoreMsgs>>, CP, Io>
+where
+    N: Protocol,
+    R: Role<SendDir = Dir>,
+    CP: CryptoProvider<N::Curve>,
+    <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
+    Io: Write,
+{
+    /// Stream a single-`E` message (`-> e`) when more messages follow.
+    pub fn e(
+        mut self,
+    ) -> Result<SyncHandshake<N, R, Nil, Cons<NextMsg, MoreMsgs>, CP, Io>, HandshakeError> {
+        sync_stream_e(&mut self.inner, &mut self.stream)?;
+        send_message_tail(&mut self.inner, &mut self.stream)?;
+        Ok(SyncHandshake {
+            inner: self.inner,
+            stream: self.stream,
+            _marker: PhantomData,
+        })
+    }
+}
+
+// Variant 3: `E` is the only token in the last message.
+impl<N, R, Dir, CP, Io> SyncHandshake<N, R, Nil, Cons<Message<Dir, Cons<E, Nil>>, Nil>, CP, Io>
+where
+    N: Protocol,
+    R: Role<SendDir = Dir>,
+    CP: CryptoProvider<N::Curve>,
+    <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
+    Io: Write,
+{
+    /// Stream a single-`E` message (`-> e`) as the final handshake message.
+    pub fn e(mut self) -> Result<SyncTransport<N, Io>, HandshakeError> {
+        sync_stream_e(&mut self.inner, &mut self.stream)?;
+        send_message_tail(&mut self.inner, &mut self.stream)?;
+        let transport = recv_to_transport::<N, R, CP>(self.inner);
+        Ok(SyncTransport {
+            transport,
+            stream: self.stream,
         })
     }
 }
