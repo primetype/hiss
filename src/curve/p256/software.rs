@@ -144,7 +144,9 @@ impl P256r1PrivateKey {
 /// exercised directly with an identity peer point — a state a parsed
 /// [`P256r1PublicKey`] can never represent.
 fn shared_secret_from(scalar: &Scalar, peer: &Point) -> Result<SharedSecret, Error> {
-    let shared = (scalar * peer).to_affine().ok_or(Error::InvalidSharedSecret)?;
+    let shared = (scalar * peer)
+        .to_affine()
+        .ok_or(Error::InvalidSharedSecret)?;
     let (x, _) = shared.to_coordinate();
     Ok(SharedSecret::new(x.to_bytes()))
 }
@@ -178,14 +180,15 @@ mod tests {
     use crate::provider::{
         CryptoKeyProviderAsync, DhProviderAsync, EphemeralOnly, ProviderExt, SigningProviderAsync,
     };
-    use rand::{SeedableRng, rngs::StdRng};
     use proptest::prelude::*;
+    use rand::{SeedableRng, rngs::StdRng};
 
     fn arbitrary_secret_key() -> impl Strategy<Value = P256r1PrivateKey> {
         // Arbitrary bytes are validated as a canonical scalar; the
         // vanishingly rare out-of-range value (< 2^-32) is filtered out.
-        any::<[u8; P256r1PrivateKey::SIZE]>()
-            .prop_filter_map("not a canonical scalar", |b| P256r1PrivateKey::from_bytes(b).ok())
+        any::<[u8; P256r1PrivateKey::SIZE]>().prop_filter_map("not a canonical scalar", |b| {
+            P256r1PrivateKey::from_bytes(b).ok()
+        })
     }
 
     #[test]

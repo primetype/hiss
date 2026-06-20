@@ -31,12 +31,12 @@ use std::future::Future;
 use rand_core::{CryptoRng, RngCore};
 
 use crate::curve::SharedSecret;
-use crate::curve::{Curve, DhCurve, SigningCurve};
 use crate::curve::ed25519::{
     Ed25519, Ed25519PublicKey, Ed25519Signature, SoftwareEd25519PrivateKey,
 };
 use crate::curve::p256::{P256, P256Signature, P256r1PrivateKey, P256r1PublicKey};
 use crate::curve::x25519::{SoftwareX25519PrivateKey, X25519, X25519PublicKey};
+use crate::curve::{Curve, DhCurve, SigningCurve};
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub mod apple;

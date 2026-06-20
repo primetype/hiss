@@ -174,9 +174,11 @@ impl SoftwareX25519PrivateKey {
     /// RFC 7748 a low-order peer key yields an all-zero secret rather than
     /// an error, matching the Noise `25519` DH function.
     pub fn dh(&self, peer: &X25519PublicKey) -> SharedSecret {
-        let shared: [u8; 32] =
-            x25519::dh(&x25519::SecretKey::from(self.secret), &x25519::PublicKey::from(peer.0))
-                .into();
+        let shared: [u8; 32] = x25519::dh(
+            &x25519::SecretKey::from(self.secret),
+            &x25519::PublicKey::from(peer.0),
+        )
+        .into();
         SharedSecret::new(shared)
     }
 

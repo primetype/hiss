@@ -553,8 +553,16 @@ mod tests {
         ];
         for (msg, r_hex, s_hex) in cases {
             let raw = ecdsa_sign_rfc6979_inner(&x, msg, false);
-            assert_eq!(hex::encode_upper(&raw[..32]), r_hex, "r mismatch for {msg:?}");
-            assert_eq!(hex::encode_upper(&raw[32..]), s_hex, "s mismatch for {msg:?}");
+            assert_eq!(
+                hex::encode_upper(&raw[..32]),
+                r_hex,
+                "r mismatch for {msg:?}"
+            );
+            assert_eq!(
+                hex::encode_upper(&raw[32..]),
+                s_hex,
+                "s mismatch for {msg:?}"
+            );
         }
     }
 
@@ -779,8 +787,12 @@ mod tests {
     #[test]
     fn dh_different_peers_produce_different_secrets() {
         let sk = software::P256r1PrivateKey::generate(rand::rng()).unwrap();
-        let peer1 = software::P256r1PrivateKey::generate(rand::rng()).unwrap().public();
-        let peer2 = software::P256r1PrivateKey::generate(rand::rng()).unwrap().public();
+        let peer1 = software::P256r1PrivateKey::generate(rand::rng())
+            .unwrap()
+            .public();
+        let peer2 = software::P256r1PrivateKey::generate(rand::rng())
+            .unwrap()
+            .public();
 
         let ss1 = sk.dh(&peer1).unwrap();
         let ss2 = sk.dh(&peer2).unwrap();
@@ -814,7 +826,9 @@ mod tests {
     ];
 
     fn scalar_bytes(bytes: [u8; 32]) -> [u8; 32] {
-        Scalar::from_slice(&bytes).expect("canonical scalar").to_bytes()
+        Scalar::from_slice(&bytes)
+            .expect("canonical scalar")
+            .to_bytes()
     }
 
     #[test]
@@ -829,7 +843,10 @@ mod tests {
     fn reduce_order_maps_to_zero() {
         // n mod n == 0. n is >= n, so the old `from_slice(..).unwrap()`
         // would have panicked on this input.
-        assert_eq!(reduce_be_mod_order(&N_BYTES).to_bytes(), Scalar::zero().to_bytes());
+        assert_eq!(
+            reduce_be_mod_order(&N_BYTES).to_bytes(),
+            Scalar::zero().to_bytes()
+        );
     }
 
     #[test]

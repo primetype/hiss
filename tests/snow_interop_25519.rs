@@ -13,9 +13,9 @@
 //! the handshake completes, the handshake hashes match, and transport
 //! messages decrypt across implementations.
 
+use hiss::noise::*;
 use hiss::provider::EphemeralOnly;
 use hiss::provider::ProviderExt;
-use hiss::noise::*;
 use rand::{SeedableRng, rngs::StdRng};
 
 // The bare `noise::{N, IK, XX}` aliases are pinned to P-256; spell the
@@ -353,8 +353,7 @@ async fn xx_snow_initiator_hiss_responder() {
     // msg3: -> s, se (snow initiator's static is encrypted)
     let mut msg3 = [0u8; 256];
     let msg3_len = snow_initiator.write_message(&[], &mut msg3).unwrap();
-    let (revealed_initiator_pub, recv) =
-        r_hs.read(&msg3[..msg3_len]).unwrap().s().await.unwrap();
+    let (revealed_initiator_pub, recv) = r_hs.read(&msg3[..msg3_len]).unwrap().s().await.unwrap();
     let r_transport = recv.se().await.unwrap();
 
     assert_eq!(

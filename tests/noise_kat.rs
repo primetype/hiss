@@ -110,8 +110,7 @@ async fn noise_kat_n() {
     let v = vector(&file, "Noise_N_P256_ChaChaPoly_BLAKE2b");
 
     let provider = EphemeralOnly::new(ScriptedRng::new(&[&INIT_EPHEMERAL]));
-    let hs = N::initiate(provider, &[])
-        .set_rs(public_key(&RESP_STATIC));
+    let hs = N::initiate(provider, &[]).set_rs(public_key(&RESP_STATIC));
 
     let mut buf = [0u8; 256];
     let (msg1, mut transport) = hs.e(&mut buf).await.unwrap().es().await.unwrap();
@@ -125,7 +124,11 @@ async fn noise_kat_n() {
 
     let mut ct = [0u8; 256];
     let n = transport.send(TRANSPORT_I2R, &mut ct).unwrap();
-    assert_eq!(&ct[..n], decode(&v.transport[0].ciphertext), "N transport i->r");
+    assert_eq!(
+        &ct[..n],
+        decode(&v.transport[0].ciphertext),
+        "N transport i->r"
+    );
 }
 
 #[tokio::test]
@@ -160,7 +163,11 @@ async fn noise_kat_k() {
 
     let mut ct = [0u8; 256];
     let n = transport.send(TRANSPORT_I2R, &mut ct).unwrap();
-    assert_eq!(&ct[..n], decode(&v.transport[0].ciphertext), "K transport i->r");
+    assert_eq!(
+        &ct[..n],
+        decode(&v.transport[0].ciphertext),
+        "K transport i->r"
+    );
 }
 
 #[tokio::test]
@@ -190,7 +197,11 @@ async fn noise_kat_kpsk0() {
         .await
         .unwrap();
 
-    assert_eq!(msg1.to_vec(), decode(&v.messages[0].ciphertext), "Kpsk0 msg1");
+    assert_eq!(
+        msg1.to_vec(),
+        decode(&v.messages[0].ciphertext),
+        "Kpsk0 msg1"
+    );
     assert_eq!(
         transport.session_id().as_ref(),
         decode(&v.handshake_hash),
@@ -213,8 +224,7 @@ async fn noise_kat_ikpsk1() {
 
     let psk = Psk::from_bytes(PSK_BYTES);
     let provider = EphemeralOnly::new(ScriptedRng::new(&[&INIT_EPHEMERAL]));
-    let hs = IKpsk1::initiate(provider, &[])
-        .set_rs(public_key(&RESP_STATIC));
+    let hs = IKpsk1::initiate(provider, &[]).set_rs(public_key(&RESP_STATIC));
 
     // msg1: -> e, es, s, ss, psk
     let mut buf1 = [0u8; 256];
@@ -234,7 +244,11 @@ async fn noise_kat_ikpsk1() {
         .psk(&psk)
         .await
         .unwrap();
-    assert_eq!(msg1.to_vec(), decode(&v.messages[0].ciphertext), "IKpsk1 msg1");
+    assert_eq!(
+        msg1.to_vec(),
+        decode(&v.messages[0].ciphertext),
+        "IKpsk1 msg1"
+    );
 
     // msg2: <- e, ee, se (read the frozen responder message)
     let msg2 = decode(&v.messages[1].ciphertext);
@@ -905,7 +919,13 @@ mod generate {
             .unwrap()
             .build_responder()
             .unwrap();
-        one_message_vector(proto, Some(hh(&INIT_STATIC)), Some(hh(&PSK_BYTES)), init, resp)
+        one_message_vector(
+            proto,
+            Some(hh(&INIT_STATIC)),
+            Some(hh(&PSK_BYTES)),
+            init,
+            resp,
+        )
     }
 
     fn vector_ikpsk1() -> Vector {
@@ -928,7 +948,13 @@ mod generate {
             .fixed_ephemeral_key_for_testing_only(&RESP_EPHEMERAL)
             .build_responder()
             .unwrap();
-        two_message_vector(proto, Some(hh(&INIT_STATIC)), Some(hh(&PSK_BYTES)), init, resp)
+        two_message_vector(
+            proto,
+            Some(hh(&INIT_STATIC)),
+            Some(hh(&PSK_BYTES)),
+            init,
+            resp,
+        )
     }
 
     fn vector_ik() -> Vector {

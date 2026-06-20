@@ -167,10 +167,9 @@ where
     Toks: WalkTokens<<Dir as SenderOf>::Sender, St>,
     Rest: WalkMessages<<Toks as WalkTokens<<Dir as SenderOf>::Sender, St>>::StateOut>,
 {
-    type StateOut =
-        <Rest as WalkMessages<
-            <Toks as WalkTokens<<Dir as SenderOf>::Sender, St>>::StateOut,
-        >>::StateOut;
+    type StateOut = <Rest as WalkMessages<
+        <Toks as WalkTokens<<Dir as SenderOf>::Sender, St>>::StateOut,
+    >>::StateOut;
 }
 
 // ── The public guard ─────────────────────────────────────────────

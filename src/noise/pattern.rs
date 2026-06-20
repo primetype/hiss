@@ -275,10 +275,7 @@ impl Pattern for IX {
     // <- e, ee, se, s, es
     type Messages = Cons<
         Message<ToResponder, Cons<E, Cons<S, Nil>>>,
-        Cons<
-            Message<ToInitiator, Cons<E, Cons<Ee, Cons<Se, Cons<S, Cons<Es, Nil>>>>>>,
-            Nil,
-        >,
+        Cons<Message<ToInitiator, Cons<E, Cons<Ee, Cons<Se, Cons<S, Cons<Es, Nil>>>>>>, Nil>,
     >;
 }
 

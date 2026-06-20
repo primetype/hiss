@@ -6,11 +6,11 @@
 
 use criterion::{Criterion, criterion_group, criterion_main};
 
-use hiss::provider::ProviderExt;
-use hiss::provider::EphemeralOnly;
-use rand::{SeedableRng, rngs::StdRng};
 use hiss::noise::*;
+use hiss::provider::EphemeralOnly;
+use hiss::provider::ProviderExt;
 use hiss::psk::Psk;
+use rand::{SeedableRng, rngs::StdRng};
 
 // ── Helpers ─────────────────────────────────────────────────────
 
@@ -37,8 +37,8 @@ fn bench_n_hiss(c: &mut Criterion) {
                 type NoiseSeal = N;
 
                 // Initiator seals
-                let sealer =
-                    NoiseSeal::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
+                let sealer = NoiseSeal::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[])
+                    .set_rs(responder_pub);
                 let mut msg_buf = [0u8; 81];
                 let (msg, mut i_transport) =
                     sealer.e(&mut msg_buf).await.unwrap().es().await.unwrap();
@@ -122,7 +122,8 @@ fn bench_ikpsk1_hiss(c: &mut Criterion) {
                 type Proto = IKpsk1;
 
                 // Message 1: -> e, es, s, ss, psk
-                let i_hs = Proto::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(r_pub);
+                let i_hs =
+                    Proto::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(r_pub);
                 let mut msg1_buf = [0u8; 162];
                 let (msg1, i_hs) = i_hs
                     .e(&mut msg1_buf)
@@ -251,7 +252,8 @@ fn bench_transport_hiss(c: &mut Criterion) {
 
         type NoiseSeal = N;
 
-        let sealer = NoiseSeal::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(r_pub);
+        let sealer =
+            NoiseSeal::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(r_pub);
         let mut msg_buf = [0u8; 81];
         let (msg, i_transport) = sealer.e(&mut msg_buf).await.unwrap().es().await.unwrap();
 

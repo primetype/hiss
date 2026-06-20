@@ -81,10 +81,10 @@ fn eccoxide_pubkey_matches_snow_p256() {
 /// prologue mix_hash) and verify the result matches snow.
 #[tokio::test]
 async fn manual_n_replay_matches_snow() {
-    use hiss::provider::ProviderExt;
-    use hiss::provider::EphemeralOnly;
-    use rand::{SeedableRng, rngs::StdRng};
     use hiss::curve::p256::P256;
+    use hiss::provider::EphemeralOnly;
+    use hiss::provider::ProviderExt;
+    use rand::{SeedableRng, rngs::StdRng};
 
     let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
 

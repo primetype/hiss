@@ -68,18 +68,20 @@
 use std::io::{Read, Write};
 use std::marker::PhantomData;
 
-use super::{Noise, Protocol};
+use super::WellFormed;
 use super::buffers::{RecvBuffer, SendBuffer};
 use super::cipher::Cipher;
 use super::error::HandshakeError;
 use super::handshake::{HandshakeInner, HandshakeState};
 use super::hash::Hash;
 use super::pattern::Pattern;
-use super::process::{do_psk, recv_e, recv_payload, recv_s, recv_to_transport, send_payload, send_s};
+use super::process::{
+    do_psk, recv_e, recv_payload, recv_s, recv_to_transport, send_payload, send_s,
+};
 use super::role::{Initiator, Responder, Role};
 use super::tokens::*;
 use super::transport::Transport;
-use super::WellFormed;
+use super::{Noise, Protocol};
 use crate::curve::{Curve, DhCurve};
 use crate::provider::{CryptoKeyProvider, DhProvider};
 
@@ -1243,12 +1245,12 @@ sync_recv_token! {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::provider::EphemeralOnly;
-    use rand::{SeedableRng, rngs::StdRng};
-    use crate::provider::ProviderExt;
     use crate::noise::{ChaChaPoly, IKpsk1, Initiator, K, N, P256, Responder};
     use crate::noise_message_size;
+    use crate::provider::EphemeralOnly;
+    use crate::provider::ProviderExt;
     use crate::psk::Psk;
+    use rand::{SeedableRng, rngs::StdRng};
     use std::cell::RefCell;
     use std::collections::VecDeque;
     use std::io::Cursor;
@@ -1557,7 +1559,8 @@ mod tests {
         let psk = Psk::from_bytes([0xBB; 32]);
 
         // buffer-core initiator builds msg1.
-        let i_hs = Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
+        let i_hs =
+            Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
         let mut msg1_buf = [0u8;
             noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: true, keyed: false, tokens: [E, Es, S, Ss, Psk],)];
         let (msg1, i_hs) = i_hs

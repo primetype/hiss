@@ -11,11 +11,11 @@
 //! 2. Both sides derive the same handshake hash
 //! 3. Transport messages can be exchanged bidirectionally
 
-use hiss::provider::ProviderExt;
-use hiss::provider::EphemeralOnly;
-use rand::{SeedableRng, rngs::StdRng};
 use hiss::noise::*;
+use hiss::provider::EphemeralOnly;
+use hiss::provider::ProviderExt;
 use hiss::psk::Psk;
+use rand::{SeedableRng, rngs::StdRng};
 
 const PROTOCOL: &str = "Noise_IKpsk1_P256_ChaChaPoly_BLAKE2b";
 
@@ -50,7 +50,8 @@ async fn ikpsk1_hiss_initiator_snow_responder() {
     // ── Our initiator setup ──────────────────────────────────
     type Channel = IKpsk1;
 
-    let i_hs = Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
+    let i_hs =
+        Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
 
     // ── Message 1: -> e, es, s, ss, psk (our initiator sends) ──
     let mut msg1_buf = [0u8; 162];
@@ -235,7 +236,8 @@ async fn n_hiss_initiator_snow_responder() {
     // ── Our initiator seals ──────────────────────────────────
     type NoiseSeal = N;
 
-    let sealer = NoiseSeal::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
+    let sealer =
+        NoiseSeal::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
 
     let mut msg_buf = [0u8; 81];
     let (msg, mut transport) = sealer.e(&mut msg_buf).await.unwrap().es().await.unwrap();
@@ -355,7 +357,8 @@ async fn n_with_prologue_hiss_initiator_snow_responder() {
     // ── Our initiator seals with prologue ───────────────────────
     type NoiseSeal = N;
 
-    let sealer = NoiseSeal::initiate(EphemeralOnly::new(StdRng::from_os_rng()), prologue).set_rs(responder_pub);
+    let sealer = NoiseSeal::initiate(EphemeralOnly::new(StdRng::from_os_rng()), prologue)
+        .set_rs(responder_pub);
 
     let mut msg_buf = [0u8; 81];
     let (msg, mut transport) = sealer.e(&mut msg_buf).await.unwrap().es().await.unwrap();
@@ -405,7 +408,8 @@ async fn ikpsk1_with_prologue_hiss_initiator_snow_responder() {
 
     type Channel = IKpsk1;
 
-    let i_hs = Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), prologue).set_rs(responder_pub);
+    let i_hs = Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), prologue)
+        .set_rs(responder_pub);
 
     // msg1: -> e, es, s, ss, psk
     let mut msg1_buf = [0u8; 162];
@@ -470,7 +474,8 @@ async fn n_rekey_hiss_initiator_snow_responder() {
 
     type NoiseSeal = N;
 
-    let sealer = NoiseSeal::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
+    let sealer =
+        NoiseSeal::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
 
     let mut msg_buf = [0u8; 81];
     let (msg, mut transport) = sealer.e(&mut msg_buf).await.unwrap().es().await.unwrap();
@@ -519,7 +524,8 @@ async fn ikpsk1_rekey_hiss_initiator_snow_responder() {
 
     type Channel = IKpsk1;
 
-    let i_hs = Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
+    let i_hs =
+        Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
 
     // Complete handshake.
     // msg1: -> e, es, s, ss, psk
@@ -1249,8 +1255,7 @@ async fn xk_snow_initiator_hiss_responder() {
     let msg3_len = snow_initiator.write_message(&[], &mut msg3).unwrap();
 
     // Our responder reads msg3; the `s` token reveals the initiator static.
-    let (revealed_initiator_pub, recv) =
-        r_hs.read(&msg3[..msg3_len]).unwrap().s().await.unwrap();
+    let (revealed_initiator_pub, recv) = r_hs.read(&msg3[..msg3_len]).unwrap().s().await.unwrap();
     let r_transport = recv.se().await.unwrap();
 
     // The revealed initiator static must match snow's.
@@ -1405,8 +1410,7 @@ async fn xx_hiss_initiator_snow_responder() {
     // ── Snow responder setup: own static, no pre-known peer static ──
     let snow_responder_builder = snow::Builder::new(proto.parse().unwrap());
     let snow_responder_keypair = snow_responder_builder.generate_keypair().unwrap();
-    let responder_static_pub =
-        P256::public_key_from_bytes(&snow_responder_keypair.public).unwrap();
+    let responder_static_pub = P256::public_key_from_bytes(&snow_responder_keypair.public).unwrap();
 
     let mut snow_responder = snow_responder_builder
         .local_private_key(&snow_responder_keypair.private)
@@ -1547,8 +1551,7 @@ async fn xx_snow_initiator_hiss_responder() {
     let msg3_len = snow_initiator.write_message(&[], &mut msg3).unwrap();
 
     // Our responder reads msg3; the `s` token reveals the initiator static.
-    let (revealed_initiator_pub, recv) =
-        r_hs.read(&msg3[..msg3_len]).unwrap().s().await.unwrap();
+    let (revealed_initiator_pub, recv) = r_hs.read(&msg3[..msg3_len]).unwrap().s().await.unwrap();
     let r_transport = recv.se().await.unwrap();
 
     // The revealed initiator static must match snow's.

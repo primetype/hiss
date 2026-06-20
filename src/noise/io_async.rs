@@ -68,7 +68,7 @@ use std::marker::PhantomData;
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-use super::{Noise, Protocol};
+use super::WellFormed;
 use super::buffers::{RecvBuffer, SendBuffer};
 use super::cipher::Cipher;
 use super::error::HandshakeError;
@@ -82,7 +82,7 @@ use super::process::{
 use super::role::{Initiator, Responder, Role};
 use super::tokens::*;
 use super::transport::Transport;
-use super::WellFormed;
+use super::{Noise, Protocol};
 use crate::curve::{Curve, DhCurve};
 use crate::provider::{CryptoKeyProvider, DhProviderAsync};
 
@@ -1058,12 +1058,12 @@ async_recv_token! {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::provider::EphemeralOnly;
-    use rand::{SeedableRng, rngs::StdRng};
-    use crate::provider::{CryptoKeyProviderAsync, ProviderExt};
     use crate::noise::{ChaChaPoly, IKpsk1, Initiator, K, N, P256, Responder};
     use crate::noise_message_size;
+    use crate::provider::EphemeralOnly;
+    use crate::provider::{CryptoKeyProviderAsync, ProviderExt};
     use crate::psk::Psk;
+    use rand::{SeedableRng, rngs::StdRng};
     use std::io::Cursor;
 
     type Seal = N;
@@ -1135,8 +1135,7 @@ mod tests {
             Vec::<u8>::new(),
         )
         .set_rs(recipient_pub);
-        let (mut send_transport, wire) =
-            sealer.e().await.unwrap().es().await.unwrap().into_parts();
+        let (mut send_transport, wire) = sealer.e().await.unwrap().es().await.unwrap().into_parts();
         assert_eq!(wire.len(), 81);
 
         let payload = [0x42u8; 32];
@@ -1203,9 +1202,10 @@ mod tests {
         use crate::provider::apple::AppleSecureEnclave;
 
         let mut provider = AppleSecureEnclave::new("uk.co.example.hiss-test");
-        let recipient_static = CryptoKeyProviderAsync::<P256>::generate_ephemeral_key_async(&mut provider)
-            .await
-            .unwrap();
+        let recipient_static =
+            CryptoKeyProviderAsync::<P256>::generate_ephemeral_key_async(&mut provider)
+                .await
+                .unwrap();
         let recipient_pub = provider.public(&recipient_static).unwrap();
 
         let sealer = AsyncHandshake::<Seal, Initiator, _, _, _, _>::initiate(
@@ -1331,7 +1331,8 @@ mod tests {
         let psk = Psk::from_bytes([0xBB; 32]);
 
         // buffer-core initiator builds msg1.
-        let i_hs = Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
+        let i_hs =
+            Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
         let mut msg1_buf = [0u8;
             noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: true, keyed: false, tokens: [E, Es, S, Ss, Psk],)];
         let (msg1, i_hs) = i_hs

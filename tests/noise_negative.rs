@@ -82,12 +82,9 @@ async fn run_n(xform: &Xform<'_>) -> Result<(), ()> {
     let (msg1, _t) = i.e(&mut buf).await.unwrap().es().await.unwrap();
     let msg1 = xform(0, msg1.to_vec());
 
-    let r = N::respond(
-        EphemeralOnly::new(StdRng::seed_from_u64(1)),
-        &[],
-    )
-    .set_s(private_key(&RESP_STATIC))
-    .map_err(|_| ())?;
+    let r = N::respond(EphemeralOnly::new(StdRng::seed_from_u64(1)), &[])
+        .set_s(private_key(&RESP_STATIC))
+        .map_err(|_| ())?;
     let (_, recv) = r.read(&msg1).map_err(|_| ())?.e().await.map_err(|_| ())?;
     recv.es().await.map_err(|_| ())?;
     Ok(())
@@ -114,15 +111,17 @@ async fn run_k(xform: &Xform<'_>) -> Result<(), ()> {
         .unwrap();
     let msg1 = xform(0, msg1.to_vec());
 
-    let r = K::respond(
-        EphemeralOnly::new(StdRng::seed_from_u64(2)),
-        &[],
-    )
-    .set_rs(public_key(&INIT_STATIC))
-    .set_s(private_key(&RESP_STATIC))
-    .map_err(|_| ())?;
+    let r = K::respond(EphemeralOnly::new(StdRng::seed_from_u64(2)), &[])
+        .set_rs(public_key(&INIT_STATIC))
+        .set_s(private_key(&RESP_STATIC))
+        .map_err(|_| ())?;
     let (_, recv) = r.read(&msg1).map_err(|_| ())?.e().await.map_err(|_| ())?;
-    recv.es().await.map_err(|_| ())?.ss().await.map_err(|_| ())?;
+    recv.es()
+        .await
+        .map_err(|_| ())?
+        .ss()
+        .await
+        .map_err(|_| ())?;
     Ok(())
 }
 
@@ -151,16 +150,23 @@ async fn run_kpsk0(xform: &Xform<'_>) -> Result<(), ()> {
         .unwrap();
     let msg1 = xform(0, msg1.to_vec());
 
-    let r = Kpsk0::respond(
-        EphemeralOnly::new(StdRng::seed_from_u64(3)),
-        &[],
-    )
-    .set_rs(public_key(&INIT_STATIC))
-    .set_s(private_key(&RESP_STATIC))
-    .map_err(|_| ())?;
-    let recv = r.read(&msg1).map_err(|_| ())?.psk(&psk).await.map_err(|_| ())?;
+    let r = Kpsk0::respond(EphemeralOnly::new(StdRng::seed_from_u64(3)), &[])
+        .set_rs(public_key(&INIT_STATIC))
+        .set_s(private_key(&RESP_STATIC))
+        .map_err(|_| ())?;
+    let recv = r
+        .read(&msg1)
+        .map_err(|_| ())?
+        .psk(&psk)
+        .await
+        .map_err(|_| ())?;
     let (_, recv) = recv.e().await.map_err(|_| ())?;
-    recv.es().await.map_err(|_| ())?.ss().await.map_err(|_| ())?;
+    recv.es()
+        .await
+        .map_err(|_| ())?
+        .ss()
+        .await
+        .map_err(|_| ())?;
     Ok(())
 }
 
@@ -219,7 +225,12 @@ async fn run_ikpsk1(xform: &Xform<'_>) -> Result<(), ()> {
 
     // Initiator reads msg2.
     let (_, recv) = i.read(&msg2).map_err(|_| ())?.e().await.map_err(|_| ())?;
-    recv.ee().await.map_err(|_| ())?.se().await.map_err(|_| ())?;
+    recv.ee()
+        .await
+        .map_err(|_| ())?
+        .se()
+        .await
+        .map_err(|_| ())?;
     Ok(())
 }
 
@@ -273,7 +284,12 @@ async fn run_ik(xform: &Xform<'_>) -> Result<(), ()> {
 
     // Initiator reads msg2.
     let (_, recv) = i.read(&msg2).map_err(|_| ())?.e().await.map_err(|_| ())?;
-    recv.ee().await.map_err(|_| ())?.se().await.map_err(|_| ())?;
+    recv.ee()
+        .await
+        .map_err(|_| ())?
+        .se()
+        .await
+        .map_err(|_| ())?;
     Ok(())
 }
 
@@ -356,7 +372,13 @@ async fn run_ix(xform: &Xform<'_>) -> Result<(), ()> {
 
     // Initiator reads msg2; the `s` reveals the responder static.
     let (_, recv) = i.read(&msg2).map_err(|_| ())?.e().await.map_err(|_| ())?;
-    let recv = recv.ee().await.map_err(|_| ())?.se().await.map_err(|_| ())?;
+    let recv = recv
+        .ee()
+        .await
+        .map_err(|_| ())?
+        .se()
+        .await
+        .map_err(|_| ())?;
     let (_, recv) = recv.s().await.map_err(|_| ())?;
     recv.es().await.map_err(|_| ())?;
     Ok(())
@@ -415,13 +437,19 @@ async fn run_xk(xform: &Xform<'_>) -> Result<(), ()> {
 async fn run_nn(xform: &Xform<'_>) -> Result<(), ()> {
     // NN has no static keys and no pre-messages: both parties are
     // anonymous. msg1 is a bare `-> e` (the single-`e` send finalizer).
-    let i = NN::initiate(EphemeralOnly::new(ScriptedRng::new(&[&INIT_EPHEMERAL])), &[]);
+    let i = NN::initiate(
+        EphemeralOnly::new(ScriptedRng::new(&[&INIT_EPHEMERAL])),
+        &[],
+    );
     let mut b1 = [0u8; 256];
     let (msg1, i) = i.e(&mut b1).await.unwrap();
     let msg1 = xform(0, msg1.to_vec());
 
     // Responder reads msg1 (-> e).
-    let r = NN::respond(EphemeralOnly::new(ScriptedRng::new(&[&RESP_EPHEMERAL])), &[]);
+    let r = NN::respond(
+        EphemeralOnly::new(ScriptedRng::new(&[&RESP_EPHEMERAL])),
+        &[],
+    );
     let (_, recv) = r.read(&msg1).map_err(|_| ())?.e().await.map_err(|_| ())?;
 
     // Responder sends msg2 (<- e, ee), genuine.
@@ -439,13 +467,19 @@ async fn run_xx(xform: &Xform<'_>) -> Result<(), ()> {
     // XX has no pre-messages: neither static is pre-known. Both parties
     // transmit their statics in-handshake, encrypted (after `ee`).
     // msg1 is a bare `-> e` (the single-`e` send finalizer).
-    let i = XX::initiate(EphemeralOnly::new(ScriptedRng::new(&[&INIT_EPHEMERAL])), &[]);
+    let i = XX::initiate(
+        EphemeralOnly::new(ScriptedRng::new(&[&INIT_EPHEMERAL])),
+        &[],
+    );
     let mut b1 = [0u8; 256];
     let (msg1, i) = i.e(&mut b1).await.unwrap();
     let msg1 = xform(0, msg1.to_vec());
 
     // Responder reads msg1 (-> e).
-    let r = XX::respond(EphemeralOnly::new(ScriptedRng::new(&[&RESP_EPHEMERAL])), &[]);
+    let r = XX::respond(
+        EphemeralOnly::new(ScriptedRng::new(&[&RESP_EPHEMERAL])),
+        &[],
+    );
     let (_, recv) = r.read(&msg1).map_err(|_| ())?.e().await.map_err(|_| ())?;
 
     // msg2: <- e, ee, s, es — the responder's static is sent encrypted
@@ -506,13 +540,22 @@ where
     );
 
     for byte in 0..len {
-        let res = run(Box::new(move |idx, m| if idx == msg_idx { flip(m, byte) } else { m })).await;
+        let res = run(Box::new(
+            move |idx, m| if idx == msg_idx { flip(m, byte) } else { m },
+        ))
+        .await;
         assert!(res.is_err(), "{label}: flip of byte {byte} not rejected");
     }
 
     for prefix in 0..len {
-        let res =
-            run(Box::new(move |idx, m| if idx == msg_idx { m[..prefix].to_vec() } else { m })).await;
+        let res = run(Box::new(move |idx, m| {
+            if idx == msg_idx {
+                m[..prefix].to_vec()
+            } else {
+                m
+            }
+        }))
+        .await;
         assert!(res.is_err(), "{label}: truncation to {prefix} not rejected");
     }
 
@@ -540,87 +583,180 @@ async fn k_msg1_tamper_truncation_sweep() {
 
 #[tokio::test]
 async fn kpsk0_msg1_tamper_truncation_sweep() {
-    sweep("Kpsk0 msg1", 0, ONE_MSG, |xf| async move { run_kpsk0(&*xf).await }).await;
+    sweep("Kpsk0 msg1", 0, ONE_MSG, |xf| async move {
+        run_kpsk0(&*xf).await
+    })
+    .await;
 }
 
 #[tokio::test]
 async fn ikpsk1_msg1_tamper_truncation_sweep() {
-    sweep("IKpsk1 msg1", 0, IK_MSG1, |xf| async move { run_ikpsk1(&*xf).await }).await;
+    sweep("IKpsk1 msg1", 0, IK_MSG1, |xf| async move {
+        run_ikpsk1(&*xf).await
+    })
+    .await;
 }
 
 #[tokio::test]
 async fn ikpsk1_msg2_tamper_truncation_sweep() {
-    sweep("IKpsk1 msg2", 1, IK_MSG2, |xf| async move { run_ikpsk1(&*xf).await }).await;
+    sweep("IKpsk1 msg2", 1, IK_MSG2, |xf| async move {
+        run_ikpsk1(&*xf).await
+    })
+    .await;
 }
 
 #[tokio::test]
 async fn ik_msg1_tamper_truncation_sweep() {
-    sweep("IK msg1", 0, IK_MSG1, |xf| async move { run_ik(&*xf).await }).await;
+    sweep(
+        "IK msg1",
+        0,
+        IK_MSG1,
+        |xf| async move { run_ik(&*xf).await },
+    )
+    .await;
 }
 
 #[tokio::test]
 async fn ik_msg2_tamper_truncation_sweep() {
-    sweep("IK msg2", 1, IK_MSG2, |xf| async move { run_ik(&*xf).await }).await;
+    sweep(
+        "IK msg2",
+        1,
+        IK_MSG2,
+        |xf| async move { run_ik(&*xf).await },
+    )
+    .await;
 }
 
 #[tokio::test]
 async fn nk_msg1_tamper_truncation_sweep() {
-    sweep("NK msg1", 0, NK_MSG1, |xf| async move { run_nk(&*xf).await }).await;
+    sweep(
+        "NK msg1",
+        0,
+        NK_MSG1,
+        |xf| async move { run_nk(&*xf).await },
+    )
+    .await;
 }
 
 #[tokio::test]
 async fn nk_msg2_tamper_truncation_sweep() {
-    sweep("NK msg2", 1, NK_MSG2, |xf| async move { run_nk(&*xf).await }).await;
+    sweep(
+        "NK msg2",
+        1,
+        NK_MSG2,
+        |xf| async move { run_nk(&*xf).await },
+    )
+    .await;
 }
 
 #[tokio::test]
 async fn ix_msg1_tamper_truncation_sweep() {
-    sweep("IX msg1", 0, IX_MSG1, |xf| async move { run_ix(&*xf).await }).await;
+    sweep(
+        "IX msg1",
+        0,
+        IX_MSG1,
+        |xf| async move { run_ix(&*xf).await },
+    )
+    .await;
 }
 
 #[tokio::test]
 async fn ix_msg2_tamper_truncation_sweep() {
-    sweep("IX msg2", 1, IX_MSG2, |xf| async move { run_ix(&*xf).await }).await;
+    sweep(
+        "IX msg2",
+        1,
+        IX_MSG2,
+        |xf| async move { run_ix(&*xf).await },
+    )
+    .await;
 }
 
 #[tokio::test]
 async fn xk_msg1_tamper_truncation_sweep() {
-    sweep("XK msg1", 0, XK_MSG1, |xf| async move { run_xk(&*xf).await }).await;
+    sweep(
+        "XK msg1",
+        0,
+        XK_MSG1,
+        |xf| async move { run_xk(&*xf).await },
+    )
+    .await;
 }
 
 #[tokio::test]
 async fn xk_msg2_tamper_truncation_sweep() {
-    sweep("XK msg2", 1, XK_MSG2, |xf| async move { run_xk(&*xf).await }).await;
+    sweep(
+        "XK msg2",
+        1,
+        XK_MSG2,
+        |xf| async move { run_xk(&*xf).await },
+    )
+    .await;
 }
 
 #[tokio::test]
 async fn xk_msg3_tamper_truncation_sweep() {
-    sweep("XK msg3", 2, XK_MSG3, |xf| async move { run_xk(&*xf).await }).await;
+    sweep(
+        "XK msg3",
+        2,
+        XK_MSG3,
+        |xf| async move { run_xk(&*xf).await },
+    )
+    .await;
 }
 
 #[tokio::test]
 async fn nn_msg1_tamper_truncation_sweep() {
-    sweep("NN msg1", 0, NN_MSG1, |xf| async move { run_nn(&*xf).await }).await;
+    sweep(
+        "NN msg1",
+        0,
+        NN_MSG1,
+        |xf| async move { run_nn(&*xf).await },
+    )
+    .await;
 }
 
 #[tokio::test]
 async fn nn_msg2_tamper_truncation_sweep() {
-    sweep("NN msg2", 1, NN_MSG2, |xf| async move { run_nn(&*xf).await }).await;
+    sweep(
+        "NN msg2",
+        1,
+        NN_MSG2,
+        |xf| async move { run_nn(&*xf).await },
+    )
+    .await;
 }
 
 #[tokio::test]
 async fn xx_msg1_tamper_truncation_sweep() {
-    sweep("XX msg1", 0, XX_MSG1, |xf| async move { run_xx(&*xf).await }).await;
+    sweep(
+        "XX msg1",
+        0,
+        XX_MSG1,
+        |xf| async move { run_xx(&*xf).await },
+    )
+    .await;
 }
 
 #[tokio::test]
 async fn xx_msg2_tamper_truncation_sweep() {
-    sweep("XX msg2", 1, XX_MSG2, |xf| async move { run_xx(&*xf).await }).await;
+    sweep(
+        "XX msg2",
+        1,
+        XX_MSG2,
+        |xf| async move { run_xx(&*xf).await },
+    )
+    .await;
 }
 
 #[tokio::test]
 async fn xx_msg3_tamper_truncation_sweep() {
-    sweep("XX msg3", 2, XX_MSG3, |xf| async move { run_xx(&*xf).await }).await;
+    sweep(
+        "XX msg3",
+        2,
+        XX_MSG3,
+        |xf| async move { run_xx(&*xf).await },
+    )
+    .await;
 }
 
 // ── Wrong PSK ────────────────────────────────────────────────────
@@ -655,13 +791,10 @@ async fn kpsk0_wrong_psk_rejected() {
         .unwrap();
     let msg1 = msg1.to_vec();
 
-    let r = Kpsk0::respond(
-        EphemeralOnly::new(StdRng::seed_from_u64(9)),
-        &[],
-    )
-    .set_rs(public_key(&INIT_STATIC))
-    .set_s(private_key(&RESP_STATIC))
-    .unwrap();
+    let r = Kpsk0::respond(EphemeralOnly::new(StdRng::seed_from_u64(9)), &[])
+        .set_rs(public_key(&INIT_STATIC))
+        .set_s(private_key(&RESP_STATIC))
+        .unwrap();
     let recv = r.read(&msg1).unwrap().psk(&bad).await.unwrap();
     let (_, recv) = recv.e().await.unwrap();
     let recv = recv.es().await.unwrap();

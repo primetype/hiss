@@ -35,7 +35,6 @@
 //! the raw 32-byte x-coordinate of the shared point, as the Noise spec
 //! requires (no KDF).
 
-
 pub mod ed25519;
 pub mod p256;
 pub mod x25519;

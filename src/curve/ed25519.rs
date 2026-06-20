@@ -419,10 +419,8 @@ mod tests {
     #[test]
     fn dh_different_peers_produce_different_secrets() {
         let sk = SoftwareEd25519PrivateKey::generate(rand::rng());
-        let peer1 = SoftwareEd25519PrivateKey::generate(rand::rng())
-            .public_key();
-        let peer2 = SoftwareEd25519PrivateKey::generate(rand::rng())
-            .public_key();
+        let peer1 = SoftwareEd25519PrivateKey::generate(rand::rng()).public_key();
+        let peer2 = SoftwareEd25519PrivateKey::generate(rand::rng()).public_key();
 
         let ss1 = sk.dh(&peer1);
         let ss2 = sk.dh(&peer2);

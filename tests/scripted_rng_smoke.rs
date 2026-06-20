@@ -43,7 +43,11 @@ async fn scripted_ephemeral_is_byte_reproducible() {
         a, b,
         "identical inputs (seeded static + scripted ephemeral) must yield identical wire bytes"
     );
-    assert_eq!(a.len(), 81, "N msg1 = 65-byte ephemeral pubkey + 16-byte tag");
+    assert_eq!(
+        a.len(),
+        81,
+        "N msg1 = 65-byte ephemeral pubkey + 16-byte tag"
+    );
 }
 
 #[tokio::test]

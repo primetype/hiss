@@ -210,8 +210,8 @@
 //!
 //! [`DhProviderAsync`]: crate::provider::DhProviderAsync
 
-pub(crate) mod buffers;
 pub mod alias;
+pub(crate) mod buffers;
 pub mod cipher;
 pub mod cipher_state;
 pub mod curve;
@@ -250,12 +250,12 @@ pub use self::hash::{Blake2b, Hash};
 // the bare `noise::{N, K, …}` names above are the ready-made default-suite
 // protocol aliases. Only the `Pattern` trait is re-exported at the root.
 pub use self::pattern::Pattern;
-pub use self::well_formed::WellFormed;
 pub use self::role::{Initiator, Responder, Role};
 pub use self::session_id::SessionId;
 pub use self::symmetric_state::SymmetricState;
 pub use self::tokens::*;
 pub use self::transport::{Transport, TransportRecv, TransportSend};
+pub use self::well_formed::WellFormed;
 
 use std::fmt;
 use std::marker::PhantomData;
@@ -380,12 +380,12 @@ impl<P: WellFormed, Cu: DhCurve, Ci: Cipher, H: Hash> Noise<P, Cu, Ci, H> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::provider::ProviderExt;
     use crate::curve::p256::{P256r1PrivateKey, P256r1PublicKey};
-    use crate::provider::EphemeralOnly;
-    use rand::{SeedableRng, rngs::StdRng};
     use crate::noise_message_size;
+    use crate::provider::EphemeralOnly;
+    use crate::provider::ProviderExt;
     use crate::psk::Psk;
+    use rand::{SeedableRng, rngs::StdRng};
     type Channel = IKpsk1;
     type NoiseSeal = N;
     type NoiseK = K;
@@ -438,7 +438,8 @@ mod tests {
         let psk_to_seal = Psk::from_bytes([0x42; 32]);
 
         // ── Seal (initiator side) ─────────────────────────────────
-        let sealer = NoiseSeal::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(recipient_pub);
+        let sealer = NoiseSeal::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[])
+            .set_rs(recipient_pub);
 
         let mut msg_buf = [0u8;
             noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: false, keyed: false, tokens: [E, Es],)];
@@ -478,7 +479,8 @@ mod tests {
         let recipient_static = provider.generate::<P256>().unwrap();
         let recipient_pub = provider.public(&recipient_static).unwrap();
 
-        let sealer = NoiseSeal::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(recipient_pub);
+        let sealer = NoiseSeal::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[])
+            .set_rs(recipient_pub);
         let mut msg_buf = [0u8;
             noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: false, keyed: false, tokens: [E, Es],)];
         let (msg, _transport) = sealer.e(&mut msg_buf).await.unwrap().es().await.unwrap();
@@ -512,7 +514,8 @@ mod tests {
         let recipient_static = provider.generate::<P256>().unwrap();
         let recipient_pub = provider.public(&recipient_static).unwrap();
 
-        let sealer = NoiseSeal::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(recipient_pub);
+        let sealer = NoiseSeal::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[])
+            .set_rs(recipient_pub);
         let mut msg_buf = [0u8;
             noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: false, keyed: false, tokens: [E, Es],)];
         let (msg, _transport) = sealer.e(&mut msg_buf).await.unwrap().es().await.unwrap();
@@ -771,7 +774,8 @@ mod tests {
         let psk = Psk::from_bytes([0xAA; 32]);
 
         // ── Construction ────────────────────────────────────────
-        let i_hs = Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
+        let i_hs =
+            Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
 
         let r_hs = Channel::respond(EphemeralOnly::new(StdRng::from_os_rng()), &[])
             .set_s(responder_static)
@@ -1079,7 +1083,8 @@ mod tests {
         let psk = Psk::from_bytes([0xBB; 32]);
 
         // Initiator constructs msg1 normally.
-        let i_hs = Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
+        let i_hs =
+            Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
 
         let mut msg1_buf = [0u8;
             noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: true, keyed: false, tokens: [E, Es, S, Ss, Psk],)];
@@ -1128,7 +1133,8 @@ mod tests {
         let r_psk = Psk::from_bytes([0xBB; 32]); // different!
 
         // Initiator sends msg1 with i_psk.
-        let i_hs = Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
+        let i_hs =
+            Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
 
         let mut msg1_buf = [0u8;
             noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: true, keyed: false, tokens: [E, Es, S, Ss, Psk],)];
@@ -1176,7 +1182,8 @@ mod tests {
         let psk = Psk::from_bytes([0xCC; 32]);
 
         // Complete handshake.
-        let i_hs = Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
+        let i_hs =
+            Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
         let r_hs = Channel::respond(EphemeralOnly::new(StdRng::from_os_rng()), &[])
             .set_s(responder_static)
             .unwrap();
@@ -1247,7 +1254,8 @@ mod tests {
         let psk = Psk::from_bytes([0xDD; 32]);
 
         // Complete handshake.
-        let i_hs = Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
+        let i_hs =
+            Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
         let r_hs = Channel::respond(EphemeralOnly::new(StdRng::from_os_rng()), &[])
             .set_s(responder_static)
             .unwrap();
@@ -1336,7 +1344,8 @@ mod tests {
         let psk = Psk::from_bytes([0xCC; 32]);
 
         // Initiator targets the wrong responder public key.
-        let i_hs = Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(wrong_pub);
+        let i_hs =
+            Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(wrong_pub);
 
         // Initiator sends msg1 with es DH against the wrong key.
         let mut msg1_buf = [0u8;
@@ -1387,7 +1396,8 @@ mod tests {
         let psk = Psk::from_bytes([0xFF; 32]);
 
         // Complete handshake.
-        let i_hs = Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
+        let i_hs =
+            Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
         let r_hs = Channel::respond(EphemeralOnly::new(StdRng::from_os_rng()), &[])
             .set_s(responder_static)
             .unwrap();
@@ -1469,9 +1479,12 @@ mod tests {
                 P256r1PrivateKey::from_bytes(responder_bytes).expect("valid test scalar");
             let responder_pub = responder_static.public();
 
-            let initiator_static = EphemeralOnly::new(StdRng::from_os_rng()).generate::<P256>().unwrap();
+            let initiator_static = EphemeralOnly::new(StdRng::from_os_rng())
+                .generate::<P256>()
+                .unwrap();
 
-            let i_hs = Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
+            let i_hs = Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[])
+                .set_rs(responder_pub);
 
             let mut msg1_buf = [0u8;
                 noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: true, keyed: false, tokens: [E, Es, S, Ss, Psk],)];
@@ -1549,7 +1562,8 @@ mod tests {
         // revealed static key matches the expected peer.
         let wrong_static = provider.generate::<P256>().unwrap();
 
-        let i_hs = Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
+        let i_hs =
+            Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
 
         let mut msg1_buf = [0u8;
             noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: true, keyed: false, tokens: [E, Es, S, Ss, Psk],)];
@@ -1623,7 +1637,8 @@ mod tests {
         let responder_pub = provider.public(&responder_static).unwrap();
         let psk = Psk::from_bytes([0xDD; 32]);
 
-        let i_hs = Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
+        let i_hs =
+            Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
 
         let mut msg1_buf = [0u8;
             noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: true, keyed: false, tokens: [E, Es, S, Ss, Psk],)];
@@ -1676,7 +1691,8 @@ mod tests {
         let responder_pub = provider.public(&responder_static).unwrap();
         let psk = Psk::from_bytes([0xDD; 32]);
 
-        let i_hs = Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
+        let i_hs =
+            Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
         let r_hs = Channel::respond(EphemeralOnly::new(StdRng::from_os_rng()), &[])
             .set_s(responder_static)
             .unwrap();
@@ -1745,7 +1761,8 @@ mod tests {
         let psk = Psk::from_bytes([0xEE; 32]);
 
         // Complete handshake.
-        let i_hs = Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
+        let i_hs =
+            Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
         let r_hs = Channel::respond(EphemeralOnly::new(StdRng::from_os_rng()), &[])
             .set_s(responder_static)
             .unwrap();
@@ -1820,7 +1837,8 @@ mod tests {
         let psk = Psk::from_bytes([0xFF; 32]);
 
         // Complete handshake.
-        let i_hs = Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
+        let i_hs =
+            Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
         let r_hs = Channel::respond(EphemeralOnly::new(StdRng::from_os_rng()), &[])
             .set_s(responder_static)
             .unwrap();
@@ -1913,7 +1931,8 @@ mod tests {
         let psk = Psk::from_bytes([0x11; 32]);
 
         // Complete handshake.
-        let i_hs = Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
+        let i_hs =
+            Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
         let r_hs = Channel::respond(EphemeralOnly::new(StdRng::from_os_rng()), &[])
             .set_s(responder_static)
             .unwrap();
@@ -1994,7 +2013,8 @@ mod tests {
         let psk = Psk::from_bytes([0x22; 32]);
 
         // Complete handshake.
-        let i_hs = Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
+        let i_hs =
+            Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
         let r_hs = Channel::respond(EphemeralOnly::new(StdRng::from_os_rng()), &[])
             .set_s(responder_static)
             .unwrap();
@@ -2076,7 +2096,8 @@ mod tests {
 
         type NoiseSeal = N;
 
-        let sealer = NoiseSeal::initiate(EphemeralOnly::new(StdRng::from_os_rng()), prologue).set_rs(responder_pub);
+        let sealer = NoiseSeal::initiate(EphemeralOnly::new(StdRng::from_os_rng()), prologue)
+            .set_rs(responder_pub);
         let mut msg_buf = [0u8;
             noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: false, keyed: false, tokens: [E, Es],)];
         let (msg, mut i_transport) = sealer.e(&mut msg_buf).await.unwrap().es().await.unwrap();
@@ -2106,7 +2127,8 @@ mod tests {
         type NoiseSeal = N;
 
         // Initiator uses prologue "v1", responder uses "v2".
-        let sealer = NoiseSeal::initiate(EphemeralOnly::new(StdRng::from_os_rng()), b"v1").set_rs(responder_pub);
+        let sealer = NoiseSeal::initiate(EphemeralOnly::new(StdRng::from_os_rng()), b"v1")
+            .set_rs(responder_pub);
         let mut msg_buf = [0u8;
             noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: false, keyed: false, tokens: [E, Es],)];
         let (msg, _) = sealer.e(&mut msg_buf).await.unwrap().es().await.unwrap();
@@ -2166,14 +2188,12 @@ mod tests {
             initiator_static: P256r1PrivateKey,
             responder_static: P256r1PrivateKey,
             psk: Psk,
-        ) -> (
-            transport::Transport<Channel>,
-            transport::Transport<Channel>,
-        ) {
+        ) -> (transport::Transport<Channel>, transport::Transport<Channel>) {
             let provider = EphemeralOnly::new(StdRng::from_os_rng());
             let responder_pub = provider.public(&responder_static).unwrap();
 
-            let i_hs = Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
+            let i_hs = Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[])
+                .set_rs(responder_pub);
             let r_hs = Channel::respond(EphemeralOnly::new(StdRng::from_os_rng()), &[])
                 .set_s(responder_static)
                 .unwrap();
@@ -2375,7 +2395,7 @@ mod tests {
     // plus both streaming drivers (`SyncHandshake` and, under
     // `async-io`, `AsyncHandshake`).
     mod single_e_send_finalizer_tests {
-        use super::super::tokens::{Cons, Ee, Message, Nil, ToInitiator, ToResponder, E};
+        use super::super::tokens::{Cons, E, Ee, Message, Nil, ToInitiator, ToResponder};
         use super::super::{Blake2b, ChaChaPoly, Noise, P256};
         use super::super::{HandshakeState, Initiator, Pattern, Responder};
         use super::super::{SyncHandshake, SyncTransport};
@@ -2570,8 +2590,12 @@ mod tests {
         #[test]
         fn single_e_more_messages_sync_streaming() {
             let (i2r, r2i) = (
-                std::rc::Rc::new(std::cell::RefCell::new(std::collections::VecDeque::<u8>::new())),
-                std::rc::Rc::new(std::cell::RefCell::new(std::collections::VecDeque::<u8>::new())),
+                std::rc::Rc::new(std::cell::RefCell::new(
+                    std::collections::VecDeque::<u8>::new(),
+                )),
+                std::rc::Rc::new(std::cell::RefCell::new(
+                    std::collections::VecDeque::<u8>::new(),
+                )),
             );
             let init_stream = Pipe {
                 inbound: r2i.clone(),
@@ -2590,7 +2614,11 @@ mod tests {
                 init_stream,
             );
             let initiator = initiator.e().unwrap();
-            assert_eq!(i2r.borrow().len(), 65, "a bare `-> e` must be exactly 65 bytes");
+            assert_eq!(
+                i2r.borrow().len(),
+                65,
+                "a bare `-> e` must be exactly 65 bytes"
+            );
 
             // Responder reads msg1 (-> e), then sends msg2 (<- e, ee).
             let responder = SyncHandshake::<EThenEeProto, Responder, _, _, _, _>::respond(
@@ -2600,7 +2628,11 @@ mod tests {
             );
             let (_revealed_e, responder) = responder.recv().e().unwrap();
             let mut responder_transport = responder.e().unwrap().ee().unwrap();
-            assert_eq!(r2i.borrow().len(), 81, "`<- e, ee` must be exactly 81 bytes");
+            assert_eq!(
+                r2i.borrow().len(),
+                81,
+                "`<- e, ee` must be exactly 81 bytes"
+            );
 
             // Initiator reads msg2 (<- e, ee) → `SyncTransport`.
             let (_revealed_e, initiator) = initiator.recv().e().unwrap();

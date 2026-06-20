@@ -349,7 +349,9 @@ pub enum SeedError {
     /// The Secure Enclave P-256 identity key (the seal recipient) is
     /// absent. Establish it first via
     /// [`generate_static_key`](CryptoKeyProvider::generate_static_key).
-    #[error("Secure Enclave P-256 identity key {label:?} not found (establish it before sealing the Ed25519 seed)")]
+    #[error(
+        "Secure Enclave P-256 identity key {label:?} not found (establish it before sealing the Ed25519 seed)"
+    )]
     IdentityKeyMissing { label: String },
 
     /// A Secure Enclave P-256 key operation failed.
@@ -464,16 +466,19 @@ impl AppleSecureEnclave {
     pub async fn load_seed(&self) -> Result<Option<[u8; 32]>, SeedError> {
         // Blocking Keychain query for the sealed envelope.
         let service = self.ed25519_service();
-        let sealed_bytes = offload_seed(move || {
-            match generic_password(seed_password_options(&service)?) {
-                Ok(bytes) => Ok(Some(bytes)),
-                Err(e) if e.code() == security_framework_sys::base::errSecItemNotFound => Ok(None),
-                Err(e) => Err(SeedError::Keychain(format!(
-                    "failed to query sealed Ed25519 seed: {e}"
-                ))),
-            }
-        })
-        .await?;
+        let sealed_bytes =
+            offload_seed(
+                move || match generic_password(seed_password_options(&service)?) {
+                    Ok(bytes) => Ok(Some(bytes)),
+                    Err(e) if e.code() == security_framework_sys::base::errSecItemNotFound => {
+                        Ok(None)
+                    }
+                    Err(e) => Err(SeedError::Keychain(format!(
+                        "failed to query sealed Ed25519 seed: {e}"
+                    ))),
+                },
+            )
+            .await?;
         let Some(sealed_bytes) = sealed_bytes else {
             return Ok(None);
         };
@@ -489,13 +494,14 @@ impl AppleSecureEnclave {
         // handle) then moves into `open_32`, whose DH the provider
         // offloads.
         let label = self.p256_label();
-        let se_private = offload_seed(move || {
-            match P256r1PrivateKey::load_from_keychain(&label)? {
-                Some(key) => Ok(key),
-                None => Err(SeedError::IdentityKeyMissing { label }),
-            }
-        })
-        .await?;
+        let se_private =
+            offload_seed(
+                move || match P256r1PrivateKey::load_from_keychain(&label)? {
+                    Some(key) => Ok(key),
+                    None => Err(SeedError::IdentityKeyMissing { label }),
+                },
+            )
+            .await?;
 
         let opened = open_32(self.clone(), se_private, &sealed).await?;
         Ok(Some(opened))
@@ -617,11 +623,7 @@ impl DhProviderAsync<P256> for AppleSecureEnclave {
 }
 
 impl SigningProvider<P256> for AppleSecureEnclave {
-    fn sign(
-        &self,
-        key: &Self::PrivateKey,
-        message: &[u8],
-    ) -> Result<P256Signature, Self::Error> {
+    fn sign(&self, key: &Self::PrivateKey, message: &[u8]) -> Result<P256Signature, Self::Error> {
         key.sign(message)
     }
 }
