@@ -216,8 +216,7 @@ pub mod cipher;
 pub mod cipher_state;
 pub mod curve;
 pub mod error;
-#[allow(clippy::type_complexity)]
-pub mod handshake;
+pub(crate) mod handshake;
 pub mod hash;
 #[cfg(feature = "async-io")]
 #[allow(clippy::type_complexity)]
@@ -225,8 +224,7 @@ pub mod io_async;
 #[allow(clippy::type_complexity)]
 pub mod io_sync;
 pub mod pattern;
-#[allow(clippy::type_complexity)]
-pub mod process;
+pub(crate) mod process;
 pub mod role;
 #[cfg(any(target_os = "macos", target_os = "ios", test))]
 pub(crate) mod seal;
@@ -241,7 +239,6 @@ pub use self::cipher::{ChaChaPoly, Cipher};
 pub use self::cipher_state::CipherState;
 pub use self::curve::{Curve, DhCurve, P256, X25519};
 pub use self::error::HandshakeError;
-pub use self::handshake::{HandshakeState, Receiving, Sending};
 #[cfg(feature = "async-io")]
 pub use self::io_async::{AsyncHandshake, AsyncReceiving, AsyncSending, AsyncTransport};
 pub use self::io_sync::{SyncHandshake, SyncReceiving, SyncSending, SyncTransport};
@@ -334,48 +331,6 @@ impl<P: WellFormed, Cu: DhCurve, Ci: Cipher, H: Hash> Protocol for Noise<P, Cu, 
     type Curve = Cu;
     type Cipher = Ci;
     type Hash = H;
-}
-
-impl<P: WellFormed, Cu: DhCurve, Ci: Cipher, H: Hash> Noise<P, Cu, Ci, H> {
-    /// Begin a handshake as the **initiator**.
-    ///
-    /// The `prologue` is mixed into the handshake hash before any
-    /// tokens are processed. Both sides must use the same prologue.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// type Channel = IKpsk1;
-    ///
-    /// let hs = Channel::initiate(provider, &[])
-    ///     .set_rs(responder_pub);
-    /// ```
-    pub fn initiate<CP: crate::provider::DhProviderAsync<Cu>>(
-        provider: CP,
-        prologue: &[u8],
-    ) -> HandshakeState<Self, Initiator, P::PreMessages, P::Messages, CP> {
-        HandshakeState::new(provider, prologue)
-    }
-
-    /// Begin a handshake as the **responder**.
-    ///
-    /// The `prologue` is mixed into the handshake hash before any
-    /// tokens are processed. Both sides must use the same prologue.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// type Channel = IKpsk1;
-    ///
-    /// let hs = Channel::respond(provider, &[])
-    ///     .set_s(our_static)?;
-    /// ```
-    pub fn respond<CP: crate::provider::DhProviderAsync<Cu>>(
-        provider: CP,
-        prologue: &[u8],
-    ) -> HandshakeState<Self, Responder, P::PreMessages, P::Messages, CP> {
-        HandshakeState::new(provider, prologue)
-    }
 }
 
 #[cfg(test)]

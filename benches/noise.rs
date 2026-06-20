@@ -11,53 +11,104 @@ use hiss::provider::EphemeralOnly;
 use hiss::provider::ProviderExt;
 use hiss::psk::Psk;
 use rand::{SeedableRng, rngs::StdRng};
+use std::cell::RefCell;
+use std::collections::VecDeque;
+use std::io::Cursor;
+use std::rc::Rc;
 
-// ── Helpers ─────────────────────────────────────────────────────
+// ── In-memory pipe for multi-message handshakes ─────────────────
 
-/// Tokio runtime shared across benchmarks.
-fn rt() -> tokio::runtime::Runtime {
-    tokio::runtime::Builder::new_current_thread()
-        .build()
-        .unwrap()
+/// A linked in-memory `Read + Write` endpoint pair; `a`'s writes are
+/// `b`'s reads and vice versa. Lets a multi-message hiss↔hiss handshake
+/// run interleaved on one thread over the blocking driver.
+#[derive(Clone)]
+struct BenchPipe {
+    inbound: Rc<RefCell<VecDeque<u8>>>,
+    outbound: Rc<RefCell<VecDeque<u8>>>,
+}
+
+impl BenchPipe {
+    fn pair() -> (BenchPipe, BenchPipe) {
+        let l = Rc::new(RefCell::new(VecDeque::new()));
+        let r = Rc::new(RefCell::new(VecDeque::new()));
+        (
+            BenchPipe {
+                inbound: r.clone(),
+                outbound: l.clone(),
+            },
+            BenchPipe {
+                inbound: l,
+                outbound: r,
+            },
+        )
+    }
+}
+
+impl std::io::Read for BenchPipe {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let mut q = self.inbound.borrow_mut();
+        let n = q.len().min(buf.len());
+        for slot in buf.iter_mut().take(n) {
+            *slot = q.pop_front().unwrap();
+        }
+        Ok(n)
+    }
+}
+
+impl std::io::Write for BenchPipe {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.outbound.borrow_mut().extend(buf.iter().copied());
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 // ── N pattern ───────────────────────────────────────────────────
+//
+// Driven over the blocking [`SyncHandshake`] driver: `EphemeralOnly` is
+// a synchronous `DhProvider`, so the handshake runs with no executor.
+// The initiator streams into a `Vec`; the responder reads it back from a
+// `Cursor`.
 
 fn bench_n_hiss(c: &mut Criterion) {
-    let rt = rt();
-
     c.bench_function("noise_N_hiss", |b| {
         b.iter(|| {
-            rt.block_on(async {
-                let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
+            let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
 
-                let responder_static = provider.generate::<P256>().unwrap();
-                let responder_pub = provider.public(&responder_static).unwrap();
+            let responder_static = provider.generate::<P256>().unwrap();
+            let responder_pub = provider.public(&responder_static).unwrap();
 
-                type NoiseSeal = N;
+            type NoiseSeal = N;
 
-                // Initiator seals
-                let sealer = NoiseSeal::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[])
-                    .set_rs(responder_pub);
-                let mut msg_buf = [0u8; 81];
-                let (msg, mut i_transport) =
-                    sealer.e(&mut msg_buf).await.unwrap().es().await.unwrap();
+            // Initiator seals (msg1 → Vec)
+            let sealer = SyncHandshake::<NoiseSeal, Initiator, _, _, _, _>::initiate(
+                EphemeralOnly::new(StdRng::from_os_rng()),
+                &[],
+                Vec::new(),
+            )
+            .set_rs(responder_pub);
+            let (mut i_transport, wire) = sealer.e().unwrap().es().unwrap().into_parts();
 
-                // Responder opens
-                let opener = NoiseSeal::respond(EphemeralOnly::new(StdRng::from_os_rng()), &[])
-                    .set_s(responder_static)
-                    .unwrap();
-                let (_, recv) = opener.read(msg).unwrap().e().await.unwrap();
-                let mut r_transport = recv.es().await.unwrap();
+            // Responder opens (reads msg1 from the captured wire)
+            let opener = SyncHandshake::<NoiseSeal, Responder, _, _, _, _>::respond(
+                EphemeralOnly::new(StdRng::from_os_rng()),
+                &[],
+                Cursor::new(wire),
+            )
+            .set_s(responder_static)
+            .unwrap();
+            let (_, recv) = opener.recv().e().unwrap();
+            let (mut r_transport, _) = recv.es().unwrap().into_parts();
 
-                // Transport round-trip
-                let plaintext = b"benchmark payload";
-                let mut ct = [0u8; 64];
-                let ct_len = i_transport.send(plaintext, &mut ct).unwrap();
-                let mut pt = [0u8; 64];
-                let pt_len = r_transport.receive(&ct[..ct_len], &mut pt).unwrap();
-                assert_eq!(&pt[..pt_len], plaintext);
-            });
+            // Transport round-trip
+            let plaintext = b"benchmark payload";
+            let mut ct = [0u8; 64];
+            let ct_len = i_transport.send(plaintext, &mut ct).unwrap();
+            let mut pt = [0u8; 64];
+            let pt_len = r_transport.receive(&ct[..ct_len], &mut pt).unwrap();
+            assert_eq!(&pt[..pt_len], plaintext);
         });
     });
 }
@@ -107,78 +158,66 @@ fn bench_n_snow(c: &mut Criterion) {
 // ── IKpsk1 pattern ──────────────────────────────────────────────
 
 fn bench_ikpsk1_hiss(c: &mut Criterion) {
-    let rt = rt();
-
     c.bench_function("noise_IKpsk1_hiss", |b| {
         b.iter(|| {
-            rt.block_on(async {
-                let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
+            let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
 
-                let i_static = provider.generate::<P256>().unwrap();
-                let r_static = provider.generate::<P256>().unwrap();
-                let r_pub = provider.public(&r_static).unwrap();
-                let psk = Psk::from_bytes([0xAA; 32]);
+            let i_static = provider.generate::<P256>().unwrap();
+            let r_static = provider.generate::<P256>().unwrap();
+            let r_pub = provider.public(&r_static).unwrap();
+            let psk = Psk::from_bytes([0xAA; 32]);
 
-                type Proto = IKpsk1;
+            type Proto = IKpsk1;
 
-                // Message 1: -> e, es, s, ss, psk
-                let i_hs =
-                    Proto::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(r_pub);
-                let mut msg1_buf = [0u8; 162];
-                let (msg1, i_hs) = i_hs
-                    .e(&mut msg1_buf)
-                    .await
-                    .unwrap()
-                    .es()
-                    .await
-                    .unwrap()
-                    .s(i_static)
-                    .await
-                    .unwrap()
-                    .ss()
-                    .await
-                    .unwrap()
-                    .psk(&psk)
-                    .await
-                    .unwrap();
-                let msg1 = msg1.to_vec();
+            let (i_pipe, r_pipe) = BenchPipe::pair();
+            let i_hs = SyncHandshake::<Proto, Initiator, _, _, _, _>::initiate(
+                EphemeralOnly::new(StdRng::from_os_rng()),
+                &[],
+                i_pipe,
+            )
+            .set_rs(r_pub);
+            let r_hs = SyncHandshake::<Proto, Responder, _, _, _, _>::respond(
+                EphemeralOnly::new(StdRng::from_os_rng()),
+                &[],
+                r_pipe,
+            )
+            .set_s(r_static)
+            .unwrap();
 
-                // Responder reads msg1
-                let r_hs = Proto::respond(EphemeralOnly::new(StdRng::from_os_rng()), &[])
-                    .set_s(r_static)
-                    .unwrap();
-                let (_, recv) = r_hs.read(&msg1).unwrap().e().await.unwrap();
-                let recv = recv.es().await.unwrap();
-                let (_, recv) = recv.s().await.unwrap();
-                let recv = recv.ss().await.unwrap();
-                let r_hs = recv.psk(&psk).await.unwrap();
+            // Message 1: -> e, es, s, ss, psk
+            let i_hs = i_hs
+                .e()
+                .unwrap()
+                .es()
+                .unwrap()
+                .s(i_static)
+                .unwrap()
+                .ss()
+                .unwrap()
+                .psk(&psk)
+                .unwrap();
 
-                // Message 2: <- e, ee, se
-                let mut msg2_buf = [0u8; 81];
-                let (msg2, mut r_transport) = r_hs
-                    .e(&mut msg2_buf)
-                    .await
-                    .unwrap()
-                    .ee()
-                    .await
-                    .unwrap()
-                    .se()
-                    .await
-                    .unwrap();
-                let msg2 = msg2.to_vec();
+            // Responder reads msg1
+            let (_, recv) = r_hs.recv().e().unwrap();
+            let recv = recv.es().unwrap();
+            let (_, recv) = recv.s().unwrap();
+            let recv = recv.ss().unwrap();
+            let r_hs = recv.psk(&psk).unwrap();
 
-                // Initiator reads msg2
-                let (_, recv) = i_hs.read(&msg2).unwrap().e().await.unwrap();
-                let mut i_transport = recv.ee().await.unwrap().se().await.unwrap();
+            // Message 2: <- e, ee, se
+            let (mut r_transport, _) = r_hs.e().unwrap().ee().unwrap().se().unwrap().into_parts();
 
-                // Transport round-trip
-                let plaintext = b"benchmark payload";
-                let mut ct = [0u8; 64];
-                let ct_len = i_transport.send(plaintext, &mut ct).unwrap();
-                let mut pt = [0u8; 64];
-                let pt_len = r_transport.receive(&ct[..ct_len], &mut pt).unwrap();
-                assert_eq!(&pt[..pt_len], plaintext);
-            });
+            // Initiator reads msg2
+            let (_, recv) = i_hs.recv().e().unwrap();
+            let (mut i_transport, _) = recv.ee().unwrap().se().unwrap().into_parts();
+
+            // Transport round-trip
+            let plaintext = b"benchmark payload";
+            let mut ct = [0u8; 64];
+            let ct_len = i_transport.send(plaintext, &mut ct).unwrap();
+            let mut pt = [0u8; 64];
+            let pt_len = r_transport.receive(&ct[..ct_len], &mut pt).unwrap();
+            assert_eq!(&pt[..pt_len], plaintext);
         });
     });
 }
@@ -241,10 +280,8 @@ fn bench_ikpsk1_snow(c: &mut Criterion) {
 // ── Transport throughput ────────────────────────────────────────
 
 fn bench_transport_hiss(c: &mut Criterion) {
-    let rt = rt();
-
     // Set up a completed N handshake, then benchmark transport only.
-    let (mut sender, mut receiver) = rt.block_on(async {
+    let (mut sender, mut receiver) = {
         let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
 
         let r_static = provider.generate::<P256>().unwrap();
@@ -252,19 +289,26 @@ fn bench_transport_hiss(c: &mut Criterion) {
 
         type NoiseSeal = N;
 
-        let sealer =
-            NoiseSeal::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(r_pub);
-        let mut msg_buf = [0u8; 81];
-        let (msg, i_transport) = sealer.e(&mut msg_buf).await.unwrap().es().await.unwrap();
+        let sealer = SyncHandshake::<NoiseSeal, Initiator, _, _, _, _>::initiate(
+            EphemeralOnly::new(StdRng::from_os_rng()),
+            &[],
+            Vec::new(),
+        )
+        .set_rs(r_pub);
+        let (i_transport, wire) = sealer.e().unwrap().es().unwrap().into_parts();
 
-        let opener = NoiseSeal::respond(EphemeralOnly::new(StdRng::from_os_rng()), &[])
-            .set_s(r_static)
-            .unwrap();
-        let (_, recv) = opener.read(msg).unwrap().e().await.unwrap();
-        let r_transport = recv.es().await.unwrap();
+        let opener = SyncHandshake::<NoiseSeal, Responder, _, _, _, _>::respond(
+            EphemeralOnly::new(StdRng::from_os_rng()),
+            &[],
+            Cursor::new(wire),
+        )
+        .set_s(r_static)
+        .unwrap();
+        let (_, recv) = opener.recv().e().unwrap();
+        let (r_transport, _) = recv.es().unwrap().into_parts();
 
         (i_transport, r_transport)
-    });
+    };
 
     let plaintext = [0x42u8; 1024];
     let mut ct = [0u8; 1056]; // 1024 + 16 tag + headroom

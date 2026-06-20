@@ -1,35 +1,30 @@
-//! Per-token method implementations on [`Sending`] and [`Receiving`].
+//! Shared per-token crypto for the handshake drivers.
 //!
-//! Each token (`E`, `S`, `Es`, `Ee`, `Se`, `Psk`) gets method
-//! implementations with **three non-overlapping return types** per
-//! context (send/recv):
+//! These provider-driven free functions perform the Noise per-token
+//! cryptography on the runtime [`HandshakeInner`] state. The async
+//! driver ([`AsyncHandshake`](super::io_async::AsyncHandshake)) and the
+//! internal seal helpers ([`seal`](super::seal)) call them directly; the
+//! blocking driver ([`SyncHandshake`](super::io_sync::SyncHandshake))
+//! reuses the provider-free helpers here (`recv_e`/`recv_s`/`send_s`/
+//! `send_payload`/`recv_payload`/`do_psk`/`recv_to_transport`) and has
+//! its own synchronous mirrors of the DH/ephemeral steps that call the
+//! provider.
 //!
-//! 1. More tokens remain in this message → return the same wrapper
-//!    with the token consumed from the Cons-list.
-//! 2. Last token in this message, more messages remain → return
-//!    next `HandshakeState` (send also yields `&[u8]`).
-//! 3. Last token in the last message → return `Transport`
-//!    (send also yields `&[u8]`).
-//!
-//! On the receiving side no bytes are returned — the caller already
-//! provided them via `read(&msg)`. Revealing tokens (`E`, `S`)
-//! additionally return the revealed `PublicKey`.
-//!
-//! Role-dependent DH tokens (`Es`, `Se`) have separate impls for
-//! [`Initiator`] and [`Responder`].
+//! Each function reads/writes the borrowed [`SendBuffer`]/[`RecvBuffer`]
+//! scratch the driver hands it, and threads the symmetric state forward.
+//! Role-dependent DH tokens (`Es`, `Se`) have separate
+//! initiator/responder functions.
 
 use super::Protocol;
 use super::buffers::{RecvBuffer, SendBuffer};
 use super::cipher::Cipher;
 use super::error::HandshakeError;
-use super::handshake::{HandshakeInner, HandshakeState, Receiving, Sending};
+use super::handshake::HandshakeInner;
 use super::hash::Hash;
-use super::role::{Initiator, Responder, Role};
-use super::tokens::*;
+use super::role::Role;
 use super::transport::Transport;
 use crate::curve::{Curve, DhCurve};
 use crate::provider::{CryptoKeyProvider, DhProviderAsync};
-use std::marker::PhantomData;
 
 // ═══════════════════════════════════════════════════════════════
 //  Payload helpers — EncryptAndHash("") / DecryptAndHash("")
@@ -87,60 +82,13 @@ where
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  Finalization helpers
+//  Finalization
 // ═══════════════════════════════════════════════════════════════
 
-fn send_to_handshake_state<'a, N, R, MsgRest, CP>(
-    inner: HandshakeInner<N::Curve, N::Cipher, N::Hash, CP>,
-    buffer: SendBuffer<'a>,
-) -> (&'a [u8], HandshakeState<N, R, Nil, MsgRest, CP>)
-where
-    N: Protocol,
-    CP: DhProviderAsync<N::Curve>,
-{
-    (
-        buffer.finish(),
-        HandshakeState {
-            inner,
-            _marker: PhantomData,
-        },
-    )
-}
-
-fn send_to_transport<'a, N, R, CP>(
-    inner: HandshakeInner<N::Curve, N::Cipher, N::Hash, CP>,
-    buffer: SendBuffer<'a>,
-) -> (&'a [u8], Transport<N>)
-where
-    N: Protocol,
-    R: Role,
-    CP: DhProviderAsync<N::Curve>,
-{
-    let session_id = inner.symmetric.handshake_hash().to_vec().into();
-    let local_e = inner.e_pub;
-    let remote_e = inner.re;
-    let (c1, c2) = inner.symmetric.split();
-    let transport = if R::IS_INITIATOR {
-        Transport::new(c1, c2, session_id, local_e, remote_e)
-    } else {
-        Transport::new(c2, c1, session_id, local_e, remote_e)
-    };
-    (buffer.finish(), transport)
-}
-
-fn recv_to_handshake_state<N, R, MsgRest, CP>(
-    inner: HandshakeInner<N::Curve, N::Cipher, N::Hash, CP>,
-) -> HandshakeState<N, R, Nil, MsgRest, CP>
-where
-    N: Protocol,
-    CP: DhProviderAsync<N::Curve>,
-{
-    HandshakeState {
-        inner,
-        _marker: PhantomData,
-    }
-}
-
+/// Split the symmetric state into the post-handshake [`Transport`].
+///
+/// Called by both drivers (and the seal helpers) once the final token
+/// of the last message has been processed.
 pub(crate) fn recv_to_transport<N, R, CP>(
     inner: HandshakeInner<N::Curve, N::Cipher, N::Hash, CP>,
 ) -> Transport<N>
@@ -272,6 +220,11 @@ where
     Ok(revealed)
 }
 
+// `do_ee` / `do_se_*` / `do_ss` are consumed only by the async driver
+// (`io_async`); the seal helpers use `send_e` + `do_es_*` and the sync
+// driver mirrors the DH steps itself. Gate them to the async-io feature
+// so a default build does not carry dead code.
+#[cfg(feature = "async-io")]
 pub(crate) async fn do_ee<Cu, Ci, H, CP>(
     inner: &mut HandshakeInner<Cu, Ci, H, CP>,
 ) -> Result<(), HandshakeError>
@@ -350,6 +303,7 @@ where
     Ok(())
 }
 
+#[cfg(feature = "async-io")]
 pub(crate) async fn do_se_initiator<Cu, Ci, H, CP>(
     inner: &mut HandshakeInner<Cu, Ci, H, CP>,
 ) -> Result<(), HandshakeError>
@@ -374,6 +328,7 @@ where
     Ok(())
 }
 
+#[cfg(feature = "async-io")]
 pub(crate) async fn do_se_responder<Cu, Ci, H, CP>(
     inner: &mut HandshakeInner<Cu, Ci, H, CP>,
 ) -> Result<(), HandshakeError>
@@ -401,6 +356,7 @@ where
     Ok(())
 }
 
+#[cfg(feature = "async-io")]
 pub(crate) async fn do_ss<Cu, Ci, H, CP>(
     inner: &mut HandshakeInner<Cu, Ci, H, CP>,
 ) -> Result<(), HandshakeError>
@@ -437,547 +393,4 @@ where
 {
     inner.symmetric.mix_key_and_hash(psk.as_bytes());
     Ok(())
-}
-
-// ═══════════════════════════════════════════════════════════════
-//  Macro: three-variant impls for a send token
-// ═══════════════════════════════════════════════════════════════
-
-/// Generate three `impl` blocks for a send-side token method.
-///
-/// The body block has access to `inner: &mut HandshakeInner` and
-/// `buffer: &mut SendBuffer<'a>` plus any declared args.
-macro_rules! send_token {
-    (
-        role: $R:ty,
-        token: $Token:ty,
-        method: $method:ident ($($arg:ident : $arg_ty:ty),*),
-        bounds: [$($extra:tt)*],
-        body: |$inner:ident, $buf:ident| { $($logic:tt)* }
-    ) => {
-        // Variant 1: more tokens after this one.
-        impl<'a, N, Next, More, MsgRest, CP>
-            Sending<'a, N, $R, Cons<$Token, Cons<Next, More>>, MsgRest, CP>
-        where
-            N: Protocol,
-            <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
-            CP: DhProviderAsync<N::Curve>,
-            $($extra)*
-        {
-            pub async fn $method(
-                mut self, $($arg: $arg_ty,)*
-            ) -> Result<Sending<'a, N, $R, Cons<Next, More>, MsgRest, CP>, HandshakeError> {
-                let $inner = &mut self.inner;
-                let $buf = &mut self.buffer;
-                $($logic)*
-                Ok(Sending { inner: self.inner, buffer: self.buffer, _marker: PhantomData })
-            }
-        }
-
-        // Variant 2: last token, more messages.
-        impl<'a, N, NextMsg, MoreMsgs, CP>
-            Sending<'a, N, $R, Cons<$Token, Nil>, Cons<NextMsg, MoreMsgs>, CP>
-        where
-            N: Protocol,
-            <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
-            CP: DhProviderAsync<N::Curve>,
-            $($extra)*
-        {
-            pub async fn $method(
-                mut self, $($arg: $arg_ty,)*
-            ) -> Result<(&'a [u8], HandshakeState<N, $R, Nil, Cons<NextMsg, MoreMsgs>, CP>), HandshakeError> {
-                let $inner = &mut self.inner;
-                let $buf = &mut self.buffer;
-                $($logic)*
-                send_payload(&mut self.inner, &mut self.buffer)?;
-                Ok(send_to_handshake_state::<N, $R, _, CP>(self.inner, self.buffer))
-            }
-        }
-
-        // Variant 3: last token, last message.
-        impl<'a, N, CP>
-            Sending<'a, N, $R, Cons<$Token, Nil>, Nil, CP>
-        where
-            N: Protocol,
-            <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
-            CP: DhProviderAsync<N::Curve>,
-            $($extra)*
-        {
-            pub async fn $method(
-                mut self, $($arg: $arg_ty,)*
-            ) -> Result<(&'a [u8], Transport<N>), HandshakeError> {
-                let $inner = &mut self.inner;
-                let $buf = &mut self.buffer;
-                $($logic)*
-                send_payload(&mut self.inner, &mut self.buffer)?;
-                Ok(send_to_transport::<N, $R, CP>(self.inner, self.buffer))
-            }
-        }
-    };
-}
-
-/// Same for recv-side — but does **not** return bytes.
-///
-/// On the receiving side the caller already provided the bytes via
-/// `read(&msg)`, so there is nothing useful to hand back. The return
-/// type is just the next state.
-macro_rules! recv_token {
-    (
-        role: $R:ty,
-        token: $Token:ty,
-        method: $method:ident ($($arg:ident : $arg_ty:ty),*),
-        bounds: [$($extra:tt)*],
-        body: |$inner:ident, $buf:ident| { $($logic:tt)* }
-    ) => {
-        // Variant 1: more tokens.
-        impl<'a, N, Next, More, MsgRest, CP>
-            Receiving<'a, N, $R, Cons<$Token, Cons<Next, More>>, MsgRest, CP>
-        where
-            N: Protocol,
-            <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
-            CP: DhProviderAsync<N::Curve>,
-            $($extra)*
-        {
-            pub async fn $method(
-                mut self, $($arg: $arg_ty,)*
-            ) -> Result<Receiving<'a, N, $R, Cons<Next, More>, MsgRest, CP>, HandshakeError> {
-                let $inner = &mut self.inner;
-                let $buf = &mut self.buffer;
-                $($logic)*
-                Ok(Receiving { inner: self.inner, buffer: self.buffer, _marker: PhantomData })
-            }
-        }
-
-        // Variant 2: last token, more messages.
-        impl<'a, N, NextMsg, MoreMsgs, CP>
-            Receiving<'a, N, $R, Cons<$Token, Nil>, Cons<NextMsg, MoreMsgs>, CP>
-        where
-            N: Protocol,
-            <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
-            CP: DhProviderAsync<N::Curve>,
-            $($extra)*
-        {
-            pub async fn $method(
-                mut self, $($arg: $arg_ty,)*
-            ) -> Result<HandshakeState<N, $R, Nil, Cons<NextMsg, MoreMsgs>, CP>, HandshakeError> {
-                let $inner = &mut self.inner;
-                let $buf = &mut self.buffer;
-                $($logic)*
-                recv_payload(&mut self.inner, &mut self.buffer)?;
-                Ok(recv_to_handshake_state::<N, $R, _, CP>(self.inner))
-            }
-        }
-
-        // Variant 3: last token, last message.
-        impl<'a, N, CP>
-            Receiving<'a, N, $R, Cons<$Token, Nil>, Nil, CP>
-        where
-            N: Protocol,
-            <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
-            CP: DhProviderAsync<N::Curve>,
-            $($extra)*
-        {
-            pub async fn $method(
-                mut self, $($arg: $arg_ty,)*
-            ) -> Result<Transport<N>, HandshakeError> {
-                let $inner = &mut self.inner;
-                let $buf = &mut self.buffer;
-                $($logic)*
-                recv_payload(&mut self.inner, &mut self.buffer)?;
-                Ok(recv_to_transport::<N, $R, CP>(self.inner))
-            }
-        }
-    };
-}
-
-// ═══════════════════════════════════════════════════════════════
-//  Macro: recv token that reveals a public key
-// ═══════════════════════════════════════════════════════════════
-
-/// Generate three `impl` blocks for a recv-side token that reveals
-/// a public key (E or S).
-///
-/// The return type pairs the revealed `Cu::PublicKey` with the next
-/// state — the caller sees the key at the point it is revealed.
-macro_rules! recv_reveal_token {
-    (
-        role: $R:ty,
-        token: $Token:ty,
-        method: $method:ident ($($arg:ident : $arg_ty:ty),*),
-        bounds: [$($extra:tt)*],
-        body: |$inner:ident, $buf:ident| { $($logic:tt)* }
-    ) => {
-        // Variant 1: more tokens after this one.
-        impl<'a, N, Next, More, MsgRest, CP>
-            Receiving<'a, N, $R, Cons<$Token, Cons<Next, More>>, MsgRest, CP>
-        where
-            N: Protocol,
-            <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
-            CP: DhProviderAsync<N::Curve>,
-            $($extra)*
-        {
-            pub async fn $method(
-                mut self, $($arg: $arg_ty,)*
-            ) -> Result<(<N::Curve as Curve>::PublicKey, Receiving<'a, N, $R, Cons<Next, More>, MsgRest, CP>), HandshakeError> {
-                let $inner = &mut self.inner;
-                let $buf = &mut self.buffer;
-                let revealed = { $($logic)* };
-                Ok((revealed, Receiving { inner: self.inner, buffer: self.buffer, _marker: PhantomData }))
-            }
-        }
-
-        // Variant 2: last token, more messages.
-        impl<'a, N, NextMsg, MoreMsgs, CP>
-            Receiving<'a, N, $R, Cons<$Token, Nil>, Cons<NextMsg, MoreMsgs>, CP>
-        where
-            N: Protocol,
-            <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
-            CP: DhProviderAsync<N::Curve>,
-            $($extra)*
-        {
-            pub async fn $method(
-                mut self, $($arg: $arg_ty,)*
-            ) -> Result<(<N::Curve as Curve>::PublicKey, HandshakeState<N, $R, Nil, Cons<NextMsg, MoreMsgs>, CP>), HandshakeError> {
-                let $inner = &mut self.inner;
-                let $buf = &mut self.buffer;
-                let revealed = { $($logic)* };
-                recv_payload(&mut self.inner, &mut self.buffer)?;
-                let hs = recv_to_handshake_state::<N, $R, _, CP>(self.inner);
-                Ok((revealed, hs))
-            }
-        }
-
-        // Variant 3: last token, last message.
-        impl<'a, N, CP>
-            Receiving<'a, N, $R, Cons<$Token, Nil>, Nil, CP>
-        where
-            N: Protocol,
-            <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
-            CP: DhProviderAsync<N::Curve>,
-            $($extra)*
-        {
-            pub async fn $method(
-                mut self, $($arg: $arg_ty,)*
-            ) -> Result<(<N::Curve as Curve>::PublicKey, Transport<N>), HandshakeError> {
-                let $inner = &mut self.inner;
-                let $buf = &mut self.buffer;
-                let revealed = { $($logic)* };
-                recv_payload(&mut self.inner, &mut self.buffer)?;
-                let transport = recv_to_transport::<N, $R, CP>(self.inner);
-                Ok((revealed, transport))
-            }
-        }
-    };
-}
-
-// ═══════════════════════════════════════════════════════════════
-//  Token: E (role-independent)
-// ═══════════════════════════════════════════════════════════════
-
-send_token! {
-    role: Initiator, token: E, method: e(), bounds: [],
-    body: |inner, buf| { send_e(inner, buf).await?; }
-}
-send_token! {
-    role: Responder, token: E, method: e(), bounds: [],
-    body: |inner, buf| { send_e(inner, buf).await?; }
-}
-recv_reveal_token! {
-    role: Initiator, token: E, method: e(), bounds: [],
-    body: |inner, buf| { recv_e(inner, buf)? }
-}
-recv_reveal_token! {
-    role: Responder, token: E, method: e(), bounds: [],
-    body: |inner, buf| { recv_e(inner, buf)? }
-}
-
-// ═══════════════════════════════════════════════════════════════
-//  Token: S
-// ═══════════════════════════════════════════════════════════════
-
-send_token! {
-    role: Initiator, token: S, method: s(static_key: CP::PrivateKey), bounds: [],
-    body: |inner, buf| { send_s(inner, buf, static_key)?; }
-}
-send_token! {
-    role: Responder, token: S, method: s(static_key: CP::PrivateKey), bounds: [],
-    body: |inner, buf| { send_s(inner, buf, static_key)?; }
-}
-recv_reveal_token! {
-    role: Initiator, token: S, method: s(), bounds: [],
-    body: |inner, buf| { recv_s(inner, buf)? }
-}
-recv_reveal_token! {
-    role: Responder, token: S, method: s(), bounds: [],
-    body: |inner, buf| { recv_s(inner, buf)? }
-}
-
-// ═══════════════════════════════════════════════════════════════
-//  Token: Ee (role-independent)
-// ═══════════════════════════════════════════════════════════════
-
-send_token! {
-    role: Initiator, token: Ee, method: ee(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
-    body: |inner, _buf| { do_ee(inner).await?; }
-}
-send_token! {
-    role: Responder, token: Ee, method: ee(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
-    body: |inner, _buf| { do_ee(inner).await?; }
-}
-recv_token! {
-    role: Initiator, token: Ee, method: ee(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
-    body: |inner, _buf| { do_ee(inner).await?; }
-}
-recv_token! {
-    role: Responder, token: Ee, method: ee(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
-    body: |inner, _buf| { do_ee(inner).await?; }
-}
-
-// ═══════════════════════════════════════════════════════════════
-//  Token: Es (role-dependent)
-// ═══════════════════════════════════════════════════════════════
-
-// Initiator Es: DH(e, rs). Remote static key read from state (set via set_rs pre-message).
-send_token! {
-    role: Initiator, token: Es, method: es(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
-    body: |inner, _buf| { do_es_initiator(inner).await?; }
-}
-recv_token! {
-    role: Initiator, token: Es, method: es(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
-    body: |inner, _buf| { do_es_initiator(inner).await?; }
-}
-
-// Responder Es: DH(s, re). Keys already in state.
-send_token! {
-    role: Responder, token: Es, method: es(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
-    body: |inner, _buf| { do_es_responder(inner).await?; }
-}
-recv_token! {
-    role: Responder, token: Es, method: es(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
-    body: |inner, _buf| { do_es_responder(inner).await?; }
-}
-
-// ═══════════════════════════════════════════════════════════════
-//  Token: Se (role-dependent)
-// ═══════════════════════════════════════════════════════════════
-
-// Initiator Se: DH(s, re). Keys already in state.
-send_token! {
-    role: Initiator, token: Se, method: se(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
-    body: |inner, _buf| { do_se_initiator(inner).await?; }
-}
-recv_token! {
-    role: Initiator, token: Se, method: se(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
-    body: |inner, _buf| { do_se_initiator(inner).await?; }
-}
-
-// Responder Se: DH(e, rs). Keys already in state.
-send_token! {
-    role: Responder, token: Se, method: se(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
-    body: |inner, _buf| { do_se_responder(inner).await?; }
-}
-recv_token! {
-    role: Responder, token: Se, method: se(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
-    body: |inner, _buf| { do_se_responder(inner).await?; }
-}
-
-// ═══════════════════════════════════════════════════════════════
-//  Token: Ss (role-independent — both sides DH their own s with rs)
-// ═══════════════════════════════════════════════════════════════
-
-send_token! {
-    role: Initiator, token: Ss, method: ss(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
-    body: |inner, _buf| { do_ss(inner).await?; }
-}
-send_token! {
-    role: Responder, token: Ss, method: ss(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
-    body: |inner, _buf| { do_ss(inner).await?; }
-}
-recv_token! {
-    role: Initiator, token: Ss, method: ss(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
-    body: |inner, _buf| { do_ss(inner).await?; }
-}
-recv_token! {
-    role: Responder, token: Ss, method: ss(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
-    body: |inner, _buf| { do_ss(inner).await?; }
-}
-
-// ═══════════════════════════════════════════════════════════════
-//  Token: Psk (role-independent)
-// ═══════════════════════════════════════════════════════════════
-
-send_token! {
-    role: Initiator, token: Psk, method: psk(psk_key: &crate::psk::Psk), bounds: [],
-    body: |inner, _buf| { do_psk(inner, psk_key)?; }
-}
-send_token! {
-    role: Responder, token: Psk, method: psk(psk_key: &crate::psk::Psk), bounds: [],
-    body: |inner, _buf| { do_psk(inner, psk_key)?; }
-}
-recv_token! {
-    role: Initiator, token: Psk, method: psk(psk_key: &crate::psk::Psk), bounds: [],
-    body: |inner, _buf| { do_psk(inner, psk_key)?; }
-}
-recv_token! {
-    role: Responder, token: Psk, method: psk(psk_key: &crate::psk::Psk), bounds: [],
-    body: |inner, _buf| { do_psk(inner, psk_key)?; }
-}
-
-// ═══════════════════════════════════════════════════════════════
-//  Entry points: HandshakeState → Sending
-// ═══════════════════════════════════════════════════════════════
-
-// When the first token of a send message is E.
-// Only available in the Ready stage.
-//
-// The entry is split into three mutually-exclusive impls mirroring the
-// `send_token!` finalizer variants, so a bare single-`E` send message
-// (`-> e`) can be finalized — the generic entry would leave such a message
-// in `Sending<…, Nil, …>` with no method to close it.
-
-// Variant 1: more tokens follow `E` in this message — return `Sending`
-// with `E` consumed, exactly as the original generic entry did.
-impl<N, R, Next, More, MsgRest, Dir, CP>
-    HandshakeState<N, R, Nil, Cons<Message<Dir, Cons<E, Cons<Next, More>>>, MsgRest>, CP>
-where
-    N: Protocol,
-    R: Role<SendDir = Dir>,
-    <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
-    CP: DhProviderAsync<N::Curve>,
-    Cons<E, Cons<Next, More>>:
-        WireSize<N::Curve, N::Cipher, true> + WireSize<N::Curve, N::Cipher, false>,
-{
-    /// Start a send message with the `E` token.
-    ///
-    /// `output` must be exactly the right size for this message.
-    /// Use [`noise_message_size!`](crate::noise_message_size) to compute the size at compile time.
-    pub async fn e(
-        self,
-        output: &mut [u8],
-    ) -> Result<Sending<'_, N, R, Cons<Next, More>, MsgRest, CP>, HandshakeError> {
-        let mut sending = self.begin_send(output);
-        send_e(&mut sending.inner, &mut sending.buffer).await?;
-        Ok(Sending {
-            inner: sending.inner,
-            buffer: sending.buffer,
-            _marker: PhantomData,
-        })
-    }
-}
-
-// Variant 2: `E` is the only token and more messages remain — write the
-// ephemeral, close the empty payload, and advance to the next message.
-impl<N, R, NextMsg, MoreMsgs, Dir, CP>
-    HandshakeState<N, R, Nil, Cons<Message<Dir, Cons<E, Nil>>, Cons<NextMsg, MoreMsgs>>, CP>
-where
-    N: Protocol,
-    R: Role<SendDir = Dir>,
-    <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
-    CP: DhProviderAsync<N::Curve>,
-    Cons<E, Nil>: WireSize<N::Curve, N::Cipher, true> + WireSize<N::Curve, N::Cipher, false>,
-{
-    /// Send a single-`E` message (`-> e`) when more messages follow.
-    ///
-    /// `output` must be exactly the right size for this message.
-    /// Use [`noise_message_size!`](crate::noise_message_size) to compute the size at compile time.
-    pub async fn e(
-        self,
-        output: &mut [u8],
-    ) -> Result<
-        (
-            &[u8],
-            HandshakeState<N, R, Nil, Cons<NextMsg, MoreMsgs>, CP>,
-        ),
-        HandshakeError,
-    > {
-        let mut sending = self.begin_send(output);
-        send_e(&mut sending.inner, &mut sending.buffer).await?;
-        send_payload(&mut sending.inner, &mut sending.buffer)?;
-        Ok(send_to_handshake_state::<N, R, _, CP>(
-            sending.inner,
-            sending.buffer,
-        ))
-    }
-}
-
-// Variant 3: `E` is the only token in the last message — write the
-// ephemeral, close the empty payload, and split into the transport.
-impl<N, R, Dir, CP> HandshakeState<N, R, Nil, Cons<Message<Dir, Cons<E, Nil>>, Nil>, CP>
-where
-    N: Protocol,
-    R: Role<SendDir = Dir>,
-    <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
-    CP: DhProviderAsync<N::Curve>,
-    Cons<E, Nil>: WireSize<N::Curve, N::Cipher, true> + WireSize<N::Curve, N::Cipher, false>,
-{
-    /// Send a single-`E` message (`-> e`) as the final handshake message.
-    ///
-    /// `output` must be exactly the right size for this message.
-    /// Use [`noise_message_size!`](crate::noise_message_size) to compute the size at compile time.
-    pub async fn e(self, output: &mut [u8]) -> Result<(&[u8], Transport<N>), HandshakeError> {
-        let mut sending = self.begin_send(output);
-        send_e(&mut sending.inner, &mut sending.buffer).await?;
-        send_payload(&mut sending.inner, &mut sending.buffer)?;
-        Ok(send_to_transport::<N, R, CP>(sending.inner, sending.buffer))
-    }
-}
-
-// When the first token of a send message is Psk.
-// Only available in the Ready stage.
-impl<N, R, Tokens, MsgRest, Dir, CP>
-    HandshakeState<N, R, Nil, Cons<Message<Dir, Cons<Psk, Tokens>>, MsgRest>, CP>
-where
-    N: Protocol,
-    R: Role<SendDir = Dir>,
-    <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
-    CP: DhProviderAsync<N::Curve>,
-    Cons<Psk, Tokens>: WireSize<N::Curve, N::Cipher, true> + WireSize<N::Curve, N::Cipher, false>,
-{
-    /// Start a send message with the `Psk` token.
-    ///
-    /// `output` must be exactly the right size for this message.
-    /// Use [`noise_message_size!`](crate::noise_message_size) to compute the size at compile time.
-    pub async fn psk<'a>(
-        self,
-        output: &'a mut [u8],
-        psk_key: &crate::psk::Psk,
-    ) -> Result<Sending<'a, N, R, Tokens, MsgRest, CP>, HandshakeError> {
-        let mut sending = self.begin_send(output);
-        do_psk(&mut sending.inner, psk_key)?;
-        Ok(Sending {
-            inner: sending.inner,
-            buffer: sending.buffer,
-            _marker: PhantomData,
-        })
-    }
-}
-
-// When the first token of a send message is S.
-// Only available in the Ready stage.
-impl<N, R, Tokens, MsgRest, Dir, CP>
-    HandshakeState<N, R, Nil, Cons<Message<Dir, Cons<S, Tokens>>, MsgRest>, CP>
-where
-    N: Protocol,
-    R: Role<SendDir = Dir>,
-    <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
-    CP: DhProviderAsync<N::Curve>,
-    Cons<S, Tokens>: WireSize<N::Curve, N::Cipher, true> + WireSize<N::Curve, N::Cipher, false>,
-{
-    /// Start a send message with the `S` token.
-    ///
-    /// `output` must be exactly the right size for this message.
-    /// Use [`noise_message_size!`](crate::noise_message_size) to compute the size at compile time.
-    pub async fn s(
-        self,
-        output: &mut [u8],
-        static_key: CP::PrivateKey,
-    ) -> Result<Sending<'_, N, R, Tokens, MsgRest, CP>, HandshakeError> {
-        let mut sending = self.begin_send(output);
-        send_s(&mut sending.inner, &mut sending.buffer, static_key)?;
-        Ok(Sending {
-            inner: sending.inner,
-            buffer: sending.buffer,
-            _marker: PhantomData,
-        })
-    }
 }

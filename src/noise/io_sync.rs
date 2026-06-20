@@ -72,7 +72,7 @@ use super::WellFormed;
 use super::buffers::{RecvBuffer, SendBuffer};
 use super::cipher::Cipher;
 use super::error::HandshakeError;
-use super::handshake::{HandshakeInner, HandshakeState};
+use super::handshake::HandshakeInner;
 use super::hash::Hash;
 use super::pattern::Pattern;
 use super::process::{
@@ -501,15 +501,8 @@ where
 {
     /// Begin a blocking handshake as the **initiator** over `stream`.
     pub fn initiate(provider: CP, prologue: &[u8], stream: Io) -> Self {
-        let core = HandshakeState::<
-            N,
-            Initiator,
-            <N::Pattern as Pattern>::PreMessages,
-            <N::Pattern as Pattern>::Messages,
-            CP,
-        >::new(provider, prologue);
         SyncHandshake {
-            inner: core.inner,
+            inner: HandshakeInner::new::<N>(provider, prologue),
             stream,
             _marker: PhantomData,
         }
@@ -531,15 +524,8 @@ where
 {
     /// Begin a blocking handshake as the **responder** over `stream`.
     pub fn respond(provider: CP, prologue: &[u8], stream: Io) -> Self {
-        let core = HandshakeState::<
-            N,
-            Responder,
-            <N::Pattern as Pattern>::PreMessages,
-            <N::Pattern as Pattern>::Messages,
-            CP,
-        >::new(provider, prologue);
         SyncHandshake {
-            inner: core.inner,
+            inner: HandshakeInner::new::<N>(provider, prologue),
             stream,
             _marker: PhantomData,
         }
@@ -1245,8 +1231,7 @@ sync_recv_token! {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::noise::{ChaChaPoly, IKpsk1, Initiator, K, N, P256, Responder};
-    use crate::noise_message_size;
+    use crate::noise::{IKpsk1, Initiator, K, N, P256, Responder};
     use crate::provider::EphemeralOnly;
     use crate::provider::ProviderExt;
     use crate::psk::Psk;
@@ -1466,15 +1451,14 @@ mod tests {
         assert_eq!(&opened[..opened_len], &payload);
     }
 
-    /// **Cross-check against the snow-verified buffer core.** A full
-    /// IKpsk1 handshake (`-> e,es,s,ss,psk` / `<- e,ee,se` — every token,
-    /// both messages) driven with the blocking `io_sync` **initiator**
-    /// against the async buffer-core **responder**. The buffer core is
-    /// the snow-interop-verified path, so any divergence (a swapped DH
-    /// role, a wrong byte count, a missed mix) surfaces as a tag failure
-    /// here. This anchors `io_sync`'s initiator-role helpers to snow.
+    /// **Full IKpsk1 round-trip over the blocking driver.** Every token
+    /// of both messages (`-> e,es,s,ss,psk` / `<- e,ee,se`) driven
+    /// hiss↔hiss over a shared in-memory [`Pipe`], exercising the
+    /// `io_sync` initiator-role helpers end-to-end. Cross-implementation
+    /// agreement (vs `snow`) is covered by `tests/snow_interop.rs`; this
+    /// test pins the matching session and revealed initiator static.
     #[tokio::test]
-    async fn ikpsk1_sync_initiator_vs_buffer_core() {
+    async fn ikpsk1_sync_round_trip() {
         let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
         let initiator_static = provider.generate::<P256>().unwrap();
         let initiator_pub = provider.public(&initiator_static).unwrap();
@@ -1489,6 +1473,10 @@ mod tests {
         let init_stream = Pipe {
             inbound: r2i.clone(),
             outbound: i2r.clone(),
+        };
+        let resp_stream = Pipe {
+            inbound: i2r.clone(),
+            outbound: r2i.clone(),
         };
 
         // io_sync initiator drives msg1 (-> e, es, s, ss, psk).
@@ -1509,88 +1497,9 @@ mod tests {
             .unwrap()
             .psk(&psk)
             .unwrap();
-        let msg1: Vec<u8> = i2r.borrow_mut().drain(..).collect();
-        assert_eq!(msg1.len(), 162);
+        assert_eq!(i2r.borrow().len(), 162);
 
-        // buffer-core responder consumes msg1 and produces msg2.
-        let r_hs = Channel::respond(EphemeralOnly::new(StdRng::from_os_rng()), &[])
-            .set_s(responder_static)
-            .unwrap();
-        let (_revealed_i_e, recv) = r_hs.read(&msg1).unwrap().e().await.unwrap();
-        let recv = recv.es().await.unwrap();
-        let (revealed_i_pub, recv) = recv.s().await.unwrap();
-        assert_eq!(revealed_i_pub, initiator_pub);
-        let recv = recv.ss().await.unwrap();
-        let r_hs = recv.psk(&psk).await.unwrap();
-
-        let mut msg2_buf = [0u8;
-            noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: true, keyed: true, tokens: [E, Ee, Se],)];
-        let (msg2, r_transport) = r_hs
-            .e(&mut msg2_buf)
-            .await
-            .unwrap()
-            .ee()
-            .await
-            .unwrap()
-            .se()
-            .await
-            .unwrap();
-        r2i.borrow_mut().extend(msg2.iter().copied());
-
-        // io_sync initiator consumes msg2 (<- e, ee, se).
-        let (_revealed_r_e, recv) = i_hs.recv().e().unwrap();
-        let i_transport = recv.ee().unwrap().se().unwrap();
-
-        // Both ends derived the same session.
-        assert_eq!(i_transport.transport.session_id(), r_transport.session_id());
-    }
-
-    /// Mirror of the above with roles flipped: blocking `io_sync`
-    /// **responder** against the async buffer-core **initiator** — anchors
-    /// `io_sync`'s responder-role helpers (`es`/`se`/`ss` responder DH,
-    /// `recv_s`, the `e`/`ee`/`se` send path) to the snow-verified core.
-    #[tokio::test]
-    async fn ikpsk1_sync_responder_vs_buffer_core() {
-        let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
-        let initiator_static = provider.generate::<P256>().unwrap();
-        let initiator_pub = provider.public(&initiator_static).unwrap();
-        let responder_static = provider.generate::<P256>().unwrap();
-        let responder_pub = provider.public(&responder_static).unwrap();
-        let psk = Psk::from_bytes([0xBB; 32]);
-
-        // buffer-core initiator builds msg1.
-        let i_hs =
-            Channel::initiate(EphemeralOnly::new(StdRng::from_os_rng()), &[]).set_rs(responder_pub);
-        let mut msg1_buf = [0u8;
-            noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: true, keyed: false, tokens: [E, Es, S, Ss, Psk],)];
-        let (msg1, i_hs) = i_hs
-            .e(&mut msg1_buf)
-            .await
-            .unwrap()
-            .es()
-            .await
-            .unwrap()
-            .s(initiator_static)
-            .await
-            .unwrap()
-            .ss()
-            .await
-            .unwrap()
-            .psk(&psk)
-            .await
-            .unwrap();
-        let msg1 = msg1.to_vec();
-
-        // io_sync responder consumes msg1 and produces msg2.
-        let (i2r, r2i) = (
-            Rc::new(RefCell::new(VecDeque::<u8>::new())),
-            Rc::new(RefCell::new(VecDeque::<u8>::new())),
-        );
-        i2r.borrow_mut().extend(msg1.iter().copied());
-        let resp_stream = Pipe {
-            inbound: i2r.clone(),
-            outbound: r2i.clone(),
-        };
+        // io_sync responder consumes msg1 and produces msg2 (<- e, ee, se).
         let r_hs = SyncHandshake::<Channel, Responder, _, _, _, _>::respond(
             EphemeralOnly::new(StdRng::from_os_rng()),
             &[],
@@ -1598,24 +1507,24 @@ mod tests {
         )
         .set_s(responder_static)
         .unwrap();
-        let (_e, recv) = r_hs.recv().e().unwrap();
+        let (_revealed_i_e, recv) = r_hs.recv().e().unwrap();
         let recv = recv.es().unwrap();
         let (revealed_i_pub, recv) = recv.s().unwrap();
         assert_eq!(revealed_i_pub, initiator_pub);
         let recv = recv.ss().unwrap();
-        // psk is msg1's last token with msg2 still pending → back to a
-        // SyncHandshake; the responder's next message is outgoing.
         let r_hs = recv.psk(&psk).unwrap();
         let r_transport = r_hs.e().unwrap().ee().unwrap().se().unwrap();
-        let msg2: Vec<u8> = r2i.borrow_mut().drain(..).collect();
-        assert_eq!(msg2.len(), 81);
+        assert_eq!(r2i.borrow().len(), 81);
 
-        // buffer-core initiator consumes msg2 (<- e, ee, se).
-        let (_re, recv) = i_hs.read(&msg2).unwrap().e().await.unwrap();
-        let i_transport = recv.ee().await.unwrap().se().await.unwrap();
+        // io_sync initiator consumes msg2 (<- e, ee, se).
+        let (_revealed_r_e, recv) = i_hs.recv().e().unwrap();
+        let i_transport = recv.ee().unwrap().se().unwrap();
 
         // Both ends derived the same session.
-        assert_eq!(i_transport.session_id(), r_transport.transport.session_id());
+        assert_eq!(
+            i_transport.transport.session_id(),
+            r_transport.transport.session_id()
+        );
     }
 
     /// Noise K (`-> e, es, ss`, pre `-> s, <- s`) round-trip over blocking
