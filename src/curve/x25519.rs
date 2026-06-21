@@ -16,8 +16,10 @@
 //! # Backend
 //!
 //! * **Software** ([`SoftwareX25519PrivateKey`], always available) —
-//!   pure-Rust implementation using `cryptoxide`'s `x25519`. Suitable
-//!   for tests, WASM, and any platform without hardware key storage.
+//!   pure-Rust implementation using `eccoxide`'s `protocol::x25519` (a
+//!   constant-time Montgomery ladder), shared with [`X448`](super::x448).
+//!   Suitable for tests, WASM, and any platform without hardware key
+//!   storage.
 //!
 //! There is **no** Apple Secure Enclave backend: the Secure Enclave is
 //! P-256-only, so X25519 is software on every platform.
@@ -25,8 +27,9 @@
 //! # Wire format and interop
 //!
 //! Public keys and shared secrets are plain 32-byte values; there is no
-//! point compression flag or KDF. `cryptoxide` clamps the scalar per
-//! RFC 7748 inside `dh`/`base`, exactly as `snow` does, so handshakes are
+//! point compression flag or KDF. `eccoxide` clamps the scalar and masks
+//! the u-coordinate's unused high bit per RFC 7748 inside every exchange,
+//! exactly as `snow` (and `cryptoxide`) do, so handshakes are
 //! byte-for-byte interoperable.
 //!
 //! Per RFC 7748, X25519 has small-order input points whose shared secret
@@ -37,7 +40,7 @@
 
 use std::fmt;
 
-use cryptoxide::x25519;
+use eccoxide::protocol::x25519;
 use packtool::Packed;
 use rand_core::{CryptoRng, RngCore};
 
@@ -134,10 +137,9 @@ impl fmt::Debug for X25519PublicKey {
 
 /// Software X25519 private key — 32 raw scalar bytes.
 ///
-/// The scalar is stored un-clamped; `cryptoxide` applies the RFC 7748
-/// clamp inside every `dh`/`base` call, so the on-wire and shared-secret
-/// bytes match `snow` and any conformant peer. The bytes are zeroised on
-/// drop.
+/// The scalar is stored un-clamped; `eccoxide` applies the RFC 7748 clamp
+/// inside every exchange, so the on-wire and shared-secret bytes match
+/// `snow` and any conformant peer. The bytes are zeroised on drop.
 ///
 /// This is the software backend — always available, and the only X25519
 /// backend (the Apple Secure Enclave is P-256-only).
@@ -168,7 +170,9 @@ impl SoftwareX25519PrivateKey {
 
     /// Return the corresponding public key (`X25519(scalar, 9)`).
     pub fn public_key(&self) -> X25519PublicKey {
-        let public: [u8; 32] = x25519::base(&x25519::SecretKey::from(self.secret)).into();
+        let public = x25519::SecretKey::from_bytes(self.secret)
+            .public_key()
+            .to_bytes();
         X25519PublicKey(public)
     }
 
@@ -178,11 +182,9 @@ impl SoftwareX25519PrivateKey {
     /// RFC 7748 a low-order peer key yields an all-zero secret rather than
     /// an error, matching the Noise `25519` DH function.
     pub fn dh(&self, peer: &X25519PublicKey) -> SharedSecret<32> {
-        let shared: [u8; 32] = x25519::dh(
-            &x25519::SecretKey::from(self.secret),
-            &x25519::PublicKey::from(peer.0),
-        )
-        .into();
+        let shared = x25519::SecretKey::from_bytes(self.secret)
+            .diffie_hellman(&x25519::PublicKey::from_bytes(peer.0))
+            .to_bytes();
         SharedSecret::new(shared)
     }
 
