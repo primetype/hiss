@@ -89,13 +89,13 @@ where
 ///
 /// Called by both drivers (and the seal helpers) once the final token
 /// of the last message has been processed.
-pub(crate) fn recv_to_transport<N, R, CP>(
-    inner: HandshakeInner<N::Curve, N::Cipher, N::Hash, CP>,
-) -> Transport<N>
+pub(crate) fn recv_to_transport<Proto, R, CP>(
+    inner: HandshakeInner<Proto::Curve, Proto::Cipher, Proto::Hash, CP>,
+) -> Transport<Proto>
 where
-    N: Protocol,
+    Proto: Protocol,
     R: Role,
-    CP: CryptoKeyProvider<N::Curve>,
+    CP: CryptoKeyProvider<Proto::Curve>,
 {
     let session_id = inner.symmetric.handshake_hash().to_vec().into();
     let local_e = inner.e_pub;

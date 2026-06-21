@@ -46,7 +46,7 @@
 //! code with an in-memory `Io` (e.g. a duplex pipe) substituted for the
 //! socket — nothing else changes.
 
-use hiss::noise::{P256, Transport, XX};
+use hiss::noise::{Blake2b, ChaChaPoly, Noise, P256, Transport, pattern};
 use hiss::provider::{EphemeralOnly, ProviderExt};
 
 use rand::{SeedableRng, rngs::StdRng};
@@ -54,6 +54,10 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
+
+/// The protocol this channel runs: `Noise_XX_P256_ChaChaPoly_BLAKE2b`.
+/// `XX` is the *pattern*; the suite is pinned here, locally.
+type Channel = Noise<pattern::XX, P256, ChaChaPoly, Blake2b>;
 
 #[tokio::main]
 async fn main() -> Result<(), BoxError> {
@@ -109,7 +113,7 @@ async fn initiator(addr: std::net::SocketAddr) -> Result<(String, String), BoxEr
 
     // Begin XX as initiator. No `set_rs`: XX has no pre-known remote
     // static. The empty slice is the (here unused) prologue.
-    let hs = XX::async_initiator(provider, &[], stream);
+    let hs = Channel::async_initiator(provider, &[], stream);
 
     // msg1  -> e          ephemeral only; the cipher is not yet keyed, so
     //                     these bytes go out in the clear.
@@ -136,7 +140,7 @@ async fn initiator(addr: std::net::SocketAddr) -> Result<(String, String), BoxEr
     // driver; transport messages are plain buffers, so we add our own
     // 2-byte big-endian length prefix per record.
     let plaintext = b"hello from the XX initiator";
-    let mut ciphertext = vec![0u8; plaintext.len() + Transport::<XX>::OVERHEAD];
+    let mut ciphertext = vec![0u8; plaintext.len() + Transport::<Channel>::OVERHEAD];
     let n = transport.send(plaintext, &mut ciphertext)?;
     write_frame(&mut stream, &ciphertext[..n]).await?;
 
@@ -163,7 +167,7 @@ async fn responder(listener: TcpListener) -> Result<(String, String), BoxError> 
     let (stream, _peer) = listener.accept().await?;
 
     // Begin XX as responder. Like the initiator, no `set_rs`.
-    let hs = XX::async_responder(provider, &[], stream);
+    let hs = Channel::async_responder(provider, &[], stream);
 
     // msg1  -> e          read the initiator's ephemeral.
     let (_their_e, recv) = hs.recv().e().await?;
@@ -191,7 +195,7 @@ async fn responder(listener: TcpListener) -> Result<(String, String), BoxError> 
     decrypted.truncate(n);
 
     let reply = b"hello back from the XX responder";
-    let mut ciphertext = vec![0u8; reply.len() + Transport::<XX>::OVERHEAD];
+    let mut ciphertext = vec![0u8; reply.len() + Transport::<Channel>::OVERHEAD];
     let n = transport.send(reply, &mut ciphertext)?;
     write_frame(&mut stream, &ciphertext[..n]).await?;
 

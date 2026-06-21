@@ -12,7 +12,7 @@ use hiss::noise::*;
 use hiss::provider::{EphemeralOnly, ProviderExt};
 use rand::{SeedableRng, rngs::StdRng};
 
-type NoiseN = N;
+type NoiseN = Noise<pattern::N, P256, ChaChaPoly, Blake2b>;
 
 /// A fixed, valid P-256 scalar (`0x1111…11` is nonzero and far below the
 /// curve order `n`), used as the injected ephemeral private key.

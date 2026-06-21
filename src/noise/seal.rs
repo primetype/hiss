@@ -46,8 +46,13 @@ use crate::noise::process::{
     do_es_initiator, do_es_responder, recv_e, recv_payload, recv_to_transport, send_e, send_payload,
 };
 use crate::noise::role::{Initiator, Responder};
-use crate::noise::{HandshakeError, N, Transport};
+use crate::noise::{Blake2b, ChaChaPoly, HandshakeError, Noise, Transport, pattern};
 use crate::provider::DhProviderAsync;
+
+/// Internal alias for the Noise protocol this seal is built on:
+/// `Noise_N_P256_ChaChaPoly_BLAKE2b`. Not public API — the seal is internal
+/// (an Apple-only key wrapper), so a suite-bound `N` is appropriate here.
+type N = Noise<pattern::N, P256, ChaChaPoly, Blake2b>;
 
 /// Size of the cleartext payload sealed by [`seal_32`] / [`open_32`].
 pub(crate) const SEAL_PAYLOAD_SIZE: usize = 32;

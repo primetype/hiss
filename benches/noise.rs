@@ -80,7 +80,7 @@ fn bench_n_hiss(c: &mut Criterion) {
             let responder_static = provider.generate::<P256>().unwrap();
             let responder_pub = provider.public(&responder_static).unwrap();
 
-            type NoiseSeal = N;
+            type NoiseSeal = Noise<pattern::N, P256, ChaChaPoly, Blake2b>;
 
             // Initiator seals (msg1 → Vec)
             let sealer = SyncHandshake::<NoiseSeal, Initiator, _, _, _, _>::initiate(
@@ -167,7 +167,7 @@ fn bench_ikpsk1_hiss(c: &mut Criterion) {
             let r_pub = provider.public(&r_static).unwrap();
             let psk = Psk::from_bytes([0xAA; 32]);
 
-            type Proto = IKpsk1;
+            type Proto = Noise<pattern::IKpsk1, P256, ChaChaPoly, Blake2b>;
 
             let (i_pipe, r_pipe) = BenchPipe::pair();
             let i_hs = SyncHandshake::<Proto, Initiator, _, _, _, _>::initiate(
@@ -287,7 +287,7 @@ fn bench_transport_hiss(c: &mut Criterion) {
         let r_static = provider.generate::<P256>().unwrap();
         let r_pub = provider.public(&r_static).unwrap();
 
-        type NoiseSeal = N;
+        type NoiseSeal = Noise<pattern::N, P256, ChaChaPoly, Blake2b>;
 
         let sealer = SyncHandshake::<NoiseSeal, Initiator, _, _, _, _>::initiate(
             EphemeralOnly::new(StdRng::from_os_rng()),

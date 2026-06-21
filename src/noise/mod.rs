@@ -20,7 +20,7 @@
 //!
 //! | Parameter | Trait    | Example        | What it provides                |
 //! |-----------|----------|----------------|---------------------------------|
-//! | `P`       | [`Pattern`] | [`IKpsk1`]  | Token sequences, pre-messages   |
+//! | `P`       | [`Pattern`] | [`IKpsk1`](pattern::IKpsk1) | Token sequences, pre-messages |
 //! | `Cu`      | [`Curve`]   | [`P256`]    | Key sizes, DH output length     |
 //! | `Ci`      | [`Cipher`]  | [`ChaChaPoly`] | Tag size, AEAD operations    |
 //! | `H`       | [`Hash`]    | [`Blake2b`] | Hash length, HMAC, HKDF         |
@@ -30,7 +30,7 @@
 //! ```
 //! use hiss::noise::*;
 //!
-//! type Channel = IKpsk1;
+//! type Channel = Noise<pattern::IKpsk1, P256, ChaChaPoly, Blake2b>;
 //!
 //! let proto = Channel::new();
 //! assert_eq!(proto.to_string(), "Noise_IKpsk1_P256_ChaChaPoly_BLAKE2b");
@@ -41,7 +41,7 @@
 //!
 //! ```
 //! # use hiss::noise::*;
-//! # type Channel = IKpsk1;
+//! # type Channel = Noise<pattern::IKpsk1, P256, ChaChaPoly, Blake2b>;
 //! assert_eq!(Channel::PUBLIC_KEY_SIZE, 65);   // P-256 SEC1 uncompressed
 //! assert_eq!(Channel::TAG_SIZE, 16);           // Poly1305
 //! assert_eq!(Channel::HASH_LEN, 64);           // BLAKE2b
@@ -168,7 +168,7 @@
 //! ```ignore
 //! use hiss::noise::*;
 //!
-//! type Channel = IKpsk1;
+//! type Channel = Noise<pattern::IKpsk1, P256, ChaChaPoly, Blake2b>;
 //!
 //! // ── Initiator (blocking) over a stream ───────────────────
 //! let i = Channel::sync_initiator(provider, &[], stream)
@@ -199,7 +199,6 @@
 //! The `AsyncHandshake` (feature `async-io`) is the identical chain
 //! with `async_initiator`/`async_responder` and `.await` on each token.
 
-pub mod alias;
 pub(crate) mod buffers;
 pub mod cipher;
 pub mod cipher_state;
@@ -224,7 +223,6 @@ pub mod tokens;
 pub mod transport;
 pub mod well_formed;
 
-pub use self::alias::{IK, IKpsk1, IX, K, Kpsk0, N, NK, NN, XK, XX};
 pub use self::cipher::{ChaChaPoly, Cipher};
 pub use self::cipher_state::CipherState;
 pub use self::curve::{Curve, DhCurve, P256, X25519};
@@ -235,9 +233,11 @@ pub use self::io_async::{AsyncHandshake, AsyncReceiving, AsyncSending, AsyncTran
 pub use self::io_sync::{SyncHandshake, SyncReceiving, SyncSending, SyncTransport};
 // Protocol re-exported from this module (defined below on Noise).
 pub use self::hash::{Blake2b, Hash};
-// Pattern markers stay namespaced under `noise::pattern::{N, K, Kpsk0, IKpsk1}`;
-// the bare `noise::{N, K, …}` names above are the ready-made default-suite
-// protocol aliases. Only the `Pattern` trait is re-exported at the root.
+// Pattern markers stay namespaced under `noise::pattern::{N, K, …}`; only the
+// `Pattern` trait is re-exported at the root. There are deliberately no
+// suite-bound protocol aliases here: `N`, `XX`, … are Noise *patterns*, not
+// whole `Noise<P, Cu, Ci, H>` protocols, so callers spell the protocol out (or
+// alias it locally) rather than rely on a root name that conflates the two.
 pub use self::pattern::Pattern;
 pub use self::role::{Initiator, Responder, Role};
 pub use self::session_id::SessionId;
@@ -308,7 +308,7 @@ impl<P, Cu, Ci, H> Default for Noise<P, Cu, Ci, H> {
 /// `async-io`) drivers instead of spreading four separate generic
 /// parameters.
 pub trait Protocol {
-    /// The handshake pattern (e.g. [`IKpsk1`]).
+    /// The handshake pattern (e.g. [`IKpsk1`](pattern::IKpsk1)).
     type Pattern: Pattern;
     /// The DH curve (e.g. [`P256`]).
     type Curve: DhCurve;
@@ -337,10 +337,10 @@ mod tests {
     use std::cell::RefCell;
     use std::collections::VecDeque;
     use std::rc::Rc;
-    type Channel = IKpsk1;
-    type NoiseSeal = N;
-    type NoiseK = K;
-    type NoiseKpsk0 = Kpsk0;
+    type Channel = Noise<pattern::IKpsk1, P256, ChaChaPoly, Blake2b>;
+    type NoiseSeal = Noise<pattern::N, P256, ChaChaPoly, Blake2b>;
+    type NoiseK = Noise<pattern::K, P256, ChaChaPoly, Blake2b>;
+    type NoiseKpsk0 = Noise<pattern::Kpsk0, P256, ChaChaPoly, Blake2b>;
 
     /// In-memory `Read + Write` endpoint for driving the blocking
     /// [`SyncHandshake`] in unit tests.
@@ -2165,7 +2165,7 @@ mod tests {
 
         let prologue = b"hiss/v1";
 
-        type NoiseSeal = N;
+        type NoiseSeal = Noise<pattern::N, P256, ChaChaPoly, Blake2b>;
 
         let (i_pipe, r_pipe) = Pipe::pair();
         let sealer = SyncHandshake::<NoiseSeal, Initiator, _, _, _, _>::initiate(
@@ -2203,7 +2203,7 @@ mod tests {
         let responder_static = provider.generate::<P256>().unwrap();
         let responder_pub = provider.public(&responder_static).unwrap();
 
-        type NoiseSeal = N;
+        type NoiseSeal = Noise<pattern::N, P256, ChaChaPoly, Blake2b>;
 
         let (i_pipe, r_pipe) = Pipe::pair();
         // Initiator uses prologue "v1", responder uses "v2".

@@ -9,17 +9,18 @@
 //! ```ignore
 //! use hiss::noise::*;
 //!
-//! // `N` is the default-suite alias; the
-//! // `sync_initiator`/`sync_responder` constructors fix the role, so
-//! // there is no `SyncHandshake::<…, …, _, _, _, _>` turbofish.
+//! // Pin the protocol locally; the `sync_initiator`/`sync_responder`
+//! // constructors fix the role, so there is no
+//! // `SyncHandshake::<…, …, _, _, _, _>` turbofish.
+//! type Channel = Noise<pattern::N, P256, ChaChaPoly, Blake2b>;
 //!
 //! // initiator — `stream: impl std::io::Write`
-//! let i = N::sync_initiator(provider, &[], stream)
+//! let i = Channel::sync_initiator(provider, &[], stream)
 //!     .set_rs(recipient_pub);
 //! let mut sealed = i.e()?.es()?;          // msg1 streamed to the wire; `sealed` owns the stream
 //!
 //! // responder — `stream: impl std::io::Read`
-//! let r = N::sync_responder(provider, &[], stream)
+//! let r = Channel::sync_responder(provider, &[], stream)
 //!     .set_s(recipient_static)?;
 //! let (their_e, recv) = r.recv().e()?;    // each token reads exactly its bytes off the wire
 //! let mut opened = recv.es()?;
@@ -431,14 +432,14 @@ where
 /// and `Msgs` is the list of handshake messages not yet sent or
 /// received; only the token method that matches the head of `Msgs` is in
 /// scope, so an out-of-order step is a compile error.
-pub struct SyncHandshake<N, R, Stage, Msgs, CP, Io>
+pub struct SyncHandshake<Proto, R, Stage, Msgs, CP, Io>
 where
-    N: Protocol,
-    CP: DhProvider<N::Curve>,
+    Proto: Protocol,
+    CP: DhProvider<Proto::Curve>,
 {
-    inner: HandshakeInner<N::Curve, N::Cipher, N::Hash, CP>,
+    inner: HandshakeInner<Proto::Curve, Proto::Cipher, Proto::Hash, CP>,
     stream: Io,
-    _marker: PhantomData<fn() -> (N, R, Stage, Msgs)>,
+    _marker: PhantomData<fn() -> (Proto, R, Stage, Msgs)>,
 }
 
 /// Synchronous state part-way through an outgoing message.
@@ -450,14 +451,14 @@ where
 /// head of `Tokens`; emptying it closes the message (flushing its tail)
 /// and yields either the next [`SyncHandshake`] or, on the final message,
 /// the [`SyncTransport`].
-pub struct SyncSending<N, R, Tokens, MsgRest, CP, Io>
+pub struct SyncSending<Proto, R, Tokens, MsgRest, CP, Io>
 where
-    N: Protocol,
-    CP: DhProvider<N::Curve>,
+    Proto: Protocol,
+    CP: DhProvider<Proto::Curve>,
 {
-    inner: HandshakeInner<N::Curve, N::Cipher, N::Hash, CP>,
+    inner: HandshakeInner<Proto::Curve, Proto::Cipher, Proto::Hash, CP>,
     stream: Io,
-    _marker: PhantomData<fn() -> (N, R, Tokens, MsgRest)>,
+    _marker: PhantomData<fn() -> (Proto, R, Tokens, MsgRest)>,
 }
 
 /// Synchronous state part-way through an incoming message.
@@ -468,14 +469,14 @@ where
 /// [`SyncHandshake`]. Each token method consumes the head of `Tokens`;
 /// emptying it verifies the message tail and yields either the next
 /// [`SyncHandshake`] or, on the final message, the [`SyncTransport`].
-pub struct SyncReceiving<N, R, Tokens, MsgRest, CP, Io>
+pub struct SyncReceiving<Proto, R, Tokens, MsgRest, CP, Io>
 where
-    N: Protocol,
-    CP: DhProvider<N::Curve>,
+    Proto: Protocol,
+    CP: DhProvider<Proto::Curve>,
 {
-    inner: HandshakeInner<N::Curve, N::Cipher, N::Hash, CP>,
+    inner: HandshakeInner<Proto::Curve, Proto::Cipher, Proto::Hash, CP>,
     stream: Io,
-    _marker: PhantomData<fn() -> (N, R, Tokens, MsgRest)>,
+    _marker: PhantomData<fn() -> (Proto, R, Tokens, MsgRest)>,
 }
 
 /// Completed handshake plus the stream it ran over.
@@ -483,14 +484,14 @@ where
 /// Like a TLS stream, the post-handshake [`Transport`] and the `Io` it
 /// rides on are bundled together; [`into_parts`](Self::into_parts)
 /// recovers them separately.
-pub struct SyncTransport<N: Protocol, Io> {
-    transport: Transport<N>,
+pub struct SyncTransport<Proto: Protocol, Io> {
+    transport: Transport<Proto>,
     stream: Io,
 }
 
-impl<N: Protocol, Io> SyncTransport<N, Io> {
+impl<Proto: Protocol, Io> SyncTransport<Proto, Io> {
     /// The post-handshake transport cipher pair.
-    pub fn transport(&mut self) -> &mut Transport<N> {
+    pub fn transport(&mut self) -> &mut Transport<Proto> {
         &mut self.transport
     }
 
@@ -500,7 +501,7 @@ impl<N: Protocol, Io> SyncTransport<N, Io> {
     }
 
     /// Split into the transport and the stream.
-    pub fn into_parts(self) -> (Transport<N>, Io) {
+    pub fn into_parts(self) -> (Transport<Proto>, Io) {
         (self.transport, self.stream)
     }
 }
@@ -509,46 +510,46 @@ impl<N: Protocol, Io> SyncTransport<N, Io> {
 //  Construction
 // ═══════════════════════════════════════════════════════════════
 
-impl<N, CP, Io>
+impl<Proto, CP, Io>
     SyncHandshake<
-        N,
+        Proto,
         Initiator,
-        <N::Pattern as Pattern>::PreMessages,
-        <N::Pattern as Pattern>::Messages,
+        <Proto::Pattern as Pattern>::PreMessages,
+        <Proto::Pattern as Pattern>::Messages,
         CP,
         Io,
     >
 where
-    N: Protocol,
-    CP: DhProvider<N::Curve>,
+    Proto: Protocol,
+    CP: DhProvider<Proto::Curve>,
 {
     /// Begin a blocking handshake as the **initiator** over `stream`.
     pub fn initiate(provider: CP, prologue: &[u8], stream: Io) -> Self {
         SyncHandshake {
-            inner: HandshakeInner::new::<N>(provider, prologue),
+            inner: HandshakeInner::new::<Proto>(provider, prologue),
             stream,
             _marker: PhantomData,
         }
     }
 }
 
-impl<N, CP, Io>
+impl<Proto, CP, Io>
     SyncHandshake<
-        N,
+        Proto,
         Responder,
-        <N::Pattern as Pattern>::PreMessages,
-        <N::Pattern as Pattern>::Messages,
+        <Proto::Pattern as Pattern>::PreMessages,
+        <Proto::Pattern as Pattern>::Messages,
         CP,
         Io,
     >
 where
-    N: Protocol,
-    CP: DhProvider<N::Curve>,
+    Proto: Protocol,
+    CP: DhProvider<Proto::Curve>,
 {
     /// Begin a blocking handshake as the **responder** over `stream`.
     pub fn respond(provider: CP, prologue: &[u8], stream: Io) -> Self {
         SyncHandshake {
-            inner: HandshakeInner::new::<N>(provider, prologue),
+            inner: HandshakeInner::new::<Proto>(provider, prologue),
             stream,
             _marker: PhantomData,
         }
@@ -563,12 +564,12 @@ impl<P: WellFormed, Cu: DhCurve, Ci: Cipher, H: Hash> Noise<P, Cu, Ci, H> {
     /// Begin a blocking handshake as the **initiator** over `stream`,
     /// without naming the six [`SyncHandshake`] type parameters.
     ///
-    /// Paired with a protocol alias (e.g.
-    /// [`IKpsk1`](crate::noise::IKpsk1)) this removes the
-    /// turbofish entirely:
+    /// Paired with a local protocol alias (e.g.
+    /// `type Channel = Noise<pattern::IKpsk1, P256, ChaChaPoly, Blake2b>`)
+    /// this removes the turbofish entirely:
     ///
     /// ```ignore
-    /// let hs = IKpsk1::sync_initiator(provider, &[], stream).set_rs(peer);
+    /// let hs = Channel::sync_initiator(provider, &[], stream).set_rs(peer);
     /// ```
     pub fn sync_initiator<CP, Io>(
         provider: CP,
@@ -600,18 +601,18 @@ impl<P: WellFormed, Cu: DhCurve, Ci: Cipher, H: Hash> Noise<P, Cu, Ci, H> {
 // ═══════════════════════════════════════════════════════════════
 
 // `<- s` + Initiator: the responder's static is the remote static.
-impl<N, Tokens, Rest, Msgs, CP, Io>
-    SyncHandshake<N, Initiator, Cons<Message<ToInitiator, Tokens>, Rest>, Msgs, CP, Io>
+impl<Proto, Tokens, Rest, Msgs, CP, Io>
+    SyncHandshake<Proto, Initiator, Cons<Message<ToInitiator, Tokens>, Rest>, Msgs, CP, Io>
 where
-    N: Protocol,
-    CP: DhProvider<N::Curve>,
-    <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
+    Proto: Protocol,
+    CP: DhProvider<Proto::Curve>,
+    <Proto::Curve as Curve>::PublicKey: AsRef<[u8]>,
 {
     /// Provide the remote party's static public key (`<- s`).
     pub fn set_rs(
         mut self,
-        remote_static: <N::Curve as Curve>::PublicKey,
-    ) -> SyncHandshake<N, Initiator, Rest, Msgs, CP, Io> {
+        remote_static: <Proto::Curve as Curve>::PublicKey,
+    ) -> SyncHandshake<Proto, Initiator, Rest, Msgs, CP, Io> {
         self.inner.symmetric.mix_hash(remote_static.as_ref());
         self.inner.rs = Some(remote_static);
         SyncHandshake {
@@ -623,18 +624,18 @@ where
 }
 
 // `<- s` + Responder: this is our own static key.
-impl<N, Tokens, Rest, Msgs, CP, Io>
-    SyncHandshake<N, Responder, Cons<Message<ToInitiator, Tokens>, Rest>, Msgs, CP, Io>
+impl<Proto, Tokens, Rest, Msgs, CP, Io>
+    SyncHandshake<Proto, Responder, Cons<Message<ToInitiator, Tokens>, Rest>, Msgs, CP, Io>
 where
-    N: Protocol,
-    CP: DhProvider<N::Curve>,
-    <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
+    Proto: Protocol,
+    CP: DhProvider<Proto::Curve>,
+    <Proto::Curve as Curve>::PublicKey: AsRef<[u8]>,
 {
     /// Provide our local static key (`<- s`).
     pub fn set_s(
         mut self,
         static_key: CP::PrivateKey,
-    ) -> Result<SyncHandshake<N, Responder, Rest, Msgs, CP, Io>, HandshakeError> {
+    ) -> Result<SyncHandshake<Proto, Responder, Rest, Msgs, CP, Io>, HandshakeError> {
         let s_pub = self
             .inner
             .provider
@@ -652,18 +653,18 @@ where
 }
 
 // `-> s` + Initiator: this is our own static key.
-impl<N, Tokens, Rest, Msgs, CP, Io>
-    SyncHandshake<N, Initiator, Cons<Message<ToResponder, Tokens>, Rest>, Msgs, CP, Io>
+impl<Proto, Tokens, Rest, Msgs, CP, Io>
+    SyncHandshake<Proto, Initiator, Cons<Message<ToResponder, Tokens>, Rest>, Msgs, CP, Io>
 where
-    N: Protocol,
-    CP: DhProvider<N::Curve>,
-    <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
+    Proto: Protocol,
+    CP: DhProvider<Proto::Curve>,
+    <Proto::Curve as Curve>::PublicKey: AsRef<[u8]>,
 {
     /// Provide our local static key (`-> s`).
     pub fn set_s(
         mut self,
         static_key: CP::PrivateKey,
-    ) -> Result<SyncHandshake<N, Initiator, Rest, Msgs, CP, Io>, HandshakeError> {
+    ) -> Result<SyncHandshake<Proto, Initiator, Rest, Msgs, CP, Io>, HandshakeError> {
         let s_pub = self
             .inner
             .provider
@@ -681,18 +682,18 @@ where
 }
 
 // `-> s` + Responder: the initiator's static is the remote static.
-impl<N, Tokens, Rest, Msgs, CP, Io>
-    SyncHandshake<N, Responder, Cons<Message<ToResponder, Tokens>, Rest>, Msgs, CP, Io>
+impl<Proto, Tokens, Rest, Msgs, CP, Io>
+    SyncHandshake<Proto, Responder, Cons<Message<ToResponder, Tokens>, Rest>, Msgs, CP, Io>
 where
-    N: Protocol,
-    CP: DhProvider<N::Curve>,
-    <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
+    Proto: Protocol,
+    CP: DhProvider<Proto::Curve>,
+    <Proto::Curve as Curve>::PublicKey: AsRef<[u8]>,
 {
     /// Provide the remote party's static public key (`-> s`).
     pub fn set_rs(
         mut self,
-        remote_static: <N::Curve as Curve>::PublicKey,
-    ) -> SyncHandshake<N, Responder, Rest, Msgs, CP, Io> {
+        remote_static: <Proto::Curve as Curve>::PublicKey,
+    ) -> SyncHandshake<Proto, Responder, Rest, Msgs, CP, Io> {
         self.inner.symmetric.mix_hash(remote_static.as_ref());
         self.inner.rs = Some(remote_static);
         SyncHandshake {
@@ -715,19 +716,19 @@ where
 // a message in `SyncSending<…, Nil, …>` with no method to close it.
 
 // Variant 1: more tokens follow `E` in this message.
-impl<N, R, Next, More, MsgRest, Dir, CP, Io>
-    SyncHandshake<N, R, Nil, Cons<Message<Dir, Cons<E, Cons<Next, More>>>, MsgRest>, CP, Io>
+impl<Proto, R, Next, More, MsgRest, Dir, CP, Io>
+    SyncHandshake<Proto, R, Nil, Cons<Message<Dir, Cons<E, Cons<Next, More>>>, MsgRest>, CP, Io>
 where
-    N: Protocol,
+    Proto: Protocol,
     R: Role<SendDir = Dir>,
-    CP: DhProvider<N::Curve>,
-    <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
+    CP: DhProvider<Proto::Curve>,
+    <Proto::Curve as Curve>::PublicKey: AsRef<[u8]>,
     Io: Write,
 {
     /// Generate and stream our ephemeral public key (`e`).
     pub fn e(
         mut self,
-    ) -> Result<SyncSending<N, R, Cons<Next, More>, MsgRest, CP, Io>, HandshakeError> {
+    ) -> Result<SyncSending<Proto, R, Cons<Next, More>, MsgRest, CP, Io>, HandshakeError> {
         sync_stream_e(&mut self.inner, &mut self.stream)?;
         Ok(SyncSending {
             inner: self.inner,
@@ -738,19 +739,19 @@ where
 }
 
 // Variant 2: `E` is the only token and more messages remain.
-impl<N, R, NextMsg, MoreMsgs, Dir, CP, Io>
-    SyncHandshake<N, R, Nil, Cons<Message<Dir, Cons<E, Nil>>, Cons<NextMsg, MoreMsgs>>, CP, Io>
+impl<Proto, R, NextMsg, MoreMsgs, Dir, CP, Io>
+    SyncHandshake<Proto, R, Nil, Cons<Message<Dir, Cons<E, Nil>>, Cons<NextMsg, MoreMsgs>>, CP, Io>
 where
-    N: Protocol,
+    Proto: Protocol,
     R: Role<SendDir = Dir>,
-    CP: DhProvider<N::Curve>,
-    <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
+    CP: DhProvider<Proto::Curve>,
+    <Proto::Curve as Curve>::PublicKey: AsRef<[u8]>,
     Io: Write,
 {
     /// Stream a single-`E` message (`-> e`) when more messages follow.
     pub fn e(
         mut self,
-    ) -> Result<SyncHandshake<N, R, Nil, Cons<NextMsg, MoreMsgs>, CP, Io>, HandshakeError> {
+    ) -> Result<SyncHandshake<Proto, R, Nil, Cons<NextMsg, MoreMsgs>, CP, Io>, HandshakeError> {
         sync_stream_e(&mut self.inner, &mut self.stream)?;
         send_message_tail(&mut self.inner, &mut self.stream)?;
         Ok(SyncHandshake {
@@ -762,19 +763,20 @@ where
 }
 
 // Variant 3: `E` is the only token in the last message.
-impl<N, R, Dir, CP, Io> SyncHandshake<N, R, Nil, Cons<Message<Dir, Cons<E, Nil>>, Nil>, CP, Io>
+impl<Proto, R, Dir, CP, Io>
+    SyncHandshake<Proto, R, Nil, Cons<Message<Dir, Cons<E, Nil>>, Nil>, CP, Io>
 where
-    N: Protocol,
+    Proto: Protocol,
     R: Role<SendDir = Dir>,
-    CP: DhProvider<N::Curve>,
-    <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
+    CP: DhProvider<Proto::Curve>,
+    <Proto::Curve as Curve>::PublicKey: AsRef<[u8]>,
     Io: Write,
 {
     /// Stream a single-`E` message (`-> e`) as the final handshake message.
-    pub fn e(mut self) -> Result<SyncTransport<N, Io>, HandshakeError> {
+    pub fn e(mut self) -> Result<SyncTransport<Proto, Io>, HandshakeError> {
         sync_stream_e(&mut self.inner, &mut self.stream)?;
         send_message_tail(&mut self.inner, &mut self.stream)?;
-        let transport = recv_to_transport::<N, R, CP>(self.inner);
+        let transport = recv_to_transport::<Proto, R, CP>(self.inner);
         Ok(SyncTransport {
             transport,
             stream: self.stream,
@@ -783,19 +785,19 @@ where
 }
 
 // Start a send message whose first token is Psk.
-impl<N, R, Tokens, MsgRest, Dir, CP, Io>
-    SyncHandshake<N, R, Nil, Cons<Message<Dir, Cons<Psk, Tokens>>, MsgRest>, CP, Io>
+impl<Proto, R, Tokens, MsgRest, Dir, CP, Io>
+    SyncHandshake<Proto, R, Nil, Cons<Message<Dir, Cons<Psk, Tokens>>, MsgRest>, CP, Io>
 where
-    N: Protocol,
+    Proto: Protocol,
     R: Role<SendDir = Dir>,
-    CP: DhProvider<N::Curve>,
-    <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
+    CP: DhProvider<Proto::Curve>,
+    <Proto::Curve as Curve>::PublicKey: AsRef<[u8]>,
 {
     /// Mix the pre-shared key (`psk`) — writes nothing to the wire.
     pub fn psk(
         mut self,
         psk_key: &crate::psk::Psk,
-    ) -> Result<SyncSending<N, R, Tokens, MsgRest, CP, Io>, HandshakeError> {
+    ) -> Result<SyncSending<Proto, R, Tokens, MsgRest, CP, Io>, HandshakeError> {
         do_psk(&mut self.inner, psk_key)?;
         Ok(SyncSending {
             inner: self.inner,
@@ -806,20 +808,20 @@ where
 }
 
 // Start a send message whose first token is S.
-impl<N, R, Tokens, MsgRest, Dir, CP, Io>
-    SyncHandshake<N, R, Nil, Cons<Message<Dir, Cons<S, Tokens>>, MsgRest>, CP, Io>
+impl<Proto, R, Tokens, MsgRest, Dir, CP, Io>
+    SyncHandshake<Proto, R, Nil, Cons<Message<Dir, Cons<S, Tokens>>, MsgRest>, CP, Io>
 where
-    N: Protocol,
+    Proto: Protocol,
     R: Role<SendDir = Dir>,
-    CP: DhProvider<N::Curve>,
-    <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
+    CP: DhProvider<Proto::Curve>,
+    <Proto::Curve as Curve>::PublicKey: AsRef<[u8]>,
     Io: Write,
 {
     /// Encrypt and stream our static public key (`s`).
     pub fn s(
         mut self,
         static_key: CP::PrivateKey,
-    ) -> Result<SyncSending<N, R, Tokens, MsgRest, CP, Io>, HandshakeError> {
+    ) -> Result<SyncSending<Proto, R, Tokens, MsgRest, CP, Io>, HandshakeError> {
         sync_stream_s(&mut self.inner, &mut self.stream, static_key)?;
         Ok(SyncSending {
             inner: self.inner,
@@ -831,15 +833,15 @@ where
 
 // Start receiving the next message (PreMsgs = Nil, message is ours to
 // read). No bytes are read here — each token pulls exactly what it needs.
-impl<N, R, Tokens, Rest, Dir, CP, Io>
-    SyncHandshake<N, R, Nil, Cons<Message<Dir, Tokens>, Rest>, CP, Io>
+impl<Proto, R, Tokens, Rest, Dir, CP, Io>
+    SyncHandshake<Proto, R, Nil, Cons<Message<Dir, Tokens>, Rest>, CP, Io>
 where
-    N: Protocol,
+    Proto: Protocol,
     R: Role<RecvDir = Dir>,
-    CP: DhProvider<N::Curve>,
+    CP: DhProvider<Proto::Curve>,
 {
     /// Begin reading the next incoming handshake message.
-    pub fn recv(self) -> SyncReceiving<N, R, Tokens, Rest, CP, Io> {
+    pub fn recv(self) -> SyncReceiving<Proto, R, Tokens, Rest, CP, Io> {
         SyncReceiving {
             inner: self.inner,
             stream: self.stream,
@@ -866,19 +868,19 @@ macro_rules! sync_send_token {
         body: |$inner:ident, $stream:ident| { $($logic:tt)* }
     ) => {
         // Variant 1: more tokens after this one.
-        impl<N, Next, More, MsgRest, CP, Io>
-            SyncSending<N, $R, Cons<$Token, Cons<Next, More>>, MsgRest, CP, Io>
+        impl<Proto, Next, More, MsgRest, CP, Io>
+            SyncSending<Proto, $R, Cons<$Token, Cons<Next, More>>, MsgRest, CP, Io>
         where
-            N: Protocol,
-            <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
-            CP: DhProvider<N::Curve>,
+            Proto: Protocol,
+            <Proto::Curve as Curve>::PublicKey: AsRef<[u8]>,
+            CP: DhProvider<Proto::Curve>,
             Io: Write,
             $($extra)*
         {
             #[doc = $doc]
             pub fn $method(
                 mut self, $($arg: $arg_ty,)*
-            ) -> Result<SyncSending<N, $R, Cons<Next, More>, MsgRest, CP, Io>, HandshakeError> {
+            ) -> Result<SyncSending<Proto, $R, Cons<Next, More>, MsgRest, CP, Io>, HandshakeError> {
                 {
                     let $inner = &mut self.inner;
                     let $stream = &mut self.stream;
@@ -889,19 +891,19 @@ macro_rules! sync_send_token {
         }
 
         // Variant 2: last token, more messages.
-        impl<N, NextMsg, MoreMsgs, CP, Io>
-            SyncSending<N, $R, Cons<$Token, Nil>, Cons<NextMsg, MoreMsgs>, CP, Io>
+        impl<Proto, NextMsg, MoreMsgs, CP, Io>
+            SyncSending<Proto, $R, Cons<$Token, Nil>, Cons<NextMsg, MoreMsgs>, CP, Io>
         where
-            N: Protocol,
-            <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
-            CP: DhProvider<N::Curve>,
+            Proto: Protocol,
+            <Proto::Curve as Curve>::PublicKey: AsRef<[u8]>,
+            CP: DhProvider<Proto::Curve>,
             Io: Write,
             $($extra)*
         {
             #[doc = $doc]
             pub fn $method(
                 mut self, $($arg: $arg_ty,)*
-            ) -> Result<SyncHandshake<N, $R, Nil, Cons<NextMsg, MoreMsgs>, CP, Io>, HandshakeError> {
+            ) -> Result<SyncHandshake<Proto, $R, Nil, Cons<NextMsg, MoreMsgs>, CP, Io>, HandshakeError> {
                 {
                     let $inner = &mut self.inner;
                     let $stream = &mut self.stream;
@@ -913,26 +915,26 @@ macro_rules! sync_send_token {
         }
 
         // Variant 3: last token, last message.
-        impl<N, CP, Io>
-            SyncSending<N, $R, Cons<$Token, Nil>, Nil, CP, Io>
+        impl<Proto, CP, Io>
+            SyncSending<Proto, $R, Cons<$Token, Nil>, Nil, CP, Io>
         where
-            N: Protocol,
-            <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
-            CP: DhProvider<N::Curve>,
+            Proto: Protocol,
+            <Proto::Curve as Curve>::PublicKey: AsRef<[u8]>,
+            CP: DhProvider<Proto::Curve>,
             Io: Write,
             $($extra)*
         {
             #[doc = $doc]
             pub fn $method(
                 mut self, $($arg: $arg_ty,)*
-            ) -> Result<SyncTransport<N, Io>, HandshakeError> {
+            ) -> Result<SyncTransport<Proto, Io>, HandshakeError> {
                 {
                     let $inner = &mut self.inner;
                     let $stream = &mut self.stream;
                     $($logic)*
                 }
                 send_message_tail(&mut self.inner, &mut self.stream)?;
-                let transport = recv_to_transport::<N, $R, CP>(self.inner);
+                let transport = recv_to_transport::<Proto, $R, CP>(self.inner);
                 Ok(SyncTransport { transport, stream: self.stream })
             }
         }
@@ -953,19 +955,19 @@ macro_rules! sync_recv_token {
         body: |$inner:ident, $stream:ident| { $($logic:tt)* }
     ) => {
         // Variant 1: more tokens.
-        impl<N, Next, More, MsgRest, CP, Io>
-            SyncReceiving<N, $R, Cons<$Token, Cons<Next, More>>, MsgRest, CP, Io>
+        impl<Proto, Next, More, MsgRest, CP, Io>
+            SyncReceiving<Proto, $R, Cons<$Token, Cons<Next, More>>, MsgRest, CP, Io>
         where
-            N: Protocol,
-            <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
-            CP: DhProvider<N::Curve>,
+            Proto: Protocol,
+            <Proto::Curve as Curve>::PublicKey: AsRef<[u8]>,
+            CP: DhProvider<Proto::Curve>,
             Io: Read,
             $($extra)*
         {
             #[doc = $doc]
             pub fn $method(
                 mut self, $($arg: $arg_ty,)*
-            ) -> Result<SyncReceiving<N, $R, Cons<Next, More>, MsgRest, CP, Io>, HandshakeError> {
+            ) -> Result<SyncReceiving<Proto, $R, Cons<Next, More>, MsgRest, CP, Io>, HandshakeError> {
                 {
                     let $inner = &mut self.inner;
                     let $stream = &mut self.stream;
@@ -976,19 +978,19 @@ macro_rules! sync_recv_token {
         }
 
         // Variant 2: last token, more messages.
-        impl<N, NextMsg, MoreMsgs, CP, Io>
-            SyncReceiving<N, $R, Cons<$Token, Nil>, Cons<NextMsg, MoreMsgs>, CP, Io>
+        impl<Proto, NextMsg, MoreMsgs, CP, Io>
+            SyncReceiving<Proto, $R, Cons<$Token, Nil>, Cons<NextMsg, MoreMsgs>, CP, Io>
         where
-            N: Protocol,
-            <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
-            CP: DhProvider<N::Curve>,
+            Proto: Protocol,
+            <Proto::Curve as Curve>::PublicKey: AsRef<[u8]>,
+            CP: DhProvider<Proto::Curve>,
             Io: Read,
             $($extra)*
         {
             #[doc = $doc]
             pub fn $method(
                 mut self, $($arg: $arg_ty,)*
-            ) -> Result<SyncHandshake<N, $R, Nil, Cons<NextMsg, MoreMsgs>, CP, Io>, HandshakeError> {
+            ) -> Result<SyncHandshake<Proto, $R, Nil, Cons<NextMsg, MoreMsgs>, CP, Io>, HandshakeError> {
                 {
                     let $inner = &mut self.inner;
                     let $stream = &mut self.stream;
@@ -1000,26 +1002,26 @@ macro_rules! sync_recv_token {
         }
 
         // Variant 3: last token, last message.
-        impl<N, CP, Io>
-            SyncReceiving<N, $R, Cons<$Token, Nil>, Nil, CP, Io>
+        impl<Proto, CP, Io>
+            SyncReceiving<Proto, $R, Cons<$Token, Nil>, Nil, CP, Io>
         where
-            N: Protocol,
-            <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
-            CP: DhProvider<N::Curve>,
+            Proto: Protocol,
+            <Proto::Curve as Curve>::PublicKey: AsRef<[u8]>,
+            CP: DhProvider<Proto::Curve>,
             Io: Read,
             $($extra)*
         {
             #[doc = $doc]
             pub fn $method(
                 mut self, $($arg: $arg_ty,)*
-            ) -> Result<SyncTransport<N, Io>, HandshakeError> {
+            ) -> Result<SyncTransport<Proto, Io>, HandshakeError> {
                 {
                     let $inner = &mut self.inner;
                     let $stream = &mut self.stream;
                     $($logic)*
                 }
                 recv_message_tail(&mut self.inner, &mut self.stream)?;
-                let transport = recv_to_transport::<N, $R, CP>(self.inner);
+                let transport = recv_to_transport::<Proto, $R, CP>(self.inner);
                 Ok(SyncTransport { transport, stream: self.stream })
             }
         }
@@ -1040,12 +1042,12 @@ macro_rules! sync_recv_reveal_token {
         body: |$inner:ident, $stream:ident| { $($logic:tt)* }
     ) => {
         // Variant 1: more tokens after this one.
-        impl<N, Next, More, MsgRest, CP, Io>
-            SyncReceiving<N, $R, Cons<$Token, Cons<Next, More>>, MsgRest, CP, Io>
+        impl<Proto, Next, More, MsgRest, CP, Io>
+            SyncReceiving<Proto, $R, Cons<$Token, Cons<Next, More>>, MsgRest, CP, Io>
         where
-            N: Protocol,
-            <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
-            CP: DhProvider<N::Curve>,
+            Proto: Protocol,
+            <Proto::Curve as Curve>::PublicKey: AsRef<[u8]>,
+            CP: DhProvider<Proto::Curve>,
             Io: Read,
             $($extra)*
         {
@@ -1053,7 +1055,7 @@ macro_rules! sync_recv_reveal_token {
             #[allow(clippy::type_complexity)]
             pub fn $method(
                 mut self, $($arg: $arg_ty,)*
-            ) -> Result<(<N::Curve as Curve>::PublicKey, SyncReceiving<N, $R, Cons<Next, More>, MsgRest, CP, Io>), HandshakeError> {
+            ) -> Result<(<Proto::Curve as Curve>::PublicKey, SyncReceiving<Proto, $R, Cons<Next, More>, MsgRest, CP, Io>), HandshakeError> {
                 let revealed = {
                     let $inner = &mut self.inner;
                     let $stream = &mut self.stream;
@@ -1064,12 +1066,12 @@ macro_rules! sync_recv_reveal_token {
         }
 
         // Variant 2: last token, more messages.
-        impl<N, NextMsg, MoreMsgs, CP, Io>
-            SyncReceiving<N, $R, Cons<$Token, Nil>, Cons<NextMsg, MoreMsgs>, CP, Io>
+        impl<Proto, NextMsg, MoreMsgs, CP, Io>
+            SyncReceiving<Proto, $R, Cons<$Token, Nil>, Cons<NextMsg, MoreMsgs>, CP, Io>
         where
-            N: Protocol,
-            <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
-            CP: DhProvider<N::Curve>,
+            Proto: Protocol,
+            <Proto::Curve as Curve>::PublicKey: AsRef<[u8]>,
+            CP: DhProvider<Proto::Curve>,
             Io: Read,
             $($extra)*
         {
@@ -1077,7 +1079,7 @@ macro_rules! sync_recv_reveal_token {
             #[allow(clippy::type_complexity)]
             pub fn $method(
                 mut self, $($arg: $arg_ty,)*
-            ) -> Result<(<N::Curve as Curve>::PublicKey, SyncHandshake<N, $R, Nil, Cons<NextMsg, MoreMsgs>, CP, Io>), HandshakeError> {
+            ) -> Result<(<Proto::Curve as Curve>::PublicKey, SyncHandshake<Proto, $R, Nil, Cons<NextMsg, MoreMsgs>, CP, Io>), HandshakeError> {
                 let revealed = {
                     let $inner = &mut self.inner;
                     let $stream = &mut self.stream;
@@ -1089,12 +1091,12 @@ macro_rules! sync_recv_reveal_token {
         }
 
         // Variant 3: last token, last message.
-        impl<N, CP, Io>
-            SyncReceiving<N, $R, Cons<$Token, Nil>, Nil, CP, Io>
+        impl<Proto, CP, Io>
+            SyncReceiving<Proto, $R, Cons<$Token, Nil>, Nil, CP, Io>
         where
-            N: Protocol,
-            <N::Curve as Curve>::PublicKey: AsRef<[u8]>,
-            CP: DhProvider<N::Curve>,
+            Proto: Protocol,
+            <Proto::Curve as Curve>::PublicKey: AsRef<[u8]>,
+            CP: DhProvider<Proto::Curve>,
             Io: Read,
             $($extra)*
         {
@@ -1102,14 +1104,14 @@ macro_rules! sync_recv_reveal_token {
             #[allow(clippy::type_complexity)]
             pub fn $method(
                 mut self, $($arg: $arg_ty,)*
-            ) -> Result<(<N::Curve as Curve>::PublicKey, SyncTransport<N, Io>), HandshakeError> {
+            ) -> Result<(<Proto::Curve as Curve>::PublicKey, SyncTransport<Proto, Io>), HandshakeError> {
                 let revealed = {
                     let $inner = &mut self.inner;
                     let $stream = &mut self.stream;
                     $($logic)*
                 };
                 recv_message_tail(&mut self.inner, &mut self.stream)?;
-                let transport = recv_to_transport::<N, $R, CP>(self.inner);
+                let transport = recv_to_transport::<Proto, $R, CP>(self.inner);
                 Ok((revealed, SyncTransport { transport, stream: self.stream }))
             }
         }
@@ -1187,7 +1189,7 @@ sync_recv_reveal_token! {
 // ═══════════════════════════════════════════════════════════════
 
 sync_send_token! {
-    role: Initiator, token: Ee, method: ee(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
+    role: Initiator, token: Ee, method: ee(), bounds: [<Proto::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
     doc: "Process the `ee` token: perform the Diffie–Hellman between our \
           local ephemeral and the remote ephemeral, and mix the shared \
           secret into the chaining key. Writes nothing to the wire; \
@@ -1195,7 +1197,7 @@ sync_send_token! {
     body: |inner, _stream| { sync_do_ee(inner)?; }
 }
 sync_send_token! {
-    role: Responder, token: Ee, method: ee(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
+    role: Responder, token: Ee, method: ee(), bounds: [<Proto::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
     doc: "Process the `ee` token: perform the Diffie–Hellman between our \
           local ephemeral and the remote ephemeral, and mix the shared \
           secret into the chaining key. Writes nothing to the wire; \
@@ -1203,7 +1205,7 @@ sync_send_token! {
     body: |inner, _stream| { sync_do_ee(inner)?; }
 }
 sync_recv_token! {
-    role: Initiator, token: Ee, method: ee(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
+    role: Initiator, token: Ee, method: ee(), bounds: [<Proto::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
     doc: "Process the `ee` token: perform the Diffie–Hellman between our \
           local ephemeral and the remote ephemeral, and mix the shared \
           secret into the chaining key. Reads nothing from the wire; \
@@ -1211,7 +1213,7 @@ sync_recv_token! {
     body: |inner, _stream| { sync_do_ee(inner)?; }
 }
 sync_recv_token! {
-    role: Responder, token: Ee, method: ee(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
+    role: Responder, token: Ee, method: ee(), bounds: [<Proto::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
     doc: "Process the `ee` token: perform the Diffie–Hellman between our \
           local ephemeral and the remote ephemeral, and mix the shared \
           secret into the chaining key. Reads nothing from the wire; \
@@ -1224,7 +1226,7 @@ sync_recv_token! {
 // ═══════════════════════════════════════════════════════════════
 
 sync_send_token! {
-    role: Initiator, token: Es, method: es(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
+    role: Initiator, token: Es, method: es(), bounds: [<Proto::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
     doc: "Process the `es` token (initiator): perform the Diffie–Hellman \
           between our local ephemeral and the remote static, and mix the \
           shared secret into the chaining key. Writes nothing to the wire; \
@@ -1232,7 +1234,7 @@ sync_send_token! {
     body: |inner, _stream| { sync_do_es_initiator(inner)?; }
 }
 sync_recv_token! {
-    role: Initiator, token: Es, method: es(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
+    role: Initiator, token: Es, method: es(), bounds: [<Proto::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
     doc: "Process the `es` token (initiator): perform the Diffie–Hellman \
           between our local ephemeral and the remote static, and mix the \
           shared secret into the chaining key. Reads nothing from the wire; \
@@ -1240,7 +1242,7 @@ sync_recv_token! {
     body: |inner, _stream| { sync_do_es_initiator(inner)?; }
 }
 sync_send_token! {
-    role: Responder, token: Es, method: es(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
+    role: Responder, token: Es, method: es(), bounds: [<Proto::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
     doc: "Process the `es` token (responder): perform the Diffie–Hellman \
           between our local static and the remote ephemeral, and mix the \
           shared secret into the chaining key. Writes nothing to the wire; \
@@ -1248,7 +1250,7 @@ sync_send_token! {
     body: |inner, _stream| { sync_do_es_responder(inner)?; }
 }
 sync_recv_token! {
-    role: Responder, token: Es, method: es(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
+    role: Responder, token: Es, method: es(), bounds: [<Proto::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
     doc: "Process the `es` token (responder): perform the Diffie–Hellman \
           between our local static and the remote ephemeral, and mix the \
           shared secret into the chaining key. Reads nothing from the wire; \
@@ -1261,7 +1263,7 @@ sync_recv_token! {
 // ═══════════════════════════════════════════════════════════════
 
 sync_send_token! {
-    role: Initiator, token: Se, method: se(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
+    role: Initiator, token: Se, method: se(), bounds: [<Proto::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
     doc: "Process the `se` token (initiator): perform the Diffie–Hellman \
           between our local static and the remote ephemeral, and mix the \
           shared secret into the chaining key. Writes nothing to the wire; \
@@ -1269,7 +1271,7 @@ sync_send_token! {
     body: |inner, _stream| { sync_do_se_initiator(inner)?; }
 }
 sync_recv_token! {
-    role: Initiator, token: Se, method: se(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
+    role: Initiator, token: Se, method: se(), bounds: [<Proto::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
     doc: "Process the `se` token (initiator): perform the Diffie–Hellman \
           between our local static and the remote ephemeral, and mix the \
           shared secret into the chaining key. Reads nothing from the wire; \
@@ -1277,7 +1279,7 @@ sync_recv_token! {
     body: |inner, _stream| { sync_do_se_initiator(inner)?; }
 }
 sync_send_token! {
-    role: Responder, token: Se, method: se(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
+    role: Responder, token: Se, method: se(), bounds: [<Proto::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
     doc: "Process the `se` token (responder): perform the Diffie–Hellman \
           between our local ephemeral and the remote static, and mix the \
           shared secret into the chaining key. Writes nothing to the wire; \
@@ -1285,7 +1287,7 @@ sync_send_token! {
     body: |inner, _stream| { sync_do_se_responder(inner)?; }
 }
 sync_recv_token! {
-    role: Responder, token: Se, method: se(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
+    role: Responder, token: Se, method: se(), bounds: [<Proto::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
     doc: "Process the `se` token (responder): perform the Diffie–Hellman \
           between our local ephemeral and the remote static, and mix the \
           shared secret into the chaining key. Reads nothing from the wire; \
@@ -1298,7 +1300,7 @@ sync_recv_token! {
 // ═══════════════════════════════════════════════════════════════
 
 sync_send_token! {
-    role: Initiator, token: Ss, method: ss(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
+    role: Initiator, token: Ss, method: ss(), bounds: [<Proto::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
     doc: "Process the `ss` token: perform the Diffie–Hellman between our \
           local static and the remote static, and mix the shared secret \
           into the chaining key. Writes nothing to the wire; subsequent \
@@ -1306,7 +1308,7 @@ sync_send_token! {
     body: |inner, _stream| { sync_do_ss(inner)?; }
 }
 sync_send_token! {
-    role: Responder, token: Ss, method: ss(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
+    role: Responder, token: Ss, method: ss(), bounds: [<Proto::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
     doc: "Process the `ss` token: perform the Diffie–Hellman between our \
           local static and the remote static, and mix the shared secret \
           into the chaining key. Writes nothing to the wire; subsequent \
@@ -1314,7 +1316,7 @@ sync_send_token! {
     body: |inner, _stream| { sync_do_ss(inner)?; }
 }
 sync_recv_token! {
-    role: Initiator, token: Ss, method: ss(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
+    role: Initiator, token: Ss, method: ss(), bounds: [<Proto::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
     doc: "Process the `ss` token: perform the Diffie–Hellman between our \
           local static and the remote static, and mix the shared secret \
           into the chaining key. Reads nothing from the wire; subsequent \
@@ -1322,7 +1324,7 @@ sync_recv_token! {
     body: |inner, _stream| { sync_do_ss(inner)?; }
 }
 sync_recv_token! {
-    role: Responder, token: Ss, method: ss(), bounds: [<N::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
+    role: Responder, token: Ss, method: ss(), bounds: [<Proto::Curve as DhCurve>::SharedSecret: AsRef<[u8]>,],
     doc: "Process the `ss` token: perform the Diffie–Hellman between our \
           local static and the remote static, and mix the shared secret \
           into the chaining key. Reads nothing from the wire; subsequent \
@@ -1370,7 +1372,7 @@ sync_recv_token! {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::noise::{IKpsk1, Initiator, K, N, P256, Responder};
+    use crate::noise::{Blake2b, ChaChaPoly, Initiator, Noise, P256, Responder, pattern};
     use crate::provider::EphemeralOnly;
     use crate::provider::ProviderExt;
     use crate::psk::Psk;
@@ -1380,9 +1382,9 @@ mod tests {
     use std::io::Cursor;
     use std::rc::Rc;
 
-    type Seal = N;
-    type Channel = IKpsk1;
-    type NoiseK = K;
+    type Seal = Noise<pattern::N, P256, ChaChaPoly, Blake2b>;
+    type Channel = Noise<pattern::IKpsk1, P256, ChaChaPoly, Blake2b>;
+    type NoiseK = Noise<pattern::K, P256, ChaChaPoly, Blake2b>;
 
     /// A single-threaded in-memory bidirectional byte pipe. Reads pull
     /// from one shared queue, writes push to the other; the peer endpoint
@@ -1467,12 +1469,12 @@ mod tests {
     }
 
     /// The same N seal/open round-trip as `n_sync_seal_open_roundtrip`,
-    /// but built through the ergonomic alias + role-fixing constructors
+    /// but built through a local alias + role-fixing constructors
     /// (`N::sync_initiator` / `sync_responder`) — no turbofish, no
     /// `SyncHandshake::<…, …, _, _, _, _>` spelling.
     #[test]
     fn n_sync_constructors_roundtrip() {
-        use crate::noise::N;
+        type N = Seal;
 
         let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
         let recipient_static = provider.generate::<P256>().unwrap();

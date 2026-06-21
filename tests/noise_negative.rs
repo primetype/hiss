@@ -29,6 +29,21 @@ use hiss::provider::EphemeralOnly;
 use hiss::psk::Psk;
 use rand::{SeedableRng, rngs::StdRng};
 
+// Each case below exercises one Noise pattern over the crate's default suite.
+// The public API has no suite-bound aliases — `N`, `XX`, … are *patterns*
+// (under `noise::pattern`), not whole `Noise<P, Cu, Ci, H>` protocols — so the
+// full protocol is bound locally, one per pattern, named for the pattern tested.
+type N = Noise<pattern::N, P256, ChaChaPoly, Blake2b>;
+type K = Noise<pattern::K, P256, ChaChaPoly, Blake2b>;
+type Kpsk0 = Noise<pattern::Kpsk0, P256, ChaChaPoly, Blake2b>;
+type IKpsk1 = Noise<pattern::IKpsk1, P256, ChaChaPoly, Blake2b>;
+type IK = Noise<pattern::IK, P256, ChaChaPoly, Blake2b>;
+type NK = Noise<pattern::NK, P256, ChaChaPoly, Blake2b>;
+type IX = Noise<pattern::IX, P256, ChaChaPoly, Blake2b>;
+type XK = Noise<pattern::XK, P256, ChaChaPoly, Blake2b>;
+type NN = Noise<pattern::NN, P256, ChaChaPoly, Blake2b>;
+type XX = Noise<pattern::XX, P256, ChaChaPoly, Blake2b>;
+
 // Fixed inputs — distinct values per role; all valid P-256 scalars.
 const INIT_STATIC: [u8; 32] = [0xA1; 32];
 const INIT_EPHEMERAL: [u8; 32] = [0xB2; 32];
@@ -673,7 +688,7 @@ fn kpsk0_wrong_psk_rejected() {
 
 // ── Transport: tamper sweep + nonce sequencing ───────────────────
 
-type ChannelN = N;
+type ChannelN = Noise<pattern::N, P256, ChaChaPoly, Blake2b>;
 type NTransport = Transport<ChannelN>;
 
 /// Complete an N handshake hiss↔hiss and return both transport states.

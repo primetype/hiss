@@ -51,7 +51,7 @@ fn ikpsk1_hiss_initiator_snow_responder() {
         .unwrap();
 
     // ── Our initiator setup ──────────────────────────────────
-    type Channel = IKpsk1;
+    type Channel = Noise<pattern::IKpsk1, P256, ChaChaPoly, Blake2b>;
 
     let stream = PeerStream::new();
     let i_hs = SyncHandshake::<Channel, Initiator, _, _, _, _>::initiate(
@@ -145,7 +145,7 @@ fn ikpsk1_snow_initiator_hiss_responder() {
         .unwrap();
 
     // ── Our responder setup ──────────────────────────────────
-    type Channel = IKpsk1;
+    type Channel = Noise<pattern::IKpsk1, P256, ChaChaPoly, Blake2b>;
 
     let stream = PeerStream::new();
     let r_hs = SyncHandshake::<Channel, Responder, _, _, _, _>::respond(
@@ -231,7 +231,7 @@ fn n_hiss_initiator_snow_responder() {
         .unwrap();
 
     // ── Our initiator seals ──────────────────────────────────
-    type NoiseSeal = N;
+    type NoiseSeal = Noise<pattern::N, P256, ChaChaPoly, Blake2b>;
 
     let stream = PeerStream::new();
     let sealer = SyncHandshake::<NoiseSeal, Initiator, _, _, _, _>::initiate(
@@ -293,7 +293,7 @@ fn kpsk0_hiss_initiator_snow_responder() {
             .unwrap();
 
     // ── Our initiator seals ──────────────────────────────────
-    type NoiseKpsk0 = Kpsk0;
+    type NoiseKpsk0 = Noise<pattern::Kpsk0, P256, ChaChaPoly, Blake2b>;
 
     let stream = PeerStream::new();
     let sealer = SyncHandshake::<NoiseKpsk0, Initiator, _, _, _, _>::initiate(
@@ -357,7 +357,7 @@ fn n_with_prologue_hiss_initiator_snow_responder() {
         .unwrap();
 
     // ── Our initiator seals with prologue ───────────────────────
-    type NoiseSeal = N;
+    type NoiseSeal = Noise<pattern::N, P256, ChaChaPoly, Blake2b>;
 
     let stream = PeerStream::new();
     let sealer = SyncHandshake::<NoiseSeal, Initiator, _, _, _, _>::initiate(
@@ -412,7 +412,7 @@ fn ikpsk1_with_prologue_hiss_initiator_snow_responder() {
         .build_responder()
         .unwrap();
 
-    type Channel = IKpsk1;
+    type Channel = Noise<pattern::IKpsk1, P256, ChaChaPoly, Blake2b>;
 
     let stream = PeerStream::new();
     let i_hs = SyncHandshake::<Channel, Initiator, _, _, _, _>::initiate(
@@ -477,7 +477,7 @@ fn n_rekey_hiss_initiator_snow_responder() {
         .build_responder()
         .unwrap();
 
-    type NoiseSeal = N;
+    type NoiseSeal = Noise<pattern::N, P256, ChaChaPoly, Blake2b>;
 
     let stream = PeerStream::new();
     let sealer = SyncHandshake::<NoiseSeal, Initiator, _, _, _, _>::initiate(
@@ -531,7 +531,7 @@ fn ikpsk1_rekey_hiss_initiator_snow_responder() {
         .build_responder()
         .unwrap();
 
-    type Channel = IKpsk1;
+    type Channel = Noise<pattern::IKpsk1, P256, ChaChaPoly, Blake2b>;
 
     let stream = PeerStream::new();
     let i_hs = SyncHandshake::<Channel, Initiator, _, _, _, _>::initiate(
@@ -619,7 +619,7 @@ fn ik_hiss_initiator_snow_responder() {
         .unwrap();
 
     // ── Our initiator setup ──────────────────────────────────
-    type Channel = IK;
+    type Channel = Noise<pattern::IK, P256, ChaChaPoly, Blake2b>;
 
     let stream = PeerStream::new();
     let i_hs = SyncHandshake::<Channel, Initiator, _, _, _, _>::initiate(
@@ -697,7 +697,7 @@ fn ik_snow_initiator_hiss_responder() {
         .unwrap();
 
     // ── Our responder setup ──────────────────────────────────
-    type Channel = IK;
+    type Channel = Noise<pattern::IK, P256, ChaChaPoly, Blake2b>;
 
     let stream = PeerStream::new();
     let r_hs = SyncHandshake::<Channel, Responder, _, _, _, _>::respond(
@@ -780,7 +780,7 @@ fn k_hiss_initiator_snow_responder() {
         .unwrap();
 
     // ── Our initiator seals ──────────────────────────────────
-    type NoiseK = K;
+    type NoiseK = Noise<pattern::K, P256, ChaChaPoly, Blake2b>;
 
     let stream = PeerStream::new();
     let sealer = SyncHandshake::<NoiseK, Initiator, _, _, _, _>::initiate(
@@ -833,7 +833,7 @@ fn nk_hiss_initiator_snow_responder() {
         .unwrap();
 
     // ── Our initiator setup (anonymous: no static) ───────────
-    type Channel = NK;
+    type Channel = Noise<pattern::NK, P256, ChaChaPoly, Blake2b>;
 
     let stream = PeerStream::new();
     let i_hs = SyncHandshake::<Channel, Initiator, _, _, _, _>::initiate(
@@ -900,7 +900,7 @@ fn nk_snow_initiator_hiss_responder() {
         .unwrap();
 
     // ── Our responder setup ──────────────────────────────────
-    type Channel = NK;
+    type Channel = Noise<pattern::NK, P256, ChaChaPoly, Blake2b>;
 
     let stream = PeerStream::new();
     let r_hs = SyncHandshake::<Channel, Responder, _, _, _, _>::respond(
@@ -972,7 +972,7 @@ fn ix_hiss_initiator_snow_responder() {
         .unwrap();
 
     // ── Our initiator setup (no pre-message setters) ─────────
-    type Channel = IX;
+    type Channel = Noise<pattern::IX, P256, ChaChaPoly, Blake2b>;
 
     let stream = PeerStream::new();
     let i_hs = SyncHandshake::<Channel, Initiator, _, _, _, _>::initiate(
@@ -1053,7 +1053,7 @@ fn ix_snow_initiator_hiss_responder() {
         .unwrap();
 
     // ── Our responder setup (no pre-message setters) ─────────
-    type Channel = IX;
+    type Channel = Noise<pattern::IX, P256, ChaChaPoly, Blake2b>;
 
     let stream = PeerStream::new();
     let r_hs = SyncHandshake::<Channel, Responder, _, _, _, _>::respond(
@@ -1146,7 +1146,7 @@ fn xk_hiss_initiator_snow_responder() {
         .unwrap();
 
     // ── Our initiator setup: pre-message `<- s` via set_rs ────
-    type Channel = XK;
+    type Channel = Noise<pattern::XK, P256, ChaChaPoly, Blake2b>;
 
     let stream = PeerStream::new();
     let i_hs = SyncHandshake::<Channel, Initiator, _, _, _, _>::initiate(
@@ -1229,7 +1229,7 @@ fn xk_snow_initiator_hiss_responder() {
         .unwrap();
 
     // ── Our responder setup: pre-message `<- s` via set_s ────
-    type Channel = XK;
+    type Channel = Noise<pattern::XK, P256, ChaChaPoly, Blake2b>;
 
     let stream = PeerStream::new();
     let r_hs = SyncHandshake::<Channel, Responder, _, _, _, _>::respond(
@@ -1306,7 +1306,7 @@ fn nn_hiss_initiator_snow_responder() {
         .unwrap();
 
     // ── Our initiator setup (anonymous: no static, no pre-known peer) ──
-    type Channel = NN;
+    type Channel = Noise<pattern::NN, P256, ChaChaPoly, Blake2b>;
 
     let stream = PeerStream::new();
     let i_hs = SyncHandshake::<Channel, Initiator, _, _, _, _>::initiate(
@@ -1365,7 +1365,7 @@ fn nn_snow_initiator_hiss_responder() {
         .unwrap();
 
     // ── Our responder setup (anonymous: no static) ───────────
-    type Channel = NN;
+    type Channel = Noise<pattern::NN, P256, ChaChaPoly, Blake2b>;
 
     let stream = PeerStream::new();
     let r_hs = SyncHandshake::<Channel, Responder, _, _, _, _>::respond(
@@ -1434,7 +1434,7 @@ fn xx_hiss_initiator_snow_responder() {
         .unwrap();
 
     // ── Our initiator setup (no pre-messages: neither static pre-known) ──
-    type Channel = XX;
+    type Channel = Noise<pattern::XX, P256, ChaChaPoly, Blake2b>;
 
     let stream = PeerStream::new();
     let i_hs = SyncHandshake::<Channel, Initiator, _, _, _, _>::initiate(
@@ -1522,7 +1522,7 @@ fn xx_snow_initiator_hiss_responder() {
         .unwrap();
 
     // ── Our responder setup (no pre-messages: neither static pre-known) ──
-    type Channel = XX;
+    type Channel = Noise<pattern::XX, P256, ChaChaPoly, Blake2b>;
 
     let stream = PeerStream::new();
     let r_hs = SyncHandshake::<Channel, Responder, _, _, _, _>::respond(

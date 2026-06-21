@@ -18,12 +18,15 @@
 //!
 //! The default suite is **P-256 / ChaCha20-Poly1305 / BLAKE2b** —
 //! [`P256`](noise::P256), [`ChaChaPoly`](noise::ChaChaPoly), and
-//! [`Blake2b`](noise::Blake2b). Ten fundamental patterns are provided,
-//! reached as `noise::N`, `noise::IKpsk1`, and so on:
-//! [`N`](noise::N), [`K`](noise::K), [`Kpsk0`](noise::Kpsk0),
-//! [`IKpsk1`](noise::IKpsk1), [`IK`](noise::IK), [`NK`](noise::NK),
-//! [`IX`](noise::IX), [`XK`](noise::XK), [`NN`](noise::NN), and
-//! [`XX`](noise::XX). Two Diffie-Hellman curves are supported —
+//! [`Blake2b`](noise::Blake2b). Ten fundamental patterns are provided as
+//! markers in [`noise::pattern`], each combined with a suite
+//! through [`Noise<P, Cu, Ci, H>`](noise::Noise):
+//! [`N`](noise::pattern::N), [`K`](noise::pattern::K),
+//! [`Kpsk0`](noise::pattern::Kpsk0), [`IKpsk1`](noise::pattern::IKpsk1),
+//! [`IK`](noise::pattern::IK), [`NK`](noise::pattern::NK),
+//! [`IX`](noise::pattern::IX), [`XK`](noise::pattern::XK),
+//! [`NN`](noise::pattern::NN), and [`XX`](noise::pattern::XX). Two
+//! Diffie-Hellman curves are supported —
 //! [`P256`](noise::P256) and [`X25519`](noise::X25519) (the Noise
 //! `25519` curve) — with Ed25519 reserved for identity and signing.
 //!
@@ -109,7 +112,7 @@
 //!   monomorphisation time.
 //!
 //! * **[`psk`]** — Pre-shared keys for the `*psk*` patterns
-//!   ([`Kpsk0`](noise::Kpsk0), [`IKpsk1`](noise::IKpsk1)): a
+//!   ([`Kpsk0`](noise::pattern::Kpsk0), [`IKpsk1`](noise::pattern::IKpsk1)): a
 //!   fixed-size [`Psk`](psk::Psk) mixed into the handshake hash.
 //!
 //! * **[`zeroize`]** — Volatile zeroing of secret material.
@@ -127,7 +130,7 @@
 //!
 //! # Quickstart — seal a message with the `N` pattern, step by step
 //!
-//! [`N`](noise::N) is a one-way, sender-anonymous seal: anyone who knows a
+//! [`N`](noise::pattern::N) is a one-way, sender-anonymous seal: anyone who knows a
 //! recipient's static public key can send it one confidential, authenticated
 //! message, with no reply. The whole exchange is the single Noise message
 //! `-> e, es`. We build it over [`X25519`](noise::X25519) in five steps —

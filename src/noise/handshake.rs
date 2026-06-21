@@ -63,20 +63,20 @@ where
     H: Hash,
     CP: CryptoKeyProvider<Cu>,
 {
-    /// Build the runtime handshake state for protocol `N` and the given
+    /// Build the runtime handshake state for protocol `Proto` and the given
     /// provider, mixing the prologue into the handshake hash.
     ///
     /// This is the single source of the protocol-name + `mix_hash`
     /// initialisation shared by every driver (`SyncHandshake`,
     /// `AsyncHandshake`, and the internal seal helpers). The protocol
-    /// descriptor `N` supplies the pattern/curve/cipher/hash names.
-    pub(crate) fn new<N>(provider: CP, prologue: &[u8]) -> Self
+    /// descriptor `Proto` supplies the pattern/curve/cipher/hash names.
+    pub(crate) fn new<Proto>(provider: CP, prologue: &[u8]) -> Self
     where
-        N: Protocol<Curve = Cu, Cipher = Ci, Hash = H>,
+        Proto: Protocol<Curve = Cu, Cipher = Ci, Hash = H>,
     {
         let protocol_name = format!(
             "Noise_{}_{}_{}_{}",
-            <N::Pattern as Pattern>::NAME,
+            <Proto::Pattern as Pattern>::NAME,
             <Cu as Curve>::NAME,
             <Ci as Cipher>::NAME,
             <H as Hash>::NAME,
@@ -94,7 +94,7 @@ where
             s_pub: None,
             re: None,
             rs: None,
-            has_psk: <N::Pattern as Pattern>::HAS_PSK,
+            has_psk: <Proto::Pattern as Pattern>::HAS_PSK,
             provider,
         }
     }

@@ -25,27 +25,27 @@ use crate::curve::Curve;
 /// uniquely identifies this session — both peers produce the same
 /// value from a completed handshake.
 ///
-/// Ephemeral keys are `Option` because one-way patterns (N, K, Kpsk0)
+/// Ephemeral keys are `Option` because one-way patterns (Proto, K, Kpsk0)
 /// produce only one ephemeral: the sender has `local_ephemeral` but no
 /// `remote_ephemeral`, and vice versa for the receiver. Interactive
 /// patterns (IK, XK) always produce both.
-pub struct Transport<N: Protocol> {
-    send: CipherState<N::Cipher>,
-    recv: CipherState<N::Cipher>,
+pub struct Transport<Proto: Protocol> {
+    send: CipherState<Proto::Cipher>,
+    recv: CipherState<Proto::Cipher>,
     session_id: SessionId,
     /// Our ephemeral public key for this session, if we generated one.
-    local_ephemeral: Option<<N::Curve as Curve>::PublicKey>,
+    local_ephemeral: Option<<Proto::Curve as Curve>::PublicKey>,
     /// The remote party's ephemeral public key, if they sent one.
-    remote_ephemeral: Option<<N::Curve as Curve>::PublicKey>,
+    remote_ephemeral: Option<<Proto::Curve as Curve>::PublicKey>,
 }
 
-impl<N: Protocol> Transport<N> {
+impl<Proto: Protocol> Transport<Proto> {
     pub(crate) fn new(
-        send: CipherState<N::Cipher>,
-        recv: CipherState<N::Cipher>,
+        send: CipherState<Proto::Cipher>,
+        recv: CipherState<Proto::Cipher>,
         session_id: SessionId,
-        local_ephemeral: Option<<N::Curve as Curve>::PublicKey>,
-        remote_ephemeral: Option<<N::Curve as Curve>::PublicKey>,
+        local_ephemeral: Option<<Proto::Curve as Curve>::PublicKey>,
+        remote_ephemeral: Option<<Proto::Curve as Curve>::PublicKey>,
     ) -> Self {
         Self {
             send,
@@ -59,7 +59,7 @@ impl<N: Protocol> Transport<N> {
     /// The number of bytes added to each plaintext by encryption (the
     /// AEAD authentication tag). Use this to size output buffers:
     /// `plaintext.len() + Transport::OVERHEAD`.
-    pub const OVERHEAD: usize = <N::Cipher as Cipher>::TAG_SIZE;
+    pub const OVERHEAD: usize = <Proto::Cipher as Cipher>::TAG_SIZE;
 
     /// Encrypt a transport message, writing ciphertext + tag into
     /// `output`.
@@ -107,16 +107,16 @@ impl<N: Protocol> Transport<N> {
     /// Our ephemeral public key for this session, if we generated one.
     ///
     /// Always `Some` for interactive patterns (IK, XK). `None` for the
-    /// receiver side of one-way patterns (N, K, Kpsk0).
-    pub fn local_ephemeral(&self) -> Option<&<N::Curve as Curve>::PublicKey> {
+    /// receiver side of one-way patterns (Proto, K, Kpsk0).
+    pub fn local_ephemeral(&self) -> Option<&<Proto::Curve as Curve>::PublicKey> {
         self.local_ephemeral.as_ref()
     }
 
     /// The remote party's ephemeral public key, if they sent one.
     ///
     /// Always `Some` for interactive patterns (IK, XK). `None` for the
-    /// sender side of one-way patterns (N, K, Kpsk0).
-    pub fn remote_ephemeral(&self) -> Option<&<N::Curve as Curve>::PublicKey> {
+    /// sender side of one-way patterns (Proto, K, Kpsk0).
+    pub fn remote_ephemeral(&self) -> Option<&<Proto::Curve as Curve>::PublicKey> {
         self.remote_ephemeral.as_ref()
     }
 
@@ -124,7 +124,7 @@ impl<N: Protocol> Transport<N> {
     ///
     /// Each half owns its own [`CipherState`] and a clone of both
     /// ephemeral keys and the [`SessionId`].
-    pub fn split(self) -> (TransportSend<N>, TransportRecv<N>) {
+    pub fn split(self) -> (TransportSend<Proto>, TransportRecv<Proto>) {
         let send = TransportSend {
             cipher: self.send,
             session_id: self.session_id.clone(),
@@ -144,16 +144,16 @@ impl<N: Protocol> Transport<N> {
 /// The send half of a split [`Transport`].
 ///
 /// Owns the outbound [`CipherState`] and both ephemeral public keys.
-pub struct TransportSend<N: Protocol> {
-    cipher: CipherState<N::Cipher>,
+pub struct TransportSend<Proto: Protocol> {
+    cipher: CipherState<Proto::Cipher>,
     session_id: SessionId,
-    local_ephemeral: Option<<N::Curve as Curve>::PublicKey>,
-    remote_ephemeral: Option<<N::Curve as Curve>::PublicKey>,
+    local_ephemeral: Option<<Proto::Curve as Curve>::PublicKey>,
+    remote_ephemeral: Option<<Proto::Curve as Curve>::PublicKey>,
 }
 
-impl<N: Protocol> TransportSend<N> {
+impl<Proto: Protocol> TransportSend<Proto> {
     /// The number of bytes added to each plaintext by encryption.
-    pub const OVERHEAD: usize = <N::Cipher as Cipher>::TAG_SIZE;
+    pub const OVERHEAD: usize = <Proto::Cipher as Cipher>::TAG_SIZE;
 
     /// Encrypt a transport message, writing ciphertext + tag into `output`.
     ///
@@ -178,12 +178,12 @@ impl<N: Protocol> TransportSend<N> {
     }
 
     /// Our ephemeral public key for this session.
-    pub fn local_ephemeral(&self) -> Option<&<N::Curve as Curve>::PublicKey> {
+    pub fn local_ephemeral(&self) -> Option<&<Proto::Curve as Curve>::PublicKey> {
         self.local_ephemeral.as_ref()
     }
 
     /// The remote party's ephemeral public key for this session.
-    pub fn remote_ephemeral(&self) -> Option<&<N::Curve as Curve>::PublicKey> {
+    pub fn remote_ephemeral(&self) -> Option<&<Proto::Curve as Curve>::PublicKey> {
         self.remote_ephemeral.as_ref()
     }
 }
@@ -191,16 +191,16 @@ impl<N: Protocol> TransportSend<N> {
 /// The receive half of a split [`Transport`].
 ///
 /// Owns the inbound [`CipherState`] and both ephemeral public keys.
-pub struct TransportRecv<N: Protocol> {
-    cipher: CipherState<N::Cipher>,
+pub struct TransportRecv<Proto: Protocol> {
+    cipher: CipherState<Proto::Cipher>,
     session_id: SessionId,
-    local_ephemeral: Option<<N::Curve as Curve>::PublicKey>,
-    remote_ephemeral: Option<<N::Curve as Curve>::PublicKey>,
+    local_ephemeral: Option<<Proto::Curve as Curve>::PublicKey>,
+    remote_ephemeral: Option<<Proto::Curve as Curve>::PublicKey>,
 }
 
-impl<N: Protocol> TransportRecv<N> {
+impl<Proto: Protocol> TransportRecv<Proto> {
     /// The number of bytes added to each plaintext by encryption.
-    pub const OVERHEAD: usize = <N::Cipher as Cipher>::TAG_SIZE;
+    pub const OVERHEAD: usize = <Proto::Cipher as Cipher>::TAG_SIZE;
 
     /// Decrypt a transport message, writing plaintext into `output`.
     ///
@@ -225,12 +225,12 @@ impl<N: Protocol> TransportRecv<N> {
     }
 
     /// Our ephemeral public key for this session.
-    pub fn local_ephemeral(&self) -> Option<&<N::Curve as Curve>::PublicKey> {
+    pub fn local_ephemeral(&self) -> Option<&<Proto::Curve as Curve>::PublicKey> {
         self.local_ephemeral.as_ref()
     }
 
     /// The remote party's ephemeral public key for this session.
-    pub fn remote_ephemeral(&self) -> Option<&<N::Curve as Curve>::PublicKey> {
+    pub fn remote_ephemeral(&self) -> Option<&<Proto::Curve as Curve>::PublicKey> {
         self.remote_ephemeral.as_ref()
     }
 }
