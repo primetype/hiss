@@ -285,9 +285,12 @@ impl P256r1PublicKey {
         let sinv = s.inverse();
         let u1 = &e * &sinv;
         let u2 = &r * sinv;
-        // u1·G + u2·Q. Variable-time multiplication is safe and faster on the
-        // verify path: every input (signature, message hash, public key) is public.
-        let rp = Point::GENERATOR.mul_vartime(&u1) + point.mul_vartime(&u2);
+        // u1·G + u2·Q, where every input (signature, message hash, public key)
+        // is public. The generator term uses the fixed-base comb (`mul_base`),
+        // the fastest route for G; the `u2·Q` term has no precomputed table, so
+        // the variable-time path is the fast — and, with a public scalar, safe —
+        // choice.
+        let rp = Point::mul_base(&u1) + point.mul_vartime(&u2);
 
         match rp.to_affine() {
             None => false,
