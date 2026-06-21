@@ -82,7 +82,7 @@ impl Curve for X25519 {
 
 impl DhCurve for X25519 {
     const DHLEN: usize = 32;
-    type SharedSecret = SharedSecret;
+    type SharedSecret = SharedSecret<32>;
 }
 
 // Deliberately no `impl SigningCurve for X25519`: X25519 is DH-only.
@@ -177,7 +177,7 @@ impl SoftwareX25519PrivateKey {
     /// Returns the 32-byte Curve25519 shared secret. Never fails: per
     /// RFC 7748 a low-order peer key yields an all-zero secret rather than
     /// an error, matching the Noise `25519` DH function.
-    pub fn dh(&self, peer: &X25519PublicKey) -> SharedSecret {
+    pub fn dh(&self, peer: &X25519PublicKey) -> SharedSecret<32> {
         let shared: [u8; 32] = x25519::dh(
             &x25519::SecretKey::from(self.secret),
             &x25519::PublicKey::from(peer.0),

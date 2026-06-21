@@ -225,7 +225,7 @@ pub mod well_formed;
 
 pub use self::cipher::{ChaChaPoly, Cipher};
 pub use self::cipher_state::CipherState;
-pub use self::curve::{Curve, DhCurve, P256, X25519};
+pub use self::curve::{Curve, DhCurve, P256, X448, X25519};
 pub use self::error::HandshakeError;
 #[cfg(feature = "async-io")]
 #[cfg_attr(docsrs, doc(cfg(feature = "async-io")))]

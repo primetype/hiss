@@ -35,6 +35,7 @@ use crate::curve::ed25519::{
     Ed25519, Ed25519PublicKey, Ed25519Signature, SoftwareEd25519PrivateKey,
 };
 use crate::curve::p256::{P256, P256Signature, P256r1PrivateKey, P256r1PublicKey};
+use crate::curve::x448::{SoftwareX448PrivateKey, X448, X448PublicKey};
 use crate::curve::x25519::{SoftwareX25519PrivateKey, X25519, X25519PublicKey};
 use crate::curve::{Curve, DhCurve, SigningCurve};
 
@@ -251,7 +252,7 @@ impl<R: CryptoRng + RngCore> DhProvider<P256> for EphemeralOnly<R> {
         &self,
         key: &Self::PrivateKey,
         peer: &P256r1PublicKey,
-    ) -> Result<SharedSecret, Self::Error> {
+    ) -> Result<SharedSecret<32>, Self::Error> {
         key.dh(peer)
     }
 }
@@ -261,7 +262,7 @@ impl<R: CryptoRng + RngCore + Send + Sync> DhProviderAsync<P256> for EphemeralOn
         &self,
         key: &Self::PrivateKey,
         peer: &P256r1PublicKey,
-    ) -> Result<SharedSecret, Self::Error> {
+    ) -> Result<SharedSecret<32>, Self::Error> {
         key.dh(peer)
     }
 }
@@ -316,7 +317,7 @@ impl<R: CryptoRng + RngCore> DhProvider<Ed25519> for EphemeralOnly<R> {
         &self,
         key: &Self::PrivateKey,
         peer: &Ed25519PublicKey,
-    ) -> Result<SharedSecret, Self::Error> {
+    ) -> Result<SharedSecret<32>, Self::Error> {
         Ok(key.dh(peer))
     }
 }
@@ -326,7 +327,7 @@ impl<R: CryptoRng + RngCore + Send + Sync> DhProviderAsync<Ed25519> for Ephemera
         &self,
         key: &Self::PrivateKey,
         peer: &Ed25519PublicKey,
-    ) -> Result<SharedSecret, Self::Error> {
+    ) -> Result<SharedSecret<32>, Self::Error> {
         Ok(key.dh(peer))
     }
 }
@@ -385,7 +386,7 @@ impl<R: CryptoRng + RngCore> DhProvider<X25519> for EphemeralOnly<R> {
         &self,
         key: &Self::PrivateKey,
         peer: &X25519PublicKey,
-    ) -> Result<SharedSecret, Self::Error> {
+    ) -> Result<SharedSecret<32>, Self::Error> {
         Ok(key.dh(peer))
     }
 }
@@ -395,7 +396,56 @@ impl<R: CryptoRng + RngCore + Send + Sync> DhProviderAsync<X25519> for Ephemeral
         &self,
         key: &Self::PrivateKey,
         peer: &X25519PublicKey,
-    ) -> Result<SharedSecret, Self::Error> {
+    ) -> Result<SharedSecret<32>, Self::Error> {
+        Ok(key.dh(peer))
+    }
+}
+
+// X448 (eccoxide, software) — DH-only, no signing -------------------
+
+impl<R: CryptoRng + RngCore> CryptoKeyProvider<X448> for EphemeralOnly<R> {
+    type Error = crate::curve::x448::Error;
+    type PrivateKey = SoftwareX448PrivateKey;
+
+    fn public_key(&self, key: &Self::PrivateKey) -> Result<X448PublicKey, Self::Error> {
+        Ok(key.public_key())
+    }
+
+    fn generate_static_key(&mut self) -> Result<Self::PrivateKey, Self::Error> {
+        Ok(SoftwareX448PrivateKey::generate(&mut self.rng))
+    }
+
+    fn generate_ephemeral_key(&mut self) -> Result<Self::PrivateKey, Self::Error> {
+        Ok(SoftwareX448PrivateKey::generate(&mut self.rng))
+    }
+}
+
+impl<R: CryptoRng + RngCore + Send + Sync> CryptoKeyProviderAsync<X448> for EphemeralOnly<R> {
+    async fn generate_static_key_async(&mut self) -> Result<Self::PrivateKey, Self::Error> {
+        Ok(SoftwareX448PrivateKey::generate(&mut self.rng))
+    }
+
+    async fn generate_ephemeral_key_async(&mut self) -> Result<Self::PrivateKey, Self::Error> {
+        Ok(SoftwareX448PrivateKey::generate(&mut self.rng))
+    }
+}
+
+impl<R: CryptoRng + RngCore> DhProvider<X448> for EphemeralOnly<R> {
+    fn dh(
+        &self,
+        key: &Self::PrivateKey,
+        peer: &X448PublicKey,
+    ) -> Result<SharedSecret<56>, Self::Error> {
+        Ok(key.dh(peer))
+    }
+}
+
+impl<R: CryptoRng + RngCore + Send + Sync> DhProviderAsync<X448> for EphemeralOnly<R> {
+    async fn dh_async(
+        &self,
+        key: &Self::PrivateKey,
+        peer: &X448PublicKey,
+    ) -> Result<SharedSecret<56>, Self::Error> {
         Ok(key.dh(peer))
     }
 }
@@ -429,6 +479,10 @@ impl SecretKey for SoftwareEd25519PrivateKey {
 
 impl SecretKey for SoftwareX25519PrivateKey {
     type Curve = X25519;
+}
+
+impl SecretKey for SoftwareX448PrivateKey {
+    type Curve = X448;
 }
 
 // ── Ergonomic, curve-selecting entry points ──────────────────────

@@ -25,10 +25,11 @@
 //! [`Kpsk0`](noise::pattern::Kpsk0), [`IKpsk1`](noise::pattern::IKpsk1),
 //! [`IK`](noise::pattern::IK), [`NK`](noise::pattern::NK),
 //! [`IX`](noise::pattern::IX), [`XK`](noise::pattern::XK),
-//! [`NN`](noise::pattern::NN), and [`XX`](noise::pattern::XX). Two
+//! [`NN`](noise::pattern::NN), and [`XX`](noise::pattern::XX). Three
 //! Diffie-Hellman curves are supported —
-//! [`P256`](noise::P256) and [`X25519`](noise::X25519) (the Noise
-//! `25519` curve) — with Ed25519 reserved for identity and signing.
+//! [`P256`](noise::P256), [`X25519`](noise::X25519) (the Noise `25519`
+//! curve), and [`X448`](noise::X448) (the Noise `448` curve) — with
+//! Ed25519 reserved for identity and signing.
 //!
 //! # Drivers
 //!

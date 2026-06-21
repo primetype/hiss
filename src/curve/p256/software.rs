@@ -138,7 +138,7 @@ impl P256r1PrivateKey {
     ///   decoded P-256 peer key cannot reach this, but the explicit check
     ///   is the load-bearing contract for cofactor > 1 curves and ensures
     ///   `dh` never panics on attacker-supplied input.
-    pub fn dh(&self, other: &P256r1PublicKey) -> Result<SharedSecret, Error> {
+    pub fn dh(&self, other: &P256r1PublicKey) -> Result<SharedSecret<32>, Error> {
         shared_secret_from(&self.scalar(), &other.to_point()?)
     }
 }
@@ -149,7 +149,7 @@ impl P256r1PrivateKey {
 /// Factored out of [`P256r1PrivateKey::dh`] so the rejection branch can be
 /// exercised directly with an identity peer point — a state a parsed
 /// [`P256r1PublicKey`] can never represent.
-fn shared_secret_from(scalar: &Scalar, peer: &Point) -> Result<SharedSecret, Error> {
+fn shared_secret_from(scalar: &Scalar, peer: &Point) -> Result<SharedSecret<32>, Error> {
     let shared = (scalar * peer)
         .to_affine()
         .ok_or(Error::InvalidSharedSecret)?;

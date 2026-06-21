@@ -2,5 +2,6 @@
 //! [`crate::curve`] for use in Noise protocol parameterisation.
 
 pub use crate::curve::p256::P256;
+pub use crate::curve::x448::X448;
 pub use crate::curve::x25519::X25519;
 pub use crate::curve::{Curve, DhCurve};

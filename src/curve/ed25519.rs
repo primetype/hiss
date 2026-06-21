@@ -98,7 +98,7 @@ impl Curve for Ed25519 {
 
 impl DhCurve for Ed25519 {
     const DHLEN: usize = 32;
-    type SharedSecret = SharedSecret;
+    type SharedSecret = SharedSecret<32>;
 }
 
 impl SigningCurve for Ed25519 {
@@ -246,7 +246,7 @@ impl SoftwareEd25519PrivateKey {
     ///
     /// Converts Ed25519 keys to their Curve25519 (Montgomery)
     /// equivalents via `cryptoxide::ed25519::exchange`.
-    pub fn dh(&self, peer: &Ed25519PublicKey) -> SharedSecret {
+    pub fn dh(&self, peer: &Ed25519PublicKey) -> SharedSecret<32> {
         SharedSecret::new(ed::exchange(&peer.0, &self.seed))
     }
 

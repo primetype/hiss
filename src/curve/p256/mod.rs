@@ -70,7 +70,7 @@ impl Curve for P256 {
 
 impl DhCurve for P256 {
     const DHLEN: usize = 32;
-    type SharedSecret = SharedSecret;
+    type SharedSecret = SharedSecret<32>;
 }
 
 impl SigningCurve for P256 {

@@ -288,7 +288,7 @@ impl P256r1PrivateKey {
     /// own public-key attributes as the template (both are P-256 public
     /// keys). Fails if the key does not advertise support for the exchange
     /// algorithm or if the agreed secret is not exactly 32 bytes.
-    pub fn dh(&self, public_key: &P256r1PublicKey) -> Result<SharedSecret, Error> {
+    pub fn dh(&self, public_key: &P256r1PublicKey) -> Result<SharedSecret<32>, Error> {
         let algorithm = Algorithm::ECDHKeyExchangeStandard;
 
         let supported = unsafe {
@@ -664,7 +664,7 @@ impl DhProvider<P256> for AppleSecureEnclave {
         &self,
         key: &Self::PrivateKey,
         peer: &P256r1PublicKey,
-    ) -> Result<SharedSecret, Self::Error> {
+    ) -> Result<SharedSecret<32>, Self::Error> {
         key.dh(peer)
     }
 }
@@ -674,7 +674,7 @@ impl DhProviderAsync<P256> for AppleSecureEnclave {
         &self,
         key: &Self::PrivateKey,
         peer: &P256r1PublicKey,
-    ) -> Result<SharedSecret, Self::Error> {
+    ) -> Result<SharedSecret<32>, Self::Error> {
         let key = key.clone();
         let peer = *peer;
         offload(move || key.dh(&peer)).await
@@ -758,7 +758,7 @@ impl DhProvider<Ed25519> for AppleSecureEnclave {
         &self,
         key: &Self::PrivateKey,
         peer: &Ed25519PublicKey,
-    ) -> Result<SharedSecret, Self::Error> {
+    ) -> Result<SharedSecret<32>, Self::Error> {
         Ok(key.dh(peer))
     }
 }
@@ -768,7 +768,7 @@ impl DhProviderAsync<Ed25519> for AppleSecureEnclave {
         &self,
         key: &Self::PrivateKey,
         peer: &Ed25519PublicKey,
-    ) -> Result<SharedSecret, Self::Error> {
+    ) -> Result<SharedSecret<32>, Self::Error> {
         Ok(key.dh(peer))
     }
 }

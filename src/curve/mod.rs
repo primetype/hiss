@@ -38,6 +38,7 @@
 pub mod ed25519;
 pub mod p256;
 pub mod x25519;
+pub mod x448;
 
 // ── Curve trait ─────────────────────────────────────────────────
 
@@ -96,17 +97,19 @@ pub trait SigningCurve: Curve {
 
 /// Shared secret derived from an ECDH key exchange.
 ///
-/// The raw 32-byte x-coordinate of the shared ECDH point, as
-/// required by the Noise protocol specification.
+/// Holds the raw `DHLEN`-byte output of the curve's DH function, as
+/// required by the Noise protocol specification: `N = 32` for the 32-byte
+/// curves (P-256's shared-point x-coordinate, X25519) and `N = 56` for
+/// X448. The bytes are zeroed on drop.
 #[derive(Clone, PartialEq, Eq)]
-pub struct SharedSecret([u8; 32]);
+pub struct SharedSecret<const N: usize>([u8; N]);
 
-impl SharedSecret {
-    /// Wrap the raw 32-byte ECDH output (the shared point's x-coordinate).
+impl<const N: usize> SharedSecret<N> {
+    /// Wrap the raw `N`-byte ECDH output.
     ///
     /// Takes ownership of the bytes so the wrapper governs their lifetime;
     /// the backing array is zeroed on drop (see the [`Drop`] impl).
-    pub fn new(bytes: [u8; 32]) -> Self {
+    pub fn new(bytes: [u8; N]) -> Self {
         Self(bytes)
     }
 
@@ -114,32 +117,32 @@ impl SharedSecret {
     ///
     /// The borrow does not copy the secret out; callers must not retain the
     /// bytes beyond the wrapper, which zeroes them on drop.
-    pub fn as_bytes(&self) -> &[u8; 32] {
+    pub fn as_bytes(&self) -> &[u8; N] {
         &self.0
     }
 }
 
-impl AsRef<[u8]> for SharedSecret {
+impl<const N: usize> AsRef<[u8]> for SharedSecret<N> {
     fn as_ref(&self) -> &[u8] {
         self.as_bytes().as_slice()
     }
 }
 
-impl Drop for SharedSecret {
+impl<const N: usize> Drop for SharedSecret<N> {
     fn drop(&mut self) {
         crate::zeroize::zeroize_array(&mut self.0);
     }
 }
 
 #[cfg(not(test))]
-impl std::fmt::Debug for SharedSecret {
+impl<const N: usize> std::fmt::Debug for SharedSecret<N> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_tuple("SharedSecret").finish_non_exhaustive()
     }
 }
 
 #[cfg(test)]
-impl std::fmt::Debug for SharedSecret {
+impl<const N: usize> std::fmt::Debug for SharedSecret<N> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_tuple("SharedSecret")
             .field(&hex::encode(self.0))
