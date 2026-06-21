@@ -28,7 +28,15 @@ jobs:
           ref: ${{ github.event.workflow_run.head_sha }}
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: test (default features)
+      # X25519's software backend is feature-selected: the `x25519-cryptoxide`
+      # default feature picks cryptoxide, `--no-default-features` falls back
+      # to eccoxide. Run every feature/backend combination so neither path
+      # rots and both stay byte-for-byte interoperable.
+      - name: test (default features — cryptoxide X25519)
         run: cargo test
-      - name: test (all features)
+      - name: test (all features — cryptoxide X25519 + async-io)
         run: cargo test --all-features
+      - name: test (no default features — eccoxide X25519)
+        run: cargo test --no-default-features
+      - name: test (eccoxide X25519 + async-io)
+        run: cargo test --no-default-features --features async-io

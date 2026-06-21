@@ -48,6 +48,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: clippy (all features, all targets)
         run: cargo clippy --all-features --all-targets -- -D warnings
+      # `--all-features` lints the cryptoxide X25519 backend (a default
+      # feature); eccoxide's `mod backend` impl is cfg'd out there, so lint
+      # the `--no-default-features` build explicitly to keep it from rotting.
+      - name: clippy (no default features — eccoxide X25519 backend)
+        run: cargo clippy --no-default-features --all-targets -- -D warnings
       # `cargo doc` caches, and items behind `async-io` only break the
       # default build (the 0005 lesson) — so clean and check BOTH feature
       # sets with warnings-as-errors to catch broken intra-doc links.
@@ -71,8 +76,11 @@ jobs:
         with:
           toolchain: "1.96"
       - uses: Swatinem/rust-cache@v2
-      - name: cargo check on the declared MSRV
+      - name: cargo check on the declared MSRV (all features)
         run: cargo check --all-features --all-targets
+      # eccoxide X25519 backend — cfg'd out under `--all-features`.
+      - name: cargo check on the declared MSRV (no default features)
+        run: cargo check --no-default-features --all-targets
 
   deny:
     name: cargo-deny (advisories · licenses · bans · sources)
