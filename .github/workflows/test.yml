@@ -15,28 +15,38 @@ permissions:
 
 jobs:
   test:
-    name: test (${{ matrix.os }})
+    name: "test (${{ matrix.os }} · ${{ matrix.features.label }})"
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
+      # Two independent axes, run as parallel jobs. OS: ubuntu omits the
+      # Apple Secure Enclave backend, macOS compiles it. Features: X25519's
+      # software backend is feature-selected — the `x25519-cryptoxide`
+      # default feature picks cryptoxide, `--no-default-features` falls back
+      # to eccoxide — so cover every backend, with and without `async-io`,
+      # to keep both paths from rotting and prove byte-for-byte interop.
       matrix:
         os: [ubuntu-latest, macos-latest]
+        features:
+          - label: "default (cryptoxide X25519)"
+            flags: ""
+          - label: "all features (cryptoxide X25519 + async-io)"
+            flags: "--all-features"
+          - label: "no default features (eccoxide X25519)"
+            flags: "--no-default-features"
+          - label: "eccoxide X25519 + async-io"
+            flags: "--no-default-features --features async-io"
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      # X25519's software backend is feature-selected: the `x25519-cryptoxide`
-      # default feature picks cryptoxide, `--no-default-features` falls back
-      # to eccoxide. Run every feature/backend combination so neither path
-      # rots and both stay byte-for-byte interoperable.
-      - name: test (default features — cryptoxide X25519)
-        run: cargo test
-      - name: test (all features — cryptoxide X25519 + async-io)
-        run: cargo test --all-features
-      - name: test (no default features — eccoxide X25519)
-        run: cargo test --no-default-features
-      - name: test (eccoxide X25519 + async-io)
-        run: cargo test --no-default-features --features async-io
+        with:
+          # Key the cache per feature set: matrix instances of one job share
+          # a key by default, so without this the configs would evict each
+          # other and thrash on every run.
+          key: ${{ matrix.features.flags }}
+      - name: "cargo test (${{ matrix.features.label }})"
+        run: cargo test ${{ matrix.features.flags }}
