@@ -90,6 +90,11 @@
 //!
 //! * `async-io` — adds the `tokio::io` driver (`AsyncHandshake` /
 //!   `AsyncTransport`). The synchronous driver needs no feature.
+//! * `x25519-cryptoxide` (**default**) — back X25519's software DH with
+//!   `cryptoxide`'s `x25519` (the faster backend). Build with
+//!   `--no-default-features` to fall back to the `eccoxide` ladder; output
+//!   is byte-for-byte identical, so this only changes which dependency
+//!   carries the primitive.
 //!
 //! The Noise `fallback` modifier is an intentional non-goal, not a
 //! missing feature: it is optional in the Noise spec and unnecessary for

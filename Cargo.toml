@@ -39,6 +39,16 @@ thiserror = "2"
 tokio = { version = "1.50", default-features = false, optional = true }
 
 [features]
+# X25519's software DH backend defaults to `cryptoxide`'s `x25519`: it
+# benchmarks faster than the `eccoxide` Montgomery ladder (and beats snow in
+# the `noise` bench). Build with `--no-default-features` to fall back to
+# `eccoxide` (the ladder shared with X448) — output is byte-for-byte
+# identical, so the choice only affects which dependency carries the
+# primitive. The backends are additive, not mutually exclusive (so
+# `--all-features` builds): when both are available the cryptoxide backend
+# wins.
+default = ["x25519-cryptoxide"]
+x25519-cryptoxide = ["cryptoxide/x25519"]
 # The blocking `std::io` handshake (`io_sync`) is always available and
 # needs no runtime. `async-io` adds the `tokio::io` mirror (`io_async`),
 # pulling in tokio with its I/O extension traits.

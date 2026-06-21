@@ -15,11 +15,15 @@
 //!
 //! # Backend
 //!
-//! * **Software** ([`SoftwareX25519PrivateKey`], always available) —
-//!   pure-Rust implementation using `eccoxide`'s `protocol::x25519` (a
-//!   constant-time Montgomery ladder), shared with [`X448`](super::x448).
-//!   Suitable for tests, WASM, and any platform without hardware key
-//!   storage.
+//! * **Software** ([`SoftwareX25519PrivateKey`], always available) — a
+//!   pure-Rust constant-time Montgomery ladder, selected at compile time.
+//!   By default (the `x25519-cryptoxide` feature) it uses `cryptoxide`'s
+//!   `x25519`, which benchmarks faster; building with `--no-default-features`
+//!   falls back to `eccoxide`'s `protocol::x25519` (the ladder shared with
+//!   [`X448`](super::x448)). Both are RFC 7748-conformant and byte-for-byte
+//!   identical on the wire, so the choice only affects which dependency
+//!   carries the primitive. Suitable for tests, WASM, and any platform
+//!   without hardware key storage.
 //!
 //! There is **no** Apple Secure Enclave backend: the Secure Enclave is
 //! P-256-only, so X25519 is software on every platform.
@@ -27,10 +31,9 @@
 //! # Wire format and interop
 //!
 //! Public keys and shared secrets are plain 32-byte values; there is no
-//! point compression flag or KDF. `eccoxide` clamps the scalar and masks
+//! point compression flag or KDF. Both backends clamp the scalar and mask
 //! the u-coordinate's unused high bit per RFC 7748 inside every exchange,
-//! exactly as `snow` (and `cryptoxide`) do, so handshakes are
-//! byte-for-byte interoperable.
+//! exactly as `snow` does, so handshakes are byte-for-byte interoperable.
 //!
 //! Per RFC 7748, X25519 has small-order input points whose shared secret
 //! is all-zero. The Noise `25519` DH function performs no validation
@@ -40,7 +43,6 @@
 
 use std::fmt;
 
-use eccoxide::protocol::x25519;
 use packtool::Packed;
 use rand_core::{CryptoRng, RngCore};
 
@@ -133,13 +135,71 @@ impl fmt::Debug for X25519PublicKey {
     }
 }
 
+// ── Backend (feature-selected) ─────────────────────────────────
+
+/// X25519 scalar multiplication, selected at compile time.
+///
+/// The default backend is `cryptoxide`'s `x25519`, enabled by the
+/// `x25519-cryptoxide` default feature (it also wins under `--all-features`,
+/// since Cargo features are additive). Building with `--no-default-features`
+/// falls back to [`eccoxide`](eccoxide::protocol::x25519), the constant-time
+/// Montgomery ladder shared with [`X448`](super::x448). Both clamp the
+/// scalar and mask the u-coordinate's unused high bit per RFC 7748, so they
+/// emit byte-identical output: the entire feature divergence is the two thin
+/// impls below.
+mod backend {
+    #[cfg(feature = "x25519-cryptoxide")]
+    pub(super) use cryptoxide_backend::{dh, public_key};
+    #[cfg(not(feature = "x25519-cryptoxide"))]
+    pub(super) use eccoxide_backend::{dh, public_key};
+
+    #[cfg(not(feature = "x25519-cryptoxide"))]
+    mod eccoxide_backend {
+        use eccoxide::protocol::x25519;
+
+        /// `X25519(scalar, 9)` — the public u-coordinate for a raw scalar.
+        pub fn public_key(secret: [u8; 32]) -> [u8; 32] {
+            x25519::SecretKey::from_bytes(secret)
+                .public_key()
+                .to_bytes()
+        }
+
+        /// `X25519(scalar, peer)` — the shared secret against a peer key.
+        pub fn dh(secret: [u8; 32], peer: [u8; 32]) -> [u8; 32] {
+            x25519::SecretKey::from_bytes(secret)
+                .diffie_hellman(&x25519::PublicKey::from_bytes(peer))
+                .to_bytes()
+        }
+    }
+
+    #[cfg(feature = "x25519-cryptoxide")]
+    mod cryptoxide_backend {
+        use cryptoxide::x25519;
+
+        /// `X25519(scalar, 9)` — the public u-coordinate for a raw scalar.
+        pub fn public_key(secret: [u8; 32]) -> [u8; 32] {
+            x25519::base(&x25519::SecretKey::from(secret)).into()
+        }
+
+        /// `X25519(scalar, peer)` — the shared secret against a peer key.
+        pub fn dh(secret: [u8; 32], peer: [u8; 32]) -> [u8; 32] {
+            x25519::dh(
+                &x25519::SecretKey::from(secret),
+                &x25519::PublicKey::from(peer),
+            )
+            .into()
+        }
+    }
+}
+
 // ── Software private key ───────────────────────────────────────
 
 /// Software X25519 private key — 32 raw scalar bytes.
 ///
-/// The scalar is stored un-clamped; `eccoxide` applies the RFC 7748 clamp
-/// inside every exchange, so the on-wire and shared-secret bytes match
-/// `snow` and any conformant peer. The bytes are zeroised on drop.
+/// The scalar is stored un-clamped; the selected backend applies the
+/// RFC 7748 clamp inside every exchange, so the on-wire and shared-secret
+/// bytes match `snow` and any conformant peer. The bytes are zeroised on
+/// drop.
 ///
 /// This is the software backend — always available, and the only X25519
 /// backend (the Apple Secure Enclave is P-256-only).
@@ -170,10 +230,7 @@ impl SoftwareX25519PrivateKey {
 
     /// Return the corresponding public key (`X25519(scalar, 9)`).
     pub fn public_key(&self) -> X25519PublicKey {
-        let public = x25519::SecretKey::from_bytes(self.secret)
-            .public_key()
-            .to_bytes();
-        X25519PublicKey(public)
+        X25519PublicKey(backend::public_key(self.secret))
     }
 
     /// Perform Diffie–Hellman key exchange with a peer's public key.
@@ -182,10 +239,7 @@ impl SoftwareX25519PrivateKey {
     /// RFC 7748 a low-order peer key yields an all-zero secret rather than
     /// an error, matching the Noise `25519` DH function.
     pub fn dh(&self, peer: &X25519PublicKey) -> SharedSecret<32> {
-        let shared = x25519::SecretKey::from_bytes(self.secret)
-            .diffie_hellman(&x25519::PublicKey::from_bytes(peer.0))
-            .to_bytes();
-        SharedSecret::new(shared)
+        SharedSecret::new(backend::dh(self.secret, peer.0))
     }
 
     /// Return the raw 32-byte scalar.

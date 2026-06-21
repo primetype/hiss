@@ -352,7 +352,7 @@ impl<R: CryptoRng + RngCore + Send + Sync> SigningProviderAsync<Ed25519> for Eph
     }
 }
 
-// X25519 (eccoxide, software) — DH-only, no signing ----------------
+// X25519 (software, feature-selected backend) — DH-only, no signing -
 
 impl<R: CryptoRng + RngCore> CryptoKeyProvider<X25519> for EphemeralOnly<R> {
     type Error = crate::curve::x25519::Error;
