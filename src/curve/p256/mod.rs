@@ -287,7 +287,7 @@ impl P256r1PublicKey {
         let u2 = &r * sinv;
         // u1·G + u2·Q. Variable-time multiplication is safe and faster on the
         // verify path: every input (signature, message hash, public key) is public.
-        let rp = Point::generator().mul_vartime(&u1) + point.mul_vartime(&u2);
+        let rp = Point::GENERATOR.mul_vartime(&u1) + point.mul_vartime(&u2);
 
         match rp.to_affine() {
             None => false,

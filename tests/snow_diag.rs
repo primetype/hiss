@@ -67,7 +67,7 @@ fn eccoxide_pubkey_matches_snow_p256() {
     let kp = snow_builder.generate_keypair().unwrap();
 
     let scalar = Scalar::from_slice(&kp.private).unwrap();
-    let derived = (&scalar * &Point::generator()).to_affine().unwrap();
+    let derived = (&scalar * &Point::GENERATOR).to_affine().unwrap();
     let (dx, dy) = derived.to_coordinate();
     let mut derived_bytes = [0u8; 65];
     derived_bytes[0] = 0x04;

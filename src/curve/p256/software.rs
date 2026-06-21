@@ -291,7 +291,7 @@ mod tests {
         // the rejection branch directly: `scalar · O = O`, which has no
         // affine x-coordinate and must surface as an error, not a panic.
         let sk = P256r1PrivateKey::from_bytes([0x11; 32]).unwrap();
-        let err = shared_secret_from(&sk.scalar(), &Point::infinity()).unwrap_err();
+        let err = shared_secret_from(&sk.scalar(), &Point::INFINITY).unwrap_err();
         assert!(matches!(err, Error::InvalidSharedSecret));
     }
 
