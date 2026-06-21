@@ -226,8 +226,13 @@ issue.
 
 ## Minimum supported Rust version
 
-`hiss` uses the Rust 2024 edition and declares an MSRV of **1.85**. The MSRV is not yet
-enforced in CI.
+`hiss` uses the Rust 2024 edition and declares an MSRV of **1.96**, enforced in CI by
+the `msrv` job (`cargo check --all-features --all-targets` on the pinned toolchain).
+
+The MSRV tracks a recent stable, **floored at `stable − 3`**: it is bumped only once it
+would fall more than three releases behind current stable. It is set at the current
+stable today and will begin moving once stable advances past 1.99. The declared value
+lives in `Cargo.toml` (`rust-version`); keep it and the `msrv` CI job in lockstep.
 
 ## License
 
