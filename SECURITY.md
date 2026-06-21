@@ -185,12 +185,12 @@ or table index on these paths.
 Honest caveats:
 
 - **This is an upstream property.** `hiss` does not implement or independently verify
-  constant-time behaviour; it relies on the `eccoxide` revision it pins. That
-  revision is currently an **unreleased git commit** (`722797f`), pinned precisely so
-  the constant-time path is the one in use. The guarantee is therefore only as strong
-  as that upstream code.
+  constant-time behaviour; it relies on the `eccoxide` release it depends on —
+  currently the **crates.io `eccoxide` 0.4**, whose P-256 backend carries the
+  constant-time scalar multiplication. The guarantee is therefore only as strong as
+  that upstream code.
 - **Scope is point multiplication.** ECDSA signing also performs a secret-scalar
-  modular inversion (`k⁻¹`) and scalar arithmetic. In the pinned revision the inversion
+  modular inversion (`k⁻¹`) and scalar arithmetic. In `eccoxide` 0.4 the inversion
   is a fixed addition-chain exponentiation (no secret-dependent branching by
   construction); the residual trust is `eccoxide`'s underlying scalar field being
   constant-time, which is **not** independently verified here.
@@ -317,9 +317,9 @@ best-effort compiler fence:
   oversight. `snow` omits it likewise.
 - **Noise KAT provenance.** The P-256 Noise vectors are agreement-with-snow, not
   standards-body vectors (see above).
-- **Upstream constant-time dependency.** Constant-time P-256 rests on a git-pinned,
-  unreleased `eccoxide` revision; the crate cannot be published to crates.io until
-  `eccoxide` cuts a release containing that work.
+- **Upstream constant-time dependency.** Constant-time P-256 rests on `eccoxide`'s
+  released crates.io `0.4`; the property is only as strong as that upstream backend,
+  which `hiss` does not independently verify.
 - **Unproven Enclave path.** The Apple Keychain seal/store/load path is not exercised
   in CI (requires codesigned binary + Secure Enclave hardware).
 

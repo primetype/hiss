@@ -217,10 +217,6 @@ responsible:
 - **Noise's 65535-byte message-length limit** is enforced at the cipher-state chokepoint.
 - **Secret material is zeroized on drop** and is never required to be `Clone`.
 
-> **Note for would-be packagers:** the constant-time P-256 support currently pins
-> `eccoxide` to a specific git revision. A crates.io release of `eccoxide` carrying that
-> fix is required before `hiss` can itself be published.
-
 Please report security issues privately to the maintainers rather than opening a public
 issue.
 

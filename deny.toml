@@ -35,7 +35,5 @@ multiple-versions = "warn"
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
-# eccoxide carries the constant-time P-256 scalar-mul fix only on its git
-# master; A1.5 tracks switching to a crates.io release once one ships.
-# Until then, allow this single git source.
-allow-git = ["https://github.com/vincenthz/eccoxide"]
+# No git sources: eccoxide is now consumed from its crates.io release
+# (0.4), so every dependency resolves from the registry (A1.5 done).
