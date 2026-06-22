@@ -56,7 +56,11 @@ async-io = ["dep:tokio", "tokio/io-util"]
 
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 core-foundation = { version = "0.10", features = [] }
-security-framework = { version = "3.5", features = ["OSX_10_12", "OSX_10_13", "OSX_10_14", "OSX_10_15"] }
+# `OSX_10_15` is the only `OSX_10_*` flag that still gates code in
+# security-framework 3.x — it enables the `DataProtectionKeychain` location
+# we set in `provider/apple.rs`. The lower `OSX_10_12/13/14` flags are inert
+# empty features in this version, so we don't list them.
+security-framework = { version = "3.5", features = ["OSX_10_15"] }
 security-framework-sys = "2.15"
 # The Secure Enclave / Security-framework calls are synchronous, blocking
 # C FFI. The async `CryptoProvider` impl offloads them to Tokio's blocking
