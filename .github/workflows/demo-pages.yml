@@ -1,0 +1,81 @@
+name: Deploy demo
+
+# Builds the browser playground (`/demo`) and publishes it to GitHub Pages.
+#
+# This is INDEPENDENT of the core-crate pipeline (`check.yml` → `test.yml` →
+# `coverage.yml`). The demo is its own cargo workspace, excluded from the
+# published hiss crate (root `Cargo.toml` `exclude = ["/demo"]`), so it never
+# touches the crate's build or release gates. We gate this workflow on
+# `demo/**` so crate-only changes don't rebuild/redeploy the site.
+#
+# Prerequisites (one-time, on GitHub) before this can actually deploy:
+#   1. The repo must be PUBLIC, or on a paid plan (Pages from a private repo
+#      needs GitHub Pro/Team/Enterprise).
+#   2. Settings → Pages → Source = "GitHub Actions".
+# Until then this workflow can sit committed and dormant — the `deploy` job
+# will fail (Pages not enabled), but nothing else is affected.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "demo/**"
+      - ".github/workflows/demo-pages.yml"
+  workflow_dispatch:
+
+# Least privilege for the build job; the deploy job needs id-token + pages.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One Pages deployment at a time. Unlike the crate pipeline we do NOT cancel an
+# in-progress run — a half-cancelled production deploy is worse than waiting.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build (trunk → wasm)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: demo
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # The demo is a separate workspace; point the cache at it (rust-cache
+          # keys off its Cargo.lock, which is committed for reproducibility).
+          workspaces: demo
+      # Prebuilt trunk binary (fast); trunk then auto-downloads the pinned
+      # tailwindcss 4.1.18, wasm-bindgen, and wasm-opt at build time.
+      - uses: jetli/trunk-action@v0.5.1
+      # `--public-url` is load-bearing: a project Pages site serves under
+      # `https://<owner>.github.io/<repo>/`, so asset hrefs must be prefixed
+      # with `/hiss/` or they 404 against the domain root. For a custom domain
+      # or a user/org page, change this to `/`.
+      - run: trunk build --release --public-url "/hiss/"
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          # Relative to the repo root (this is a `uses:` step, so the
+          # `working-directory` default above does not apply to it).
+          path: demo/dist
+
+  deploy:
+    name: deploy (GitHub Pages)
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5
