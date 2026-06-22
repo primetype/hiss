@@ -219,7 +219,9 @@ impl SoftwareEd25519PrivateKey {
     pub fn generate<R: RngCore + CryptoRng>(mut rng: R) -> Self {
         let mut seed = [0u8; 32];
         rng.fill_bytes(&mut seed);
-        Self::from_seed(seed)
+        let key = Self::from_seed(seed);
+        crate::zeroize::zeroize_array(&mut seed);
+        key
     }
 
     /// Construct from a known 32-byte seed.

@@ -70,9 +70,12 @@ impl P256r1PrivateKey {
         for _ in 0..Self::MAX_SCALAR_RETRIES {
             rng.fill_bytes(&mut bytes);
             if Self::scalar_of(&bytes).is_some() {
-                return Ok(Self(bytes));
+                let key = Self(bytes);
+                crate::zeroize::zeroize_array(&mut bytes);
+                return Ok(key);
             }
         }
+        crate::zeroize::zeroize_array(&mut bytes);
         Err(Error::ScalarSamplingFailed)
     }
 
