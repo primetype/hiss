@@ -211,6 +211,12 @@ where
     };
     let ciphertext = buffer.read(wire_len)?;
     // Public key size is bounded — stack-allocate the output.
+    const {
+        assert!(
+            Cu::PUBLIC_KEY_SIZE + Ci::TAG_SIZE <= 128,
+            "curve public key + AEAD tag exceeds the 128-byte scratch buffer"
+        )
+    };
     let mut pk_buf = [0u8; 128];
     let pt_len = inner.symmetric.decrypt_and_hash(ciphertext, &mut pk_buf)?;
     let rs = Cu::public_key_from_bytes(&pk_buf[..pt_len])

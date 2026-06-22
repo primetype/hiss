@@ -23,7 +23,8 @@ use std::marker::PhantomData;
 fn noise_hkdf_2<H: Hash>(ck: &[u8], ikm: &[u8]) -> (Vec<u8>, Vec<u8>) {
     let mut temp_key = H::hmac(ck, ikm);
     let output1 = H::hmac(&temp_key, &[0x01]);
-    let mut input2 = output1.clone();
+    let mut input2 = Vec::with_capacity(output1.len() + 1);
+    input2.extend_from_slice(&output1);
     input2.push(0x02);
     let output2 = H::hmac(&temp_key, &input2);
     zeroize_bytes(&mut temp_key);
@@ -42,10 +43,12 @@ fn noise_hkdf_2<H: Hash>(ck: &[u8], ikm: &[u8]) -> (Vec<u8>, Vec<u8>) {
 fn noise_hkdf_3<H: Hash>(ck: &[u8], ikm: &[u8]) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
     let mut temp_key = H::hmac(ck, ikm);
     let output1 = H::hmac(&temp_key, &[0x01]);
-    let mut input2 = output1.clone();
+    let mut input2 = Vec::with_capacity(output1.len() + 1);
+    input2.extend_from_slice(&output1);
     input2.push(0x02);
     let output2 = H::hmac(&temp_key, &input2);
-    let mut input3 = output2.clone();
+    let mut input3 = Vec::with_capacity(output2.len() + 1);
+    input3.extend_from_slice(&output2);
     input3.push(0x03);
     let output3 = H::hmac(&temp_key, &input3);
     zeroize_bytes(&mut temp_key);

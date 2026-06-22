@@ -78,7 +78,7 @@ impl<Ci: Cipher> CipherState<Ci> {
                 output[..len].copy_from_slice(plaintext);
                 Ok(len)
             }
-            Some(key) => {
+            Some(ref key) => {
                 if self.n == u64::MAX {
                     return Err(HandshakeError::NonceOverflow);
                 }
@@ -88,7 +88,7 @@ impl<Ci: Cipher> CipherState<Ci> {
                 if msg_len > MAX_MESSAGE_LEN {
                     return Err(HandshakeError::MessageTooLong { len: msg_len });
                 }
-                let len = Ci::encrypt(&key, self.n, ad, plaintext, output)?;
+                let len = Ci::encrypt(key, self.n, ad, plaintext, output)?;
                 self.n += 1;
                 Ok(len)
             }
@@ -161,11 +161,11 @@ impl<Ci: Cipher> CipherState<Ci> {
                 output[..len].copy_from_slice(ciphertext);
                 Ok(len)
             }
-            Some(key) => {
+            Some(ref key) => {
                 if self.n == u64::MAX {
                     return Err(HandshakeError::NonceOverflow);
                 }
-                let len = Ci::decrypt(&key, self.n, ad, ciphertext, output)?;
+                let len = Ci::decrypt(key, self.n, ad, ciphertext, output)?;
                 self.n += 1;
                 Ok(len)
             }

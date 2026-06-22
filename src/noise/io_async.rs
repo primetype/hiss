@@ -182,6 +182,12 @@ where
     } else {
         Cu::PUBLIC_KEY_SIZE
     };
+    const {
+        assert!(
+            Cu::PUBLIC_KEY_SIZE + Ci::TAG_SIZE <= TOKEN_SCRATCH,
+            "curve public key + AEAD tag exceeds the 128-byte scratch buffer"
+        )
+    };
     let mut scratch = [0u8; TOKEN_SCRATCH];
     stream.read_exact(&mut scratch[..wire_len]).await?;
     let mut buffer = RecvBuffer::new(&scratch[..wire_len]);

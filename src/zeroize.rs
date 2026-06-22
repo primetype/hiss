@@ -1,20 +1,11 @@
 //! Volatile zeroing of secret material.
 //!
-//! Uses `ptr::write_volatile` followed by a compiler fence to
-//! prevent the compiler from eliding the zero-fill as a dead store.
-//! This is the same technique used by the `zeroize` crate.
+//! Each byte is written with `ptr::write_volatile` followed by a
+//! `core::sync::atomic::compiler_fence(SeqCst)` to prevent the compiler
+//! from eliding the zero-fill as a dead store. This is the same
+//! technique used by the `zeroize` crate.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-
-/// A volatile read that the compiler cannot optimise away.
-///
-/// This forces the compiler to treat the preceding volatile writes
-/// as observable, preventing dead-store elimination.
-#[inline(never)]
-fn volatile_fence() {
-    static FENCE: AtomicBool = AtomicBool::new(false);
-    FENCE.load(Ordering::SeqCst);
-}
+use core::sync::atomic::{Ordering, compiler_fence};
 
 /// Zero the contents of a byte slice using volatile writes.
 ///
@@ -29,7 +20,7 @@ pub fn zeroize_bytes(bytes: &mut [u8]) {
             std::ptr::write_volatile(byte, 0);
         }
     }
-    volatile_fence();
+    compiler_fence(Ordering::SeqCst);
 }
 
 /// Zero a fixed-size array using volatile writes.
