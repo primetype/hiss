@@ -14,6 +14,19 @@
 //! scratch the driver hands it, and threads the symmetric state forward.
 //! Role-dependent DH tokens (`Es`, `Se`) have separate
 //! initiator/responder functions.
+//!
+//! # An error is terminal
+//!
+//! Every function here mutates the
+//! [`SymmetricState`](super::symmetric_state::SymmetricState) in place as
+//! it processes a token. If a step returns `Err`, that
+//! mutation may be only partly applied: the handshake is left in a
+//! half-advanced, internally inconsistent state. Such a state **must be
+//! dropped** — it must never be reused or the failed step retried.
+//! Continuing would silently diverge the transcript from the peer and
+//! could undermine the security of the session. This invariant is not
+//! re-checked at runtime; it is enforced only by ownership (the drivers
+//! own the handshake and tear it down on the first error).
 
 use super::Protocol;
 use super::buffers::{RecvBuffer, SendBuffer};

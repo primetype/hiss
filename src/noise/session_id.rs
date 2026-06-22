@@ -14,6 +14,17 @@ use std::fmt;
 /// Unique identifier for a Noise session, derived from the handshake hash.
 ///
 /// Both peers in a completed handshake produce the same `SessionId`.
+///
+/// # Equality is not constant-time
+///
+/// The derived [`PartialEq`]/[`Eq`] compare the raw bytes with the
+/// standard slice comparison, which short-circuits on the first
+/// differing byte and is therefore **not** constant-time. This is
+/// acceptable because a `SessionId` is a **public** channel-binding
+/// value: it is meant to be compared out-of-band — e.g. as a
+/// short-authentication-string check between peers — and carries no
+/// secret material. Do **not** use this type (or its equality) to
+/// compare secrets; reach for a constant-time comparison there instead.
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct SessionId(Box<[u8]>);
 
