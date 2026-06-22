@@ -17,6 +17,7 @@ use super::cipher::Cipher;
 use super::hash::Hash;
 use super::pattern::Pattern;
 use super::symmetric_state::SymmetricState;
+use super::well_formed::DerivedHasPsk;
 use crate::curve::Curve;
 use crate::provider::CryptoKeyProvider;
 
@@ -94,7 +95,7 @@ where
             s_pub: None,
             re: None,
             rs: None,
-            has_psk: <Proto::Pattern as Pattern>::HAS_PSK,
+            has_psk: <Proto::Pattern as DerivedHasPsk>::HAS_PSK,
             provider,
         }
     }

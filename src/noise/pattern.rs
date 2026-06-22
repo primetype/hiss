@@ -20,16 +20,17 @@ pub trait Pattern {
     /// Number of handshake messages (excluding pre-messages).
     const NUM_MESSAGES: usize;
 
-    /// Whether a PSK modifier is present.
-    const HAS_PSK: bool;
-
     /// Pre-message pattern — type-level list of [`Message`]s
     /// describing knowledge held before the handshake begins.
     type PreMessages;
 
     /// Handshake message pattern — type-level list of [`Message`]s
     /// describing the three (or more) handshake flights.
-    type Messages;
+    ///
+    /// The `ContainsPsk` bound lets the crate derive the PSK modifier from
+    /// the token list (`DerivedHasPsk`) rather than a hand-written constant
+    /// that could drift out of sync with the tokens.
+    type Messages: ContainsPsk;
 }
 
 // ── N ───────────────────────────────────────────────────────────
@@ -54,7 +55,6 @@ pub struct N;
 impl Pattern for N {
     const NAME: &'static str = "N";
     const NUM_MESSAGES: usize = 1;
-    const HAS_PSK: bool = false;
 
     // Pre-messages: <- s (recipient's static key known)
     type PreMessages = Cons<Message<ToInitiator, Cons<S, Nil>>, Nil>;
@@ -87,7 +87,6 @@ pub struct K;
 impl Pattern for K {
     const NAME: &'static str = "K";
     const NUM_MESSAGES: usize = 1;
-    const HAS_PSK: bool = false;
 
     // Pre-messages: -> s, <- s (both static keys known)
     type PreMessages =
@@ -118,7 +117,6 @@ pub struct Kpsk0;
 impl Pattern for Kpsk0 {
     const NAME: &'static str = "Kpsk0";
     const NUM_MESSAGES: usize = 1;
-    const HAS_PSK: bool = true;
 
     // Pre-messages: -> s, <- s
     type PreMessages =
@@ -153,7 +151,6 @@ pub struct IKpsk1;
 impl Pattern for IKpsk1 {
     const NAME: &'static str = "IKpsk1";
     const NUM_MESSAGES: usize = 2;
-    const HAS_PSK: bool = true;
 
     // Pre-messages: <- s
     type PreMessages = Cons<Message<ToInitiator, Cons<S, Nil>>, Nil>;
@@ -190,7 +187,6 @@ pub struct IK;
 impl Pattern for IK {
     const NAME: &'static str = "IK";
     const NUM_MESSAGES: usize = 2;
-    const HAS_PSK: bool = false;
 
     // Pre-messages: <- s (responder's static key known)
     type PreMessages = Cons<Message<ToInitiator, Cons<S, Nil>>, Nil>;
@@ -230,7 +226,6 @@ pub struct NK;
 impl Pattern for NK {
     const NAME: &'static str = "NK";
     const NUM_MESSAGES: usize = 2;
-    const HAS_PSK: bool = false;
 
     // Pre-messages: <- s (responder's static key known)
     type PreMessages = Cons<Message<ToInitiator, Cons<S, Nil>>, Nil>;
@@ -273,7 +268,6 @@ pub struct IX;
 impl Pattern for IX {
     const NAME: &'static str = "IX";
     const NUM_MESSAGES: usize = 2;
-    const HAS_PSK: bool = false;
 
     // No pre-messages: neither static is known up front.
     type PreMessages = Nil;
@@ -317,7 +311,6 @@ pub struct XK;
 impl Pattern for XK {
     const NAME: &'static str = "XK";
     const NUM_MESSAGES: usize = 3;
-    const HAS_PSK: bool = false;
 
     // Pre-messages: <- s (responder's static key known to the initiator)
     type PreMessages = Cons<Message<ToInitiator, Cons<S, Nil>>, Nil>;
@@ -362,7 +355,6 @@ pub struct NN;
 impl Pattern for NN {
     const NAME: &'static str = "NN";
     const NUM_MESSAGES: usize = 2;
-    const HAS_PSK: bool = false;
 
     // No pre-messages: neither party holds any static key.
     type PreMessages = Nil;
@@ -409,7 +401,6 @@ pub struct XX;
 impl Pattern for XX {
     const NAME: &'static str = "XX";
     const NUM_MESSAGES: usize = 3;
-    const HAS_PSK: bool = false;
 
     // No pre-messages: neither party pre-knows the other's static.
     type PreMessages = Nil;

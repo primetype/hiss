@@ -9,10 +9,10 @@
 //! # How it works — rejection by absent impl
 //!
 //! The guard is a type-level fold over the pattern's pre-messages and
-//! handshake messages. It threads an availability [`State`] — four
-//! type-level booleans tracking which of the four keys (initiator/responder
-//! × ephemeral/static) have been transmitted so far — applying one [`Step`]
-//! per token:
+//! handshake messages. It threads a [`State`] — five type-level booleans:
+//! which of the four keys (initiator/responder × ephemeral/static) have been
+//! transmitted so far, plus whether the cipher has been keyed — applying one
+//! [`Step`] per token:
 //!
 //! * `e`/`s` mark the *sending* party's ephemeral/static available — and,
 //!   because no party ever transmits the same key twice, require that it was
@@ -21,8 +21,9 @@
 //!   input [`State`] pins the two keys it consumes to [`True`]. If the fold
 //!   reaches the token while either key is still [`False`], **no impl
 //!   matches** and the type check fails. The invalid case is rejected not by
-//!   a negative assertion but by the simple absence of a transition.
-//! * `psk` does not move any key, so it is the identity.
+//!   a negative assertion but by the simple absence of a transition. Each DH
+//!   token also marks the cipher keyed.
+//! * `psk` moves no key but marks the cipher keyed.
 //!
 //! Pre-messages run first from the all-`False` start state, then the
 //! handshake messages continue from the resulting state — the *same* fold,
@@ -30,16 +31,21 @@
 //! same effect on availability as sending it. A DH token mistakenly placed
 //! in a pre-message is rejected for free (nothing is available there yet).
 //!
-//! [`WellFormed`] ties it together. It is enforced two ways:
-//! `assert_well_formed!` forces the check at a pattern's definition site,
-//! and the [`Protocol`](super::Protocol) impl requires it, so a malformed
-//! pattern can never parameterise a handshake.
+//! [`WellFormed`] ties it together: every DH token's keys must be available,
+//! and the cipher must be [`Keyed`] by the end (a pattern that performs no DH
+//! or `psk` — e.g. a lone `-> e` — would finalise with transport keys derived
+//! only from the public protocol name, and is rejected). It is enforced two
+//! ways: `assert_well_formed!` forces the check at a pattern's definition
+//! site, and the [`Protocol`](super::Protocol) impl requires it, so an
+//! ill-formed pattern can never parameterise a handshake.
 
 use std::marker::PhantomData;
 
 use super::pattern::Pattern;
 use super::role::{Initiator, Responder};
-use super::tokens::{Cons, E, Ee, Es, Message, Nil, Psk, S, Se, Ss, ToInitiator, ToResponder};
+use super::tokens::{
+    Cons, ContainsPsk, E, Ee, Es, Message, Nil, Psk, S, Se, Ss, ToInitiator, ToResponder,
+};
 
 // ── Type-level booleans and availability state ───────────────────
 
@@ -52,13 +58,14 @@ pub struct True;
 pub struct False;
 
 /// Availability state threaded through the fold: which of the four keys have
-/// been transmitted so far, in the order
-/// initiator-ephemeral, responder-ephemeral, initiator-static, responder-static.
+/// been transmitted so far, in the order initiator-ephemeral,
+/// responder-ephemeral, initiator-static, responder-static — plus `CK`, whether
+/// the cipher has been keyed by a DH or `psk` token at least once.
 #[doc(hidden)]
-pub struct State<IE, RE, IS, RS>(PhantomData<(IE, RE, IS, RS)>);
+pub struct State<IE, RE, IS, RS, CK>(PhantomData<(IE, RE, IS, RS, CK)>);
 
-/// The all-`False` starting state — nothing transmitted yet.
-type Start = State<False, False, False, False>;
+/// The all-`False` starting state — nothing transmitted, cipher unkeyed.
+type Start = State<False, False, False, False, False>;
 
 // ── Direction → sending party ────────────────────────────────────
 
@@ -97,42 +104,45 @@ pub trait Step<Sender, StateIn> {
 }
 
 // `e` — the sender transmits its ephemeral (and must not have already).
-impl<RE, IS, RS> Step<Initiator, State<False, RE, IS, RS>> for E {
-    type Out = State<True, RE, IS, RS>;
+// Carries the cipher-keyed bit `CK` through unchanged.
+impl<RE, IS, RS, CK> Step<Initiator, State<False, RE, IS, RS, CK>> for E {
+    type Out = State<True, RE, IS, RS, CK>;
 }
-impl<IE, IS, RS> Step<Responder, State<IE, False, IS, RS>> for E {
-    type Out = State<IE, True, IS, RS>;
+impl<IE, IS, RS, CK> Step<Responder, State<IE, False, IS, RS, CK>> for E {
+    type Out = State<IE, True, IS, RS, CK>;
 }
 
 // `s` — the sender transmits its static (and must not have already).
-impl<IE, RE, RS> Step<Initiator, State<IE, RE, False, RS>> for S {
-    type Out = State<IE, RE, True, RS>;
+// Carries `CK` through unchanged.
+impl<IE, RE, RS, CK> Step<Initiator, State<IE, RE, False, RS, CK>> for S {
+    type Out = State<IE, RE, True, RS, CK>;
 }
-impl<IE, RE, IS> Step<Responder, State<IE, RE, IS, False>> for S {
-    type Out = State<IE, RE, IS, True>;
+impl<IE, RE, IS, CK> Step<Responder, State<IE, RE, IS, False, CK>> for S {
+    type Out = State<IE, RE, IS, True, CK>;
 }
 
-// DH tokens — sender-independent; each consumes two already-transmitted keys.
+// DH tokens — sender-independent; each consumes two already-transmitted keys
+// and keys the cipher (`CK` -> `True`).
 // `ee` = DH(initiator-e, responder-e): requires IE and RE.
-impl<Sndr, IS, RS> Step<Sndr, State<True, True, IS, RS>> for Ee {
-    type Out = State<True, True, IS, RS>;
+impl<Sndr, IS, RS, CK> Step<Sndr, State<True, True, IS, RS, CK>> for Ee {
+    type Out = State<True, True, IS, RS, True>;
 }
 // `es` = DH(initiator-e, responder-s): requires IE and RS.
-impl<Sndr, RE, IS> Step<Sndr, State<True, RE, IS, True>> for Es {
-    type Out = State<True, RE, IS, True>;
+impl<Sndr, RE, IS, CK> Step<Sndr, State<True, RE, IS, True, CK>> for Es {
+    type Out = State<True, RE, IS, True, True>;
 }
 // `se` = DH(initiator-s, responder-e): requires IS and RE.
-impl<Sndr, IE, RS> Step<Sndr, State<IE, True, True, RS>> for Se {
-    type Out = State<IE, True, True, RS>;
+impl<Sndr, IE, RS, CK> Step<Sndr, State<IE, True, True, RS, CK>> for Se {
+    type Out = State<IE, True, True, RS, True>;
 }
 // `ss` = DH(initiator-s, responder-s): requires IS and RS.
-impl<Sndr, IE, RE> Step<Sndr, State<IE, RE, True, True>> for Ss {
-    type Out = State<IE, RE, True, True>;
+impl<Sndr, IE, RE, CK> Step<Sndr, State<IE, RE, True, True, CK>> for Ss {
+    type Out = State<IE, RE, True, True, True>;
 }
 
-// `psk` mixes a pre-shared key and moves no DH key.
-impl<Sndr, St> Step<Sndr, St> for Psk {
-    type Out = St;
+// `psk` mixes a pre-shared key: moves no DH key but keys the cipher.
+impl<Sndr, IE, RE, IS, RS, CK> Step<Sndr, State<IE, RE, IS, RS, CK>> for Psk {
+    type Out = State<IE, RE, IS, RS, True>;
 }
 
 // ── The fold: tokens within a message, messages within a pattern ─
@@ -172,6 +182,27 @@ where
     >>::StateOut;
 }
 
+// ── Finalisation: the cipher must be keyed ───────────────────────
+
+/// Marker for a final fold [`State`] whose cipher has been keyed at least once
+/// (`CK = True`).
+///
+/// [`WellFormed`] requires the state after the last handshake message to be
+/// `Keyed`, so a pattern that performs no DH (`ee`/`es`/`se`/`ss`) and no `psk`
+/// token — and would therefore finalise to a transport whose keys derive solely
+/// from the public protocol-name hash — is rejected at compile time. (The bit
+/// tracks "a DH or PSK occurred", which is intentionally narrower than the
+/// engine's runtime keyed flag: it does not credit the extra `mix_key` an `E`
+/// token performs in a PSK pattern, because every PSK pattern already carries a
+/// `psk` token that keys.)
+#[doc(hidden)]
+#[diagnostic::on_unimplemented(
+    message = "this Noise pattern never keys the cipher: it performs no DH (ee/es/se/ss) and no psk token, so it provides no confidentiality or authentication",
+    label = "pattern finalises with an unkeyed cipher"
+)]
+pub trait Keyed {}
+impl<IE, RE, IS, RS> Keyed for State<IE, RE, IS, RS, True> {}
+
 // ── The public guard ─────────────────────────────────────────────
 
 /// A [`Pattern`] whose token sequence is valid (Noise spec §7.3): every DH
@@ -204,7 +235,6 @@ where
 /// impl Pattern for Bad {
 ///     const NAME: &'static str = "Bad";
 ///     const NUM_MESSAGES: usize = 1;
-///     const HAS_PSK: bool = false;
 ///     type PreMessages = Nil;
 ///     type Messages = Cons<Message<ToResponder, Cons<Es, Cons<E, Nil>>>, Nil>;
 /// }
@@ -221,7 +251,6 @@ where
 /// impl Pattern for Bad {
 ///     const NAME: &'static str = "Bad";
 ///     const NUM_MESSAGES: usize = 1;
-///     const HAS_PSK: bool = false;
 ///     type PreMessages = Cons<Message<ToInitiator, Cons<Es, Nil>>, Nil>;
 ///     type Messages = Cons<Message<ToResponder, Cons<E, Nil>>, Nil>;
 /// }
@@ -237,7 +266,6 @@ where
 /// impl Pattern for Bad {
 ///     const NAME: &'static str = "Bad";
 ///     const NUM_MESSAGES: usize = 3;
-///     const HAS_PSK: bool = false;
 ///     type PreMessages = Nil;
 ///     // -> e / <- e, ee / -> e   (initiator sends e twice)
 ///     type Messages = Cons<
@@ -251,6 +279,24 @@ where
 /// fn assert_well_formed<P: WellFormed>() {}
 /// assert_well_formed::<Bad>();
 /// ```
+///
+/// A pattern that never keys the cipher (a lone `-> e` — no DH and no `psk`) is
+/// rejected; it would otherwise finalise to a transport keyed only from the
+/// public protocol-name hash:
+///
+/// ```compile_fail
+/// use hiss::noise::{Cons, Message, Nil, Pattern, ToResponder, WellFormed, E};
+/// struct Bad;
+/// impl Pattern for Bad {
+///     const NAME: &'static str = "Bad";
+///     const NUM_MESSAGES: usize = 1;
+///     type PreMessages = Nil;
+///     // -> e   (no DH, no psk — the cipher is never keyed)
+///     type Messages = Cons<Message<ToResponder, Cons<E, Nil>>, Nil>;
+/// }
+/// fn assert_well_formed<P: WellFormed>() {}
+/// assert_well_formed::<Bad>(); // never keyed — does not compile
+/// ```
 pub trait WellFormed: Pattern {}
 
 impl<P> WellFormed for P
@@ -258,7 +304,26 @@ where
     P: Pattern,
     P::PreMessages: WalkMessages<Start>,
     P::Messages: WalkMessages<<P::PreMessages as WalkMessages<Start>>::StateOut>,
+    <P::Messages as WalkMessages<<P::PreMessages as WalkMessages<Start>>::StateOut>>::StateOut:
+        Keyed,
 {
+}
+
+// ── Derived PSK modifier ─────────────────────────────────────────
+
+/// A [`Pattern`]'s PSK modifier, derived from its `Messages` token list.
+///
+/// `HAS_PSK` is computed by the [`ContainsPsk`] fold rather than declared by
+/// hand, so it cannot drift out of sync with the tokens. Because this is a
+/// blanket impl, the value is not overridable. The handshake engine reads it
+/// here to gate the extra `mix_key` on the `E` token in PSK patterns.
+#[doc(hidden)]
+pub trait DerivedHasPsk {
+    /// Whether the pattern's message list contains a `psk` token.
+    const HAS_PSK: bool;
+}
+impl<P: Pattern> DerivedHasPsk for P {
+    const HAS_PSK: bool = <P::Messages as ContainsPsk>::VALUE;
 }
 
 /// Assert at compile time that a [`Pattern`] is [`WellFormed`], reporting the

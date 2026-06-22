@@ -70,6 +70,75 @@ pub struct ToInitiator;
 /// A directed message: a direction paired with a list of tokens.
 pub struct Message<Dir, Tokens>(PhantomData<fn() -> (Dir, Tokens)>);
 
+// ── PSK presence (compile-time) ─────────────────────────────────
+
+/// Per-token flag: whether a token is the [`Psk`] token.
+///
+/// Total over every token (so the fold never needs negative reasoning), this
+/// is the leaf of the [`ContainsPsk`] fold that derives a pattern's PSK
+/// modifier from its message list rather than a hand-written constant.
+#[doc(hidden)]
+pub trait TokenFlag {
+    /// `true` only for [`Psk`].
+    const IS_PSK: bool;
+}
+impl TokenFlag for E {
+    const IS_PSK: bool = false;
+}
+impl TokenFlag for S {
+    const IS_PSK: bool = false;
+}
+impl TokenFlag for Ee {
+    const IS_PSK: bool = false;
+}
+impl TokenFlag for Es {
+    const IS_PSK: bool = false;
+}
+impl TokenFlag for Se {
+    const IS_PSK: bool = false;
+}
+impl TokenFlag for Ss {
+    const IS_PSK: bool = false;
+}
+impl TokenFlag for Psk {
+    const IS_PSK: bool = true;
+}
+
+/// Fold over a single message's token list: `true` if any token is [`Psk`].
+#[doc(hidden)]
+pub trait TokensContainPsk {
+    /// Whether the token list contains a [`Psk`] token.
+    const VALUE: bool;
+}
+impl TokensContainPsk for Nil {
+    const VALUE: bool = false;
+}
+impl<Tok: TokenFlag, Rest: TokensContainPsk> TokensContainPsk for Cons<Tok, Rest> {
+    const VALUE: bool = Tok::IS_PSK || Rest::VALUE;
+}
+
+/// Fold over a pattern's message list: `true` if any message contains a
+/// [`Psk`] token.
+///
+/// Derives a pattern's PSK modifier directly from its `Messages`, so the
+/// derived `HAS_PSK` cannot drift out of sync with the token sequence. This is
+/// a separate trait from [`TokensContainPsk`] because the two fold over
+/// different `Cons` shapes (`Cons<Message, _>` vs `Cons<Token, _>`), which a
+/// single trait could not cover without an overlapping impl.
+#[doc(hidden)]
+pub trait ContainsPsk {
+    /// Whether the message list contains a [`Psk`] token.
+    const VALUE: bool;
+}
+impl ContainsPsk for Nil {
+    const VALUE: bool = false;
+}
+impl<Dir, Toks: TokensContainPsk, Rest: ContainsPsk> ContainsPsk
+    for Cons<Message<Dir, Toks>, Rest>
+{
+    const VALUE: bool = <Toks as TokensContainPsk>::VALUE || <Rest as ContainsPsk>::VALUE;
+}
+
 // ── Wire size computation ─────────────────────────────────────────
 
 /// Compile-time wire size computation for Noise handshake tokens.

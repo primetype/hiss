@@ -723,10 +723,12 @@ where
 
 // Start a send message whose first token is E.
 //
-// Split into three mutually-exclusive impls mirroring the
-// `sync_send_token!` finalizer variants, so a bare single-`E` send
-// message (`-> e`) can be finalized — the generic entry would leave such
-// a message in `SyncSending<…, Nil, …>` with no method to close it.
+// Split into two mutually-exclusive impls mirroring the `sync_send_token!`
+// finalizer variants, so a bare single-`E` send message (`-> e`) followed by
+// more messages can advance — the generic entry would leave such a message in
+// `SyncSending<…, Nil, …>` with no method to close it. (A single `-> e` as the
+// *last* message never keys the cipher and is rejected by the `WellFormed`
+// keyed-cipher guard, so there is no finalize-to-transport variant.)
 
 // Variant 1: more tokens follow `E` in this message.
 impl<Proto, R, Next, More, MsgRest, Dir, CP, Io>
@@ -771,28 +773,6 @@ where
             inner: self.inner,
             stream: self.stream,
             _marker: PhantomData,
-        })
-    }
-}
-
-// Variant 3: `E` is the only token in the last message.
-impl<Proto, R, Dir, CP, Io>
-    SyncHandshake<Proto, R, Nil, Cons<Message<Dir, Cons<E, Nil>>, Nil>, CP, Io>
-where
-    Proto: Protocol,
-    R: Role<SendDir = Dir>,
-    CP: DhProvider<Proto::Curve>,
-    <Proto::Curve as Curve>::PublicKey: AsRef<[u8]>,
-    Io: Write,
-{
-    /// Stream a single-`E` message (`-> e`) as the final handshake message.
-    pub fn e(mut self) -> Result<SyncTransport<Proto, Io>, HandshakeError> {
-        sync_stream_e(&mut self.inner, &mut self.stream)?;
-        send_message_tail(&mut self.inner, &mut self.stream)?;
-        let transport = recv_to_transport::<Proto, R, CP>(self.inner);
-        Ok(SyncTransport {
-            transport,
-            stream: self.stream,
         })
     }
 }
