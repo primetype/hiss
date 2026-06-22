@@ -759,9 +759,7 @@ fn apple_ed25519_generate() -> Result<SoftwareEd25519PrivateKey, crate::curve::e
             "SecRandomCopyBytes returned an all-zero seed".into(),
         ));
     }
-    let key = SoftwareEd25519PrivateKey::from_seed(seed);
-    crate::zeroize::zeroize_array(&mut seed);
-    Ok(key)
+    Ok(SoftwareEd25519PrivateKey::from_seed(seed))
 }
 
 impl CryptoKeyProvider<Ed25519> for AppleSecureEnclave {
