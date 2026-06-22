@@ -54,6 +54,16 @@ impl<Ci: Cipher> CipherState<Ci> {
         self.k.is_some()
     }
 
+    /// Force the nonce counter to `n` (tests only).
+    ///
+    /// Used to drive the nonce up to its `u64::MAX` boundary so the
+    /// overflow guard in `encrypt_with_ad`/`decrypt_with_ad` can be
+    /// exercised without performing 2^64 operations.
+    #[cfg(test)]
+    pub(crate) fn set_nonce_for_test(&mut self, n: u64) {
+        self.n = n;
+    }
+
     /// Encrypt `plaintext` with associated data `ad`, writing
     /// ciphertext (+ tag if keyed) into `output`.
     ///
@@ -179,5 +189,43 @@ impl<Ci: Cipher> Drop for CipherState<Ci> {
             zeroize_array(key);
         }
         self.n = 0;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::noise::cipher::ChaChaPoly;
+
+    type Cs = CipherState<ChaChaPoly>;
+
+    #[test]
+    fn encrypt_overflows_at_max_nonce() {
+        let mut cs = Cs::from_key([0u8; 32]);
+        // One short of the cap: this call must succeed and bump n to u64::MAX.
+        cs.set_nonce_for_test(u64::MAX - 1);
+        let plaintext = b"x";
+        let mut out = [0u8; 1 + <ChaChaPoly as Cipher>::TAG_SIZE];
+        cs.encrypt_with_ad(&[], plaintext, &mut out)
+            .expect("encrypt at u64::MAX - 1 should succeed");
+        // n is now u64::MAX: the next encrypt must refuse to reuse the nonce.
+        let err = cs
+            .encrypt_with_ad(&[], plaintext, &mut out)
+            .expect_err("encrypt at u64::MAX must overflow");
+        assert!(matches!(err, HandshakeError::NonceOverflow));
+    }
+
+    #[test]
+    fn decrypt_guard_fires_at_max_nonce() {
+        let mut cs = Cs::from_key([0u8; 32]);
+        cs.set_nonce_for_test(u64::MAX);
+        // The guard fires before any AEAD work, so the ciphertext need not
+        // be valid.
+        let ciphertext = [0u8; <ChaChaPoly as Cipher>::TAG_SIZE];
+        let mut out = [0u8; 1];
+        let err = cs
+            .decrypt_with_ad(&[], &ciphertext, &mut out)
+            .expect_err("decrypt at u64::MAX must overflow");
+        assert!(matches!(err, HandshakeError::NonceOverflow));
     }
 }
