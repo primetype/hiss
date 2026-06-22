@@ -13,7 +13,7 @@ readme = "README.md"
 repository = "https://github.com/primetype/hiss"
 homepage = "https://github.com/primetype/hiss"
 documentation = "https://docs.rs/hiss"
-keywords = ["noise", "cryptography", "handshake", "secure-enclave", "p256"]
+keywords = ["noise", "handshake", "secure-enclave", "x25519", "keychain"]
 categories = ["cryptography", "network-programming"]
 
 # docs.rs builds with every feature so the `async-io` driver is documented,
