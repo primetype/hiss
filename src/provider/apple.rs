@@ -82,6 +82,15 @@ pub struct P256r1PrivateKey {
 impl P256r1PublicKey {
     fn as_sec_key(&self, attributes: &CFDictionary) -> Result<SecKey, Error> {
         let key_data = CFData::from_buffer(self.to_bytes());
+        // SAFETY: `key_data` and `attributes` are live `CFData`/`CFDictionary`
+        // values owned by this scope, so the `CFTypeRef`s passed by
+        // `as_concrete_TypeRef` stay valid for the whole call. `error` is a
+        // null-initialised out-param whose address is a valid `*mut CFErrorRef`.
+        // `SecKeyCreateWithData` follows Core Foundation's Create rule: the
+        // returned `SecKeyRef` is owned by us (not borrowed/Get), so it is taken
+        // with `wrap_under_create_rule` whose `Drop` releases it exactly once. On
+        // a null return the written-back `CFError` is likewise Create-owned and
+        // wrapped under the create rule, balancing its retain count.
         unsafe {
             let mut error = std::ptr::null_mut();
 
@@ -215,6 +224,16 @@ impl P256r1PrivateKey {
 
         let label = CFString::new(label);
 
+        // SAFETY: every key/value in `query` is wrapped under the Get rule from
+        // a static `kSec*` constant (or an owned `CFString`/`CFBoolean`), so the
+        // dictionary holds only valid, live `CFType`s for the duration of the
+        // call. `result` is a null-initialised `CFTypeRef` out-param whose
+        // address is a valid `*mut CFTypeRef`. `SecItemCopyMatching` reads
+        // `query` and, only on `errSecSuccess`, writes back a Create-rule-owned
+        // object (we requested `kSecReturnRef`); that object is taken exactly
+        // once with `wrap_under_create_rule`, so its `Drop` releases it. The
+        // not-found and error status paths return before touching `result`,
+        // which is left null.
         unsafe {
             let query = CFDictionary::from_CFType_pairs(&[
                 (
@@ -291,6 +310,12 @@ impl P256r1PrivateKey {
     pub fn dh(&self, public_key: &P256r1PublicKey) -> Result<SharedSecret<32>, Error> {
         let algorithm = Algorithm::ECDHKeyExchangeStandard;
 
+        // SAFETY: `self.key` is a live `SecKey`, so its `as_concrete_TypeRef`
+        // yields a valid `SecKeyRef` for the call. The operation type and
+        // algorithm are valid static CF constants from `security_framework_sys`.
+        // `SecKeyIsAlgorithmSupported` only inspects the key and returns a
+        // `Boolean` — it transfers no ownership and returns no Get/Create
+        // object, so there is nothing to retain or release.
         let supported = unsafe {
             security_framework_sys::key::SecKeyIsAlgorithmSupported(
                 self.key.as_concrete_TypeRef(),
@@ -711,6 +736,12 @@ impl SigningProviderAsync<P256> for AppleSecureEnclave {
 /// Generate a software Ed25519 key seeded from Apple's `SecRandomCopyBytes`.
 fn apple_ed25519_generate() -> Result<SoftwareEd25519PrivateKey, crate::curve::ed25519::Error> {
     let mut seed = [0u8; 32];
+    // SAFETY: `seed.as_mut_ptr()` is a valid, properly-aligned pointer to the
+    // exclusively-borrowed `[u8; 32]` (the `&mut seed` borrow guarantees no
+    // aliasing for the call). We pass `seed.len()` (== 32), so exactly that many
+    // bytes are written within the array's bounds and no further.
+    // `kSecRandomDefault` is the framework's valid default RNG reference. The
+    // returned status is checked by the caller below before `seed` is used.
     let status = unsafe {
         security_framework_sys::random::SecRandomCopyBytes(
             security_framework_sys::random::kSecRandomDefault,
@@ -723,7 +754,14 @@ fn apple_ed25519_generate() -> Result<SoftwareEd25519PrivateKey, crate::curve::e
             "SecRandomCopyBytes failed with status {status}"
         )));
     }
-    Ok(SoftwareEd25519PrivateKey::from_seed(seed))
+    if seed.iter().all(|&b| b == 0) {
+        return Err(crate::curve::ed25519::Error::Platform(
+            "SecRandomCopyBytes returned an all-zero seed".into(),
+        ));
+    }
+    let key = SoftwareEd25519PrivateKey::from_seed(seed);
+    crate::zeroize::zeroize_array(&mut seed);
+    Ok(key)
 }
 
 impl CryptoKeyProvider<Ed25519> for AppleSecureEnclave {
