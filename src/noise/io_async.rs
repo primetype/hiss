@@ -1180,7 +1180,7 @@ mod tests {
     use super::*;
     use crate::noise::{Blake2b, ChaChaPoly, Initiator, Noise, P256, Responder, pattern};
     use crate::provider::EphemeralOnly;
-    use crate::provider::{CryptoKeyProviderAsync, ProviderExt};
+    use crate::provider::ProviderExt;
     use crate::psk::Psk;
     use rand::{SeedableRng, rngs::StdRng};
     use std::io::Cursor;
@@ -1318,6 +1318,7 @@ mod tests {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     #[tokio::test]
     async fn n_async_seal_open_with_secure_enclave_provider() {
+        use crate::provider::CryptoKeyProviderAsync;
         use crate::provider::apple::AppleSecureEnclave;
 
         let mut provider = AppleSecureEnclave::new("uk.co.example.hiss-test");
