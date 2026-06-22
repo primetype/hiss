@@ -77,12 +77,13 @@
 //!   required to be `Clone`.
 //! * ECDSA signing is deterministic (RFC 6979), low-S, and
 //!   non-malleable; there is no signing RNG.
-//! * P-256 scalar multiplication is constant-time.
+//! * P-256 scalar multiplication is constant-time (the fixed-base comb
+//!   relies on `eccoxide`'s `table` feature, enabled by default).
 //! * P-256 ECDH rejects a degenerate (identity) shared secret rather
 //!   than returning it; on the prime-order curve the identity is the
-//!   only such point. The Noise `25519` curve performs no equivalent
-//!   check — per the spec (and RFC 7748) a low-order peer key simply
-//!   yields an all-zero secret rather than an error.
+//!   only such point. The Noise `25519` and `448` curves perform no
+//!   equivalent check — per the spec (and RFC 7748) a low-order peer key
+//!   simply yields an all-zero secret rather than an error.
 //!
 //! This crate has **not** been independently audited and is pre-1.0.
 //!

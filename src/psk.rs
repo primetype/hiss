@@ -27,9 +27,12 @@ impl Psk {
 
     /// Generate a random PSK from a caller-supplied CSPRNG.
     ///
-    /// The caller owns the entropy source — pass `rand::rng()` in
-    /// production, or a seeded RNG for deterministic tests. A `&mut R`
-    /// is itself `RngCore + CryptoRng`, so a borrowed RNG works too.
+    /// The caller owns the entropy source: supply your own
+    /// cryptographically secure `R: RngCore + CryptoRng`. `rand` is **not**
+    /// a dependency of `hiss`, so a consumer who wants to pass `rand::rng()`
+    /// must add the `rand` crate to their own `Cargo.toml`; for
+    /// deterministic tests, pass a seeded RNG instead. A `&mut R` is itself
+    /// `RngCore + CryptoRng`, so a borrowed RNG works too.
     pub fn generate<R: RngCore + CryptoRng>(mut rng: R) -> Self {
         let mut bytes = [0u8; Self::SIZE];
         rng.fill_bytes(&mut bytes);

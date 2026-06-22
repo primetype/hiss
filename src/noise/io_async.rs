@@ -60,6 +60,15 @@
 //! mid-message — or a mid-handshake I/O error — is **fatal and
 //! unrecoverable**: drop the whole handshake and the connection; there
 //! is no per-token retry.
+//!
+//! # Timeouts
+//!
+//! The handshake read path has **no clock**: a `recv` token awaits until
+//! its bytes arrive, so a stalling or silent peer can keep the future
+//! pending indefinitely. Impose a timeout yourself — typically by wrapping
+//! the handshake in `tokio::time::timeout`. (Dropping the resulting
+//! timed-out future is the fatal-cancellation case above: tear the
+//! connection down.)
 
 use std::marker::PhantomData;
 

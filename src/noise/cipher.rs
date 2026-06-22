@@ -34,6 +34,14 @@ pub trait Cipher {
     ///
     /// `output` must be at least `ciphertext.len() - TAG_SIZE` bytes.
     /// Returns the number of bytes written.
+    ///
+    /// **Output contract on failure.** The AEAD writes the decrypted
+    /// plaintext into `output` *before* the authentication tag is
+    /// verified. On a [`DecryptionFailed`](HandshakeError::DecryptionFailed)
+    /// error `output` therefore holds **unauthenticated** bytes that must
+    /// **not** be read or acted on. (This is purely an output-buffer
+    /// caveat — authentication is not bypassed: a tag mismatch still
+    /// returns the error.)
     fn decrypt(
         key: &[u8; 32],
         nonce: u64,

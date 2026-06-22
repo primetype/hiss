@@ -40,7 +40,7 @@ This `0.1` targets one cipher suite and a fixed set of patterns:
 | Axis    | Supported |
 |---------|-----------|
 | Patterns | `N`, `K`, `Kpsk0`, `IKpsk1`, `IK`, `NK`, `IX`, `XK`, `NN`, `XX` |
-| Curves  | NIST **P-256** (secp256r1) and **X25519** (Curve25519, the Noise `25519` curve) |
+| Curves  | NIST **P-256** (secp256r1), **X25519** (Curve25519, the Noise `25519` curve), and **X448** (the Noise `448` curve) |
 | Cipher  | **ChaCha20-Poly1305** |
 | Hash    | **BLAKE2b** |
 

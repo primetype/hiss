@@ -63,6 +63,13 @@
 //! produced, so a mid-handshake I/O error is **fatal and unrecoverable**
 //! — drop the whole handshake and the connection; there is no per-token
 //! retry (the same contract as `tokio-rustls`).
+//!
+//! # Timeouts
+//!
+//! The handshake read path has **no clock**: a `recv` token blocks until
+//! its bytes arrive, so a stalling or silent peer can hang the call
+//! indefinitely. Impose a timeout yourself — typically a read timeout on
+//! the underlying socket (e.g. [`TcpStream::set_read_timeout`](std::net::TcpStream::set_read_timeout)).
 
 use std::io::{Read, Write};
 use std::marker::PhantomData;

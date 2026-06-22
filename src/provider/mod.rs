@@ -215,10 +215,13 @@ pub trait SigningProviderAsync<C: SigningCurve>: CryptoKeyProvider<C> {
 /// persistent keys on Apple platforms use
 /// [`AppleSecureEnclave`].
 ///
-/// Owns a caller-supplied CSPRNG `R` (`CryptoRng + RngCore`): pass
-/// `rand::rng()` in production or a seeded RNG for deterministic tests.
-/// The crate pulls in no entropy source of its own — `R` is the only
-/// one. `Clone`/`Send`/`Sync` are inherited from `R`.
+/// Owns a caller-supplied CSPRNG `R` (`CryptoRng + RngCore`). You must
+/// supply your own cryptographically secure RNG; the crate pulls in no
+/// entropy source of its own — `R` is the only one. Note that `rand` is
+/// **not** a dependency of `hiss`: to use `rand::rng()` (as the examples
+/// do) a consumer must add the `rand` crate to their own `Cargo.toml`.
+/// For deterministic tests, pass a seeded RNG instead.
+/// `Clone`/`Send`/`Sync` are inherited from `R`.
 #[derive(Clone)]
 pub struct EphemeralOnly<R> {
     rng: R,

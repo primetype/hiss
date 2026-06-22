@@ -130,8 +130,18 @@ impl<Ci: Cipher> CipherState<Ci> {
     /// `ciphertext.len() - TAG_SIZE` bytes.
     /// When unkeyed, `output` must be at least `ciphertext.len()` bytes.
     ///
-    /// Returns the number of bytes written. Increments the nonce on
-    /// success.
+    /// Returns the number of bytes written. The nonce counter advances
+    /// **only on success** and is **never reset**, so messages must be
+    /// decrypted in the exact order they were encrypted, with none lost,
+    /// reordered, or replayed — one such record permanently desynchronises
+    /// this state. A failure is **terminal**; tear the session down rather
+    /// than retrying.
+    ///
+    /// On a [`DecryptionFailed`](HandshakeError::DecryptionFailed) error
+    /// the underlying AEAD has already written its (unverified) plaintext
+    /// into `output` before the tag check ran, so `output` holds
+    /// **unauthenticated** bytes that must not be read. (Authentication is
+    /// not bypassed: the nonce does not advance and the error is returned.)
     pub fn decrypt_with_ad(
         &mut self,
         ad: &[u8],

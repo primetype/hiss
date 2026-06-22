@@ -25,6 +25,23 @@ use crate::curve::Curve;
 /// uniquely identifies this session — both peers produce the same
 /// value from a completed handshake.
 ///
+/// # Delivery contract
+///
+/// The transport requires a **reliable, in-order, exactly-once** byte
+/// stream. Each direction's nonce counter advances only on AEAD success
+/// and is never reset, so the sender's counter for record *k* must meet
+/// the receiver's counter for record *k*. A single **lost, reordered, or
+/// duplicated** record permanently desynchronises that direction — every
+/// subsequent [`receive`](Self::receive) then fails. Run the transport
+/// over a reliable, ordered substrate (e.g. TCP, or TLS-style record
+/// framing); it does not tolerate datagram loss or reordering on its own.
+///
+/// A transport-record decrypt failure is therefore **terminal**: tear the
+/// session down. Do **not** retry the record, and do **not** attempt to
+/// resynchronise from a counter taken off the wire — the counter is
+/// implicit and never transmitted, so any "resync" value would be
+/// attacker-supplied.
+///
 /// Ephemeral keys are `Option` because one-way patterns (Proto, K, Kpsk0)
 /// produce only one ephemeral: the sender has `local_ephemeral` but no
 /// `remote_ephemeral`, and vice versa for the receiver. Interactive
@@ -74,6 +91,15 @@ impl<Proto: Protocol> Transport<Proto> {
     ///
     /// `output` must be at least `ciphertext.len() - OVERHEAD` bytes.
     /// Returns the number of bytes written.
+    ///
+    /// Records must arrive **in order and exactly once** (see the
+    /// [type-level delivery contract](Transport#delivery-contract)). On
+    /// any error the receive nonce does **not** advance; treat a failure
+    /// as **terminal** and tear the session down rather than retrying the
+    /// record. On a [`DecryptionFailed`](HandshakeError::DecryptionFailed)
+    /// error the unverified plaintext has already been written into
+    /// `output`, so `output` holds **unauthenticated** bytes that must not
+    /// be read.
     pub fn receive(
         &mut self,
         ciphertext: &[u8],
@@ -88,8 +114,15 @@ impl<Proto: Protocol> Transport<Proto> {
     /// using `ENCRYPT(k, 2^64−1, "", zeros)`. The nonce counters
     /// are **not** reset — they continue from their current values.
     ///
-    /// Call this periodically to limit the amount of data encrypted
-    /// under a single key.
+    /// Rekeying is **application-driven**: there is no automatic rekey,
+    /// and `hiss` never calls this for you. It is a forward-secrecy
+    /// measure — the caller invokes it on its own schedule to limit the
+    /// data encrypted under a single key. It is **not** needed to avoid
+    /// nonce exhaustion: each direction has an independent 64-bit counter
+    /// (~2⁶⁴ messages before [`NonceOverflow`](HandshakeError::NonceOverflow)),
+    /// which is not a practical concern. Both peers must rekey in lockstep
+    /// — a rekey on one side that the other does not mirror desynchronises
+    /// that direction.
     pub fn rekey(&mut self) -> Result<(), HandshakeError> {
         self.send.rekey()?;
         self.recv.rekey()?;
@@ -206,6 +239,14 @@ impl<Proto: Protocol> TransportRecv<Proto> {
     ///
     /// `output` must be at least `ciphertext.len() - OVERHEAD` bytes.
     /// Returns the number of bytes written.
+    ///
+    /// Records must arrive **in order and exactly once** (see the
+    /// [`Transport` delivery contract](Transport#delivery-contract)). On
+    /// any error the receive nonce does **not** advance; a failure is
+    /// **terminal** — tear the session down rather than retrying or
+    /// resynchronising from the wire. On a
+    /// [`DecryptionFailed`](HandshakeError::DecryptionFailed) error
+    /// `output` holds **unauthenticated** bytes that must not be read.
     pub fn decrypt(
         &mut self,
         ciphertext: &[u8],

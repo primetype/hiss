@@ -50,17 +50,30 @@ Noise matrix. The security claims below apply only to this surface:
 | Component | Supported |
 |-----------|-----------|
 | Handshake patterns | `N`, `K`, `Kpsk0`, `IKpsk1`, `IK`, `NK`, `IX`, `XK`, `NN`, `XX` (a 10-pattern subset) |
-| DH / signing curves | NIST **P-256** (the Noise DH curve) and **Ed25519** (signing; Curve25519 DH) |
+| Noise DH curves | NIST **P-256** (the Noise DH curve), **X25519** (the Noise `25519` curve, Curve25519 / RFC 7748), and **X448** (the Noise `448` curve, RFC 7748) |
+| Signing curve | **Ed25519** (standalone signing; not used as a Noise DH curve) |
 | AEAD cipher | **ChaCha20-Poly1305** |
 | Hash | **BLAKE2b-512** |
 | Backends | **Software** (default, all platforms incl. WASM) and **Apple Secure Enclave** (macOS/iOS, opt-in) |
 
-> **Noise handshakes use P-256 only, for now.** The validated patterns all use
-> **P-256** as the handshake DH curve, so the per-pattern table and the Noise KATs are
-> P-256-only. Ed25519 is exposed for **standalone** signing (and a Curve25519 DH)
-> through the provider API; it is not currently used as the curve inside a Noise
-> pattern. Adding **X25519 / Curve25519 as a standard Noise `25519` DH curve** is
-> planned — it is simply not part of the `0.1.x` security surface described here.
+> **The non-P-256 DH curves carry a narrower assurance surface.** All three DH
+> curves (`P-256`, `25519`, `448`) are fully shipped Noise handshake curves, but
+> the validation behind them differs:
+>
+> - **Contributory-behaviour / low-order check.** P-256 ECDH **rejects** a
+>   degenerate (point-at-infinity) shared secret. **X25519 and X448 do not perform
+>   any low-order or contributory key check** — per RFC 7748 a low-order peer key
+>   simply yields an **all-zero shared secret** rather than an error. This is
+>   spec-conformant (the check is optional in RFC 7748), but it means the Curve25519
+>   / Curve448 paths give the caller no signal on a degenerate DH.
+> - **Frozen known-answer coverage is P-256-only.** The frozen Noise KAT corpus
+>   exists for **P-256 only**. X25519 is validated by **byte-for-byte interop with
+>   [snow](https://crates.io/crates/snow)** across the `N` / `IK` / `XX` patterns;
+>   X448 has a single self round-trip (`XX`). There are **no frozen X25519/X448
+>   KAT vectors yet**. See [Validated test vectors](#validated-test-vectors).
+>
+> Ed25519 is exposed for **standalone** signing (and a Curve25519 DH) through the
+> provider API; it is not used as the curve inside a Noise pattern.
 
 ## Threat model
 
@@ -79,8 +92,10 @@ party's host OS or RNG.
 - Sender/recipient authentication, to the degree each pattern provides.
 - Rejection of tampered, truncated, over-length, replayed, and out-of-order
   messages (systematically tested; see [Validated test vectors](#validated-test-vectors)).
-- Rejection of malformed or invalid peer public keys and degenerate DH outputs
-  without panicking.
+- Rejection of malformed or invalid peer public keys without panicking. For
+  **P-256**, rejection extends to a **degenerate (identity) DH output**; for
+  **X25519 / X448**, a low-order peer key yields an **all-zero shared secret**
+  rather than an error (per RFC 7748 — see the [Scope](#scope) note).
 - Deterministic, non-malleable ECDSA signing (RFC 6979 + low-S).
 - Constant-time secret-scalar **point** multiplication in the software P-256
   backend (subject to the upstream caveat in [Side-channel posture](#side-channel-posture-per-backend)).
@@ -104,7 +119,9 @@ the one-way and interactive patterns. `hiss`'s conformance is validated by
 byte-for-byte agreement with [snow](https://crates.io/crates/snow), the reference
 Noise implementation — **not** by an independent standards-body vector set, because
 P-256 is not part of the Noise spec (see the provenance note under
-[Validated test vectors](#validated-test-vectors)).
+[Validated test vectors](#validated-test-vectors)). The full per-pattern matrix is
+exercised on P-256; X25519 is exercised against snow across `N` / `IK` / `XX`, and
+X448 has a single `XX` self round-trip (see [Validated test vectors](#validated-test-vectors)).
 
 | Pattern | Flow | Sender authentication | Confidentiality to recipient | Forward secrecy | Replay resistance | PSK |
 |---------|------|-----------------------|------------------------------|-----------------|-------------------|-----|
@@ -189,6 +206,10 @@ Honest caveats:
   currently the **crates.io `eccoxide` 0.4**, whose P-256 backend carries the
   constant-time scalar multiplication. The guarantee is therefore only as strong as
   that upstream code.
+- **The fixed-base comb relies on `eccoxide`'s `table` feature** (enabled by default
+  in this crate's `eccoxide` dependency). Without it the fixed-base multiply is still
+  correct and constant-time, just not the precomputed comb — this is a performance,
+  not a constant-time, difference.
 - **Scope is point multiplication.** ECDSA signing also performs a secret-scalar
   modular inversion (`k⁻¹`) and scalar arithmetic. In `eccoxide` 0.4 the inversion
   is a fixed addition-chain exponentiation (no secret-dependent branching by
@@ -235,7 +256,9 @@ in-tree tests:
 | Wycheproof ECDH (secp256r1) | **355** vectors | Project Wycheproof, `ecpoint` encoding |
 | RFC 6979 deterministic ECDSA | Appendix A.2.5 (P-256/SHA-256) KAT | RFC 6979; raw `(r, s)` pinned for `"sample"` and `"test"` |
 | NIST ECC CDH | P-256 `Count=0` | NIST CAVP ECDH vector |
-| Noise handshake KATs | patterns `N` / `K` / `Kpsk0` / `IKpsk1` / `IK` / `NK` / `IX` / `XK` / `NN` / `XX` | frozen, replayed byte-for-byte (handshake ciphertexts + handshake hash + transport) |
+| Noise handshake KATs (**P-256**) | patterns `N` / `K` / `Kpsk0` / `IKpsk1` / `IK` / `NK` / `IX` / `XK` / `NN` / `XX` | frozen, replayed byte-for-byte (handshake ciphertexts + handshake hash + transport) |
+| Noise interop, **X25519** | patterns `N` / `IK` / `XX` | byte-for-byte agreement with `snow` (no frozen KAT vectors) |
+| Noise round-trip, **X448** | pattern `XX` | single self round-trip (no frozen KAT vectors, no snow interop) |
 | Negative / boundary sweeps | per-pattern, deterministic | every-byte tamper, every-prefix truncation, over-length, ciphertext bit-flip, replay, out-of-order, wrong-PSK → all rejected |
 
 The Wycheproof corpora are third-party authoritative. The negative sweeps are
@@ -243,10 +266,14 @@ generated deterministically (each driver runs a genuine handshake that must comp
 first, so the tests are non-vacuous).
 
 > **Provenance of the Noise KATs (read this).** P-256 is **not** a curve in the Noise
-> specification, and no third-party P-256 Noise test vectors exist. The `hiss` Noise
-> KATs are therefore **"agreement with snow"** — they assert byte-for-byte equality
-> with the [snow](https://crates.io/crates/snow) reference implementation, not with a
-> standards body. A latent bug shared with snow would not be caught by these vectors.
+> specification, and no third-party P-256 Noise test vectors exist. The frozen `hiss`
+> Noise KATs are therefore **"agreement with snow"** — they assert byte-for-byte
+> equality with the [snow](https://crates.io/crates/snow) reference implementation, not
+> with a standards body. A latent bug shared with snow would not be caught by these
+> vectors. The frozen KAT corpus is **P-256-only**: X25519 is covered by live snow
+> interop (`N` / `IK` / `XX`) and X448 by a single `XX` self round-trip, but neither
+> curve has a frozen KAT file yet — adding standards-body X25519/X448 vectors is future
+> work.
 
 ## Signature malleability and encoding
 
@@ -315,8 +342,9 @@ best-effort compiler fence:
   Noise Pipes / 0-RTT-with-retry) is intentionally not implemented. It is optional in the
   spec and unnecessary for the targeted use cases — a deliberate scoping decision, not an
   oversight. `snow` omits it likewise.
-- **Noise KAT provenance.** The P-256 Noise vectors are agreement-with-snow, not
-  standards-body vectors (see above).
+- **Noise KAT provenance.** The frozen P-256 Noise vectors are agreement-with-snow,
+  not standards-body vectors; X25519 has live snow interop only and X448 a single
+  self round-trip — no frozen X25519/X448 KATs yet (see above).
 - **Upstream constant-time dependency.** Constant-time P-256 rests on `eccoxide`'s
   released crates.io `0.4`; the property is only as strong as that upstream backend,
   which `hiss` does not independently verify.
