@@ -639,6 +639,46 @@ fn xx_msg3_tamper_truncation_sweep() {
     sweep("XX msg3", 2, XX_MSG3, |xf| run_xx(&*xf));
 }
 
+// ── Non-canonical on-wire public key (M1) ────────────────────────
+
+#[test]
+fn noncanonical_ephemeral_rejected() {
+    use hiss::curve::p256::P256r1PublicKey;
+
+    // NN msg1 is a bare `-> e`: the 65-byte wire payload *is* the
+    // initiator's ephemeral in canonical (0x04 ‖ X ‖ Y) form.
+    let i_stream = PeerStream::new();
+    let i = SyncHandshake::<NN, Initiator, _, _, _, _>::initiate(
+        EphemeralOnly::new(ScriptedRng::new(&[&INIT_EPHEMERAL])),
+        &[],
+        i_stream.clone(),
+    );
+    let _ = i.e().unwrap();
+    let msg1 = i_stream.take_written();
+    assert_eq!(msg1.len(), NN_MSG1, "NN msg1 is a bare 65-byte ephemeral");
+
+    // Re-encode the genuine ephemeral non-canonically: its 33-byte
+    // compressed form, right-padded with trailing zeros to the 65-byte
+    // wire width. This decodes to the *same* point (so it passes
+    // `from_bytes`) but is not the canonical encoding the send path emits.
+    let e_pub = P256r1PublicKey::from_bytes(&msg1).expect("genuine ephemeral decodes");
+    let mut tampered = vec![0u8; NN_MSG1];
+    tampered[..33].copy_from_slice(&e_pub.to_compressed());
+
+    let r_stream = PeerStream::new();
+    r_stream.feed(&tampered);
+    let r = SyncHandshake::<NN, Responder, _, _, _, _>::respond(
+        EphemeralOnly::new(ScriptedRng::new(&[&RESP_EPHEMERAL])),
+        &[],
+        r_stream.clone(),
+    );
+    let err = r.recv().e().map(|_| ()).unwrap_err();
+    assert!(
+        matches!(err, HandshakeError::NonCanonicalPublicKey),
+        "non-canonical ephemeral must be rejected as NonCanonicalPublicKey, got {err:?}"
+    );
+}
+
 // ── Wrong PSK ────────────────────────────────────────────────────
 
 #[test]

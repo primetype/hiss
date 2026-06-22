@@ -154,12 +154,21 @@ where
     CP: CryptoKeyProvider<Cu>,
 {
     let bytes = buffer.read(Cu::PUBLIC_KEY_SIZE)?;
-    inner.symmetric.mix_hash(bytes);
-    if inner.has_psk {
-        inner.symmetric.mix_key(bytes);
-    }
     let re = Cu::public_key_from_bytes(bytes)
         .map_err(|e| HandshakeError::InvalidPublicKey(Box::new(e)))?;
+    // Reject any non-canonical on-wire encoding: a conformant peer sends
+    // exactly the canonical form, so the re-serialized key must equal the
+    // wire bytes. For curves with a single encoding this always holds; for
+    // P-256 it rejects compressed / trailing-garbage encodings. Also makes
+    // the receive transcript symmetric with the send path (which mixes the
+    // canonical bytes).
+    if re.as_ref() != bytes {
+        return Err(HandshakeError::NonCanonicalPublicKey);
+    }
+    inner.symmetric.mix_hash(re.as_ref());
+    if inner.has_psk {
+        inner.symmetric.mix_key(re.as_ref());
+    }
     let revealed = re.clone();
     inner.re = Some(re);
     Ok(revealed)
@@ -221,6 +230,13 @@ where
     let pt_len = inner.symmetric.decrypt_and_hash(ciphertext, &mut pk_buf)?;
     let rs = Cu::public_key_from_bytes(&pk_buf[..pt_len])
         .map_err(|e| HandshakeError::InvalidPublicKey(Box::new(e)))?;
+    // Reject any non-canonical on-wire encoding (see `recv_e`). The static
+    // key is bound to the transcript via its ciphertext in
+    // `decrypt_and_hash` above, which is unchanged; this only rejects a
+    // decrypted key whose re-serialised form differs from the wire bytes.
+    if rs.as_ref() != &pk_buf[..pt_len] {
+        return Err(HandshakeError::NonCanonicalPublicKey);
+    }
     let revealed = rs.clone();
     inner.rs = Some(rs);
     Ok(revealed)

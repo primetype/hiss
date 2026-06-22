@@ -833,6 +833,38 @@ mod tests {
         assert_eq!(&compressed[1..33], &pk.to_bytes()[1..33]);
     }
 
+    /// Exercises the property the Noise receive guard relies on
+    /// (`recv_e`/`recv_s` in `noise::process`): a key's re-serialised
+    /// canonical form must equal the wire bytes for the guard to ACCEPT,
+    /// and differ for it to REJECT. A conformant peer sends the canonical
+    /// 65-byte uncompressed encoding (accepted); a non-canonical encoding
+    /// (here: the 33-byte compressed form right-padded to 65 bytes)
+    /// decodes to the same point but does NOT round-trip byte-for-byte, so
+    /// the guard rejects it.
+    #[test]
+    fn recv_guard_accepts_canonical_rejects_noncanonical() {
+        let sk = software::P256r1PrivateKey::generate(rand::rng()).unwrap();
+        let pk = sk.public();
+
+        // Canonical 65-byte uncompressed wire bytes round-trip exactly:
+        // the recv-path equality check would ACCEPT this.
+        let canonical: [u8; 65] = pk.to_bytes().try_into().unwrap();
+        let from_canonical = P256r1PublicKey::from_bytes(&canonical).unwrap();
+        assert_eq!(from_canonical.as_ref(), &canonical[..]);
+
+        // Build a 65-byte NON-canonical wire value: the 33-byte compressed
+        // encoding padded with trailing zeros. `from_bytes` accepts it
+        // (same point, trailing bytes ignored) ...
+        let mut noncanonical = [0u8; 65];
+        noncanonical[..33].copy_from_slice(&pk.to_compressed());
+        let from_noncanonical = P256r1PublicKey::from_bytes(&noncanonical).unwrap();
+        assert_eq!(from_noncanonical, pk, "decodes to the same point");
+
+        // ... but the re-serialised canonical form differs from the wire
+        // bytes, so the recv-path equality check would REJECT it.
+        assert_ne!(from_noncanonical.as_ref(), &noncanonical[..]);
+    }
+
     // ── Signature negative tests ──────────────────────────────────
 
     #[test]

@@ -45,6 +45,12 @@ pub enum HandshakeError {
     #[error("invalid public key: {0}")]
     InvalidPublicKey(#[source] Box<dyn std::error::Error + Send + Sync>),
 
+    /// A peer public key was not in its canonical on-wire encoding
+    /// (e.g. a P-256 key sent compressed or with trailing bytes on the
+    /// fixed-width uncompressed wire field).
+    #[error("peer public key is not in canonical wire encoding")]
+    NonCanonicalPublicKey,
+
     /// A message exceeds the Noise 65535-byte maximum length (spec §3).
     #[error("message too long: {len} bytes exceeds the {MAX_MESSAGE_LEN}-byte Noise maximum")]
     MessageTooLong {
