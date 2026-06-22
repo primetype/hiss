@@ -25,7 +25,7 @@
 //!   WASM, and any platform without hardware key storage.
 //!
 //! * **Apple Secure Enclave**
-//!   ([`AppleSecureEnclave`](crate::provider::AppleSecureEnclave),
+//!   (`AppleSecureEnclave`,
 //!   `cfg(any(target_os = "macos", target_os = "ios"))`) — delegates to
 //!   Apple's Security framework. Private keys never leave the Secure
 //!   Enclave; signing and ECDH are performed in hardware.

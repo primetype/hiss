@@ -212,7 +212,7 @@ pub trait SigningProviderAsync<C: SigningCurve>: CryptoKeyProvider<C> {
 /// keys": it still generates long-term keys for a handshake — persisting
 /// their bytes, if wanted, is the caller's job. For hardware-backed,
 /// persistent keys on Apple platforms use
-/// [`AppleSecureEnclave`].
+/// `AppleSecureEnclave`.
 ///
 /// Owns a caller-supplied CSPRNG `R` (`CryptoRng + RngCore`). You must
 /// supply your own cryptographically secure RNG; the crate pulls in no

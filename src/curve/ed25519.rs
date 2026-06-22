@@ -17,7 +17,7 @@
 //! * **Apple** (iOS/macOS) — Ed25519 is still **software**-signed (the
 //!   Secure Enclave has no Ed25519 support), but the 32-byte seed is
 //!   sealed at rest to the device's Secure Enclave P-256 key. See
-//!   [`AppleSecureEnclave`](crate::provider::AppleSecureEnclave).
+//!   `AppleSecureEnclave`.
 //!
 //! Both backends share the same [`Ed25519PublicKey`] and
 //! [`Ed25519Signature`] types, and both produce RFC 8032-compliant
@@ -203,7 +203,7 @@ impl fmt::Debug for Ed25519Signature {
 /// This is the software backend — always available, and the only
 /// Ed25519 backend; on Apple platforms its seed is sealed at rest to
 /// the Secure Enclave P-256 key (see
-/// [`AppleSecureEnclave`](crate::provider::AppleSecureEnclave)).
+/// `AppleSecureEnclave`).
 pub struct SoftwareEd25519PrivateKey {
     /// The 32-byte seed.
     seed: [u8; 32],

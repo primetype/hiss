@@ -9,7 +9,7 @@
 //!
 //! * [`P256r1PrivateKey`] — 32-byte scalar (software backend). The
 //!   hardware-backed Secure Enclave key lives in
-//!   [`crate::provider::apple`] on macOS / iOS.
+//!   the `provider::apple` module on macOS / iOS.
 //!
 //! * [`P256Signature`] — 64-byte raw `(r, s)` ECDSA signature.
 //!   Converts to/from the ASN.1 DER encoding used by Apple's Security
@@ -83,7 +83,7 @@ impl SigningCurve for P256 {
 /// Errors raised by P-256 key parsing, ECDSA signing/verification, and
 /// ECDH on this curve.
 ///
-/// Marked `#[non_exhaustive]`: the [`Platform`](Error::Platform) variant
+/// Marked `#[non_exhaustive]`: the `Platform` variant
 /// only exists on Apple targets, so matches must include a wildcard arm.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
