@@ -47,7 +47,6 @@ pub mod apple;
 pub use apple::{AppleSecureEnclave, SeedError};
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-#[cfg_attr(docsrs, doc(cfg(any(target_os = "macos", target_os = "ios"))))]
 impl SecretKey for crate::provider::apple::P256r1PrivateKey {
     type Curve = P256;
 }
