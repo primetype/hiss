@@ -1,0 +1,6 @@
+[toolchain]
+# `hiss` requires a recent stable (edition 2024, MSRV 1.96); `stable` satisfies
+# it and auto-installs the wasm target so `trunk serve` works on a clean clone.
+channel = "stable"
+targets = ["wasm32-unknown-unknown"]
+profile = "minimal"

@@ -1,0 +1,44 @@
+[package]
+name = "hiss-web-demo"
+version = "0.1.0"
+edition = "2021"
+# Depends on `hiss` (edition 2024, MSRV 1.96) by path, so the demo needs at
+# least the same toolchain. `rust-toolchain.toml` pins stable.
+rust-version = "1.96"
+publish = false
+license = "MIT OR Apache-2.0"
+description = "Browser playground for the hiss Noise Protocol crate (Leptos + Trunk + WASM)."
+
+[dependencies]
+# The crate under demonstration, by path.
+hiss = { path = ".." }
+
+# UI: client-side-rendered Leptos.
+leptos = { version = "0.8", features = ["csr"] }
+console_error_panic_hook = "0.1"
+
+# Browser APIs: localStorage for the persistent identity, KeyboardEvent for
+# Enter-to-send in the chat composers.
+web-sys = { version = "0.3", features = ["Window", "Storage", "KeyboardEvent"] }
+
+# CSPRNG on wasm: getrandom (wasm_js backend) seeds a ChaCha20 stream.
+# `hiss::provider::EphemeralOnly` wants any `rand_core` CryptoRng + RngCore;
+# rand 0.9's `OsRng` only implements the *fallible* traits, so we seed a
+# `ChaCha20Rng` from `getrandom::fill` instead (see src/noise.rs::make_rng).
+getrandom = { version = "0.3", features = ["wasm_js"] }
+rand_core = "0.9"
+rand_chacha = "0.9"
+
+# Hex rendering of wire bytes / key fingerprints, and tidy errors.
+hex = "0.4"
+thiserror = "2"
+
+# A wasm playground wants the smallest artifact, not the fastest one.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+
+# Stand alone: do NOT get absorbed into (or absorb) the parent hiss package.
+[workspace]

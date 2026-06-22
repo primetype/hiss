@@ -15,6 +15,9 @@ homepage = "https://github.com/primetype/hiss"
 documentation = "https://docs.rs/hiss"
 keywords = ["noise", "handshake", "secure-enclave", "x25519", "keychain"]
 categories = ["cryptography", "network-programming"]
+# The browser playground (`demo/`) is a separate, non-published crate that
+# depends on this one by path. Keep it out of the packaged crate.
+exclude = ["/demo"]
 
 # docs.rs builds with every feature so the `async-io` driver is documented,
 # and passes `--cfg docsrs` so the `#[doc(cfg(...))]` feature/platform badges
