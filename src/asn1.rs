@@ -54,6 +54,7 @@ pub enum Asn1Error {
 #[derive(Debug, Clone, Default)]
 pub struct ASN1Writer(Vec<u8>);
 
+#[cfg(any(target_os = "macos", target_os = "ios", test))]
 #[derive(Debug, Clone, Copy)]
 pub struct ASN1Reader<'a>(&'a [u8]);
 
@@ -84,6 +85,7 @@ impl ASN1Writer {
     }
 }
 
+#[cfg(any(target_os = "macos", target_os = "ios", test))]
 impl<'a> ASN1Reader<'a> {
     #[inline]
     pub const fn new(bytes: &'a [u8]) -> Self {

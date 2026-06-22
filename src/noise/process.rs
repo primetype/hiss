@@ -36,8 +36,14 @@ use super::handshake::HandshakeInner;
 use super::hash::Hash;
 use super::role::Role;
 use super::transport::Transport;
-use crate::curve::{Curve, DhCurve};
-use crate::provider::{CryptoKeyProvider, DhProviderAsync};
+use crate::curve::Curve;
+// `DhCurve`/`DhProviderAsync` are used only by the DH free functions below,
+// which are gated to the async driver and/or the Apple seal helpers.
+#[cfg(any(feature = "async-io", target_os = "macos", target_os = "ios", test))]
+use crate::curve::DhCurve;
+use crate::provider::CryptoKeyProvider;
+#[cfg(any(feature = "async-io", target_os = "macos", target_os = "ios", test))]
+use crate::provider::DhProviderAsync;
 
 // ═══════════════════════════════════════════════════════════════
 //  Payload helpers — EncryptAndHash("") / DecryptAndHash("")
@@ -125,6 +131,10 @@ where
 //  Shared token logic
 // ═══════════════════════════════════════════════════════════════
 
+// `send_e` is consumed by the async driver (`io_async`) and the Apple seal
+// helpers (`seal`); the sync driver has its own `sync_send_e`. Gate it to the
+// union of those callers so a default non-Apple build carries no dead code.
+#[cfg(any(feature = "async-io", target_os = "macos", target_os = "ios", test))]
 pub(crate) async fn send_e<Cu, Ci, H, CP>(
     inner: &mut HandshakeInner<Cu, Ci, H, CP>,
     buffer: &mut SendBuffer<'_>,
@@ -256,9 +266,9 @@ where
 }
 
 // `do_ee` / `do_se_*` / `do_ss` are consumed only by the async driver
-// (`io_async`); the seal helpers use `send_e` + `do_es_*` and the sync
-// driver mirrors the DH steps itself. Gate them to the async-io feature
-// so a default build does not carry dead code.
+// (`io_async`); the sync driver mirrors the DH steps itself. Gate them to the
+// async-io feature so a default build does not carry dead code. (`do_es_*`
+// below get a wider gate — the seal helpers use them too.)
 #[cfg(feature = "async-io")]
 pub(crate) async fn do_ee<Cu, Ci, H, CP>(
     inner: &mut HandshakeInner<Cu, Ci, H, CP>,
@@ -287,6 +297,9 @@ where
     Ok(())
 }
 
+// `do_es_*` are consumed by the async driver AND the Apple seal helpers, so
+// gate them to the union of those callers (not just async-io).
+#[cfg(any(feature = "async-io", target_os = "macos", target_os = "ios", test))]
 pub(crate) async fn do_es_initiator<Cu, Ci, H, CP>(
     inner: &mut HandshakeInner<Cu, Ci, H, CP>,
 ) -> Result<(), HandshakeError>
@@ -314,6 +327,7 @@ where
     Ok(())
 }
 
+#[cfg(any(feature = "async-io", target_os = "macos", target_os = "ios", test))]
 pub(crate) async fn do_es_responder<Cu, Ci, H, CP>(
     inner: &mut HandshakeInner<Cu, Ci, H, CP>,
 ) -> Result<(), HandshakeError>

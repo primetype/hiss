@@ -288,7 +288,9 @@
 #![warn(missing_docs)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
-#[cfg(any(target_os = "macos", target_os = "ios", test))]
+// The DER codec (`ASN1Reader`/`ASN1Writer`) is Apple/test-only, but its error
+// type `Asn1Error` is part of the public `curve::p256::Error` enum on every
+// platform, so the module itself is always compiled (the codec is gated inside).
 mod asn1;
 pub mod curve;
 pub mod noise;
