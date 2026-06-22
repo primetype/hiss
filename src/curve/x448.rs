@@ -66,6 +66,7 @@ pub enum Error {
 /// [`X448PublicKey`] and [`SharedSecret`] types. Used as the `Cu` type
 /// parameter of a Noise protocol and of
 /// [`DhProvider`](crate::provider::DhProvider).
+#[derive(Debug, Clone, Copy, Default)]
 pub struct X448;
 
 impl Curve for X448 {

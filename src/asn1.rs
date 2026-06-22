@@ -48,10 +48,6 @@ pub enum Asn1Error {
     /// required to encode the sign bit (X.690 §8.3.2).
     #[error("non-minimal integer encoding (superfluous leading 0x00/0xff)")]
     NonMinimalInteger,
-    /// A value exceeded the codec's accepted size.
-    #[error("value too large: {0} bytes")]
-    #[allow(dead_code)]
-    TooLarge(usize),
 }
 
 #[cfg(test)]

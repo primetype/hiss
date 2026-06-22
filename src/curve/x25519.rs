@@ -70,6 +70,7 @@ pub enum Error {
 /// [`X25519PublicKey`] and [`SharedSecret`] types. Used as the `Cu` type
 /// parameter of a Noise protocol and of
 /// [`DhProvider`](crate::provider::DhProvider).
+#[derive(Debug, Clone, Copy, Default)]
 pub struct X25519;
 
 impl Curve for X25519 {

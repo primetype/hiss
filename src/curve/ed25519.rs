@@ -81,6 +81,7 @@ pub enum Error {
 /// concrete [`Ed25519PublicKey`], [`Ed25519Signature`], and
 /// [`SharedSecret`] types. Used as a type parameter for
 /// [`DhProviderAsync`](crate::provider::DhProviderAsync).
+#[derive(Debug, Clone, Copy, Default)]
 pub struct Ed25519;
 
 impl Curve for Ed25519 {

@@ -53,6 +53,7 @@ pub use crate::asn1::Asn1Error;
 /// [`SharedSecret`] types. Used as a type parameter for
 /// [`Noise`](crate::noise::Noise) and
 /// [`DhProviderAsync`](crate::provider::DhProviderAsync).
+#[derive(Debug, Clone, Copy, Default)]
 pub struct P256;
 
 impl Curve for P256 {

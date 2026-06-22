@@ -37,10 +37,6 @@ pub enum HandshakeError {
     #[error("missing remote ephemeral public key")]
     MissingRemoteEphemeral,
 
-    /// A pre-shared key was required but not provided.
-    #[error("missing pre-shared key")]
-    MissingPsk,
-
     /// The nonce counter has overflowed (2^64 − 1 messages encrypted).
     #[error("nonce overflow — session must be rekeyed")]
     NonceOverflow,
@@ -48,15 +44,6 @@ pub enum HandshakeError {
     /// A public key could not be deserialised from the wire.
     #[error("invalid public key: {0}")]
     InvalidPublicKey(#[source] Box<dyn std::error::Error + Send + Sync>),
-
-    /// The incoming message has the wrong length.
-    #[error("unexpected message length: expected {expected} bytes, got {actual}")]
-    UnexpectedMessageLength {
-        /// Expected byte count (computed from the token list).
-        expected: usize,
-        /// Actual byte count of the received message.
-        actual: usize,
-    },
 
     /// A message exceeds the Noise 65535-byte maximum length (spec §3).
     #[error("message too long: {len} bytes exceeds the {MAX_MESSAGE_LEN}-byte Noise maximum")]

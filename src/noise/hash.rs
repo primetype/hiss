@@ -1,8 +1,8 @@
 //! Hash trait for Noise protocol hashing and HMAC.
 //!
 //! Beyond a plain digest, this trait carries the Noise-specific
-//! constants (`BLOCK_LEN` for HMAC) and the Noise name component. The
-//! concrete implementation ([`Blake2b`]) delegates the actual hashing
+//! output length and the Noise name component. The concrete
+//! implementation ([`Blake2b`]) delegates the actual hashing
 //! to `cryptoxide`.
 
 /// A hash function usable in Noise handshakes.
@@ -12,9 +12,6 @@ pub trait Hash {
 
     /// Hash output size in bytes (`HASHLEN` in the Noise spec).
     const HASH_LEN: usize;
-
-    /// Internal block size in bytes (for HMAC computation).
-    const BLOCK_LEN: usize;
 
     /// Hash `data`, returning `HASH_LEN` bytes.
     fn hash(data: &[u8]) -> Vec<u8>;
@@ -35,12 +32,12 @@ pub trait Hash {
 ///
 /// * HASHLEN = 64 bytes
 /// * Block = 128 bytes
+#[derive(Debug, Clone, Copy, Default)]
 pub struct Blake2b;
 
 impl Hash for Blake2b {
     const NAME: &'static str = "BLAKE2b";
     const HASH_LEN: usize = 64;
-    const BLOCK_LEN: usize = 128;
 
     fn hash(data: &[u8]) -> Vec<u8> {
         use cryptoxide::blake2b::Blake2b as B2b;

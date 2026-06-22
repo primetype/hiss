@@ -7,12 +7,6 @@ pub trait Cipher {
     /// Noise name component (e.g. `"ChaChaPoly"`).
     const NAME: &'static str;
 
-    /// Symmetric key size in bytes (always 32 for Noise).
-    const KEY_SIZE: usize;
-
-    /// Nonce size in bytes.
-    const NONCE_SIZE: usize;
-
     /// Authentication tag size in bytes.
     const TAG_SIZE: usize;
 
@@ -58,6 +52,7 @@ pub trait Cipher {
 /// * Key = 32 bytes
 /// * Nonce = 12 bytes (8-byte counter zero-padded to 12)
 /// * Tag = 16 bytes
+#[derive(Debug, Clone, Copy, Default)]
 pub struct ChaChaPoly;
 
 /// Build the 12-byte Noise nonce: 4 zero bytes followed by the
@@ -70,8 +65,6 @@ fn nonce_bytes(n: u64) -> [u8; 12] {
 
 impl Cipher for ChaChaPoly {
     const NAME: &'static str = "ChaChaPoly";
-    const KEY_SIZE: usize = 32;
-    const NONCE_SIZE: usize = 12;
     const TAG_SIZE: usize = 16;
 
     fn encrypt(

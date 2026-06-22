@@ -28,6 +28,7 @@ pub trait Role: sealed::Sealed {
 }
 
 /// The initiator — sends the first message.
+#[derive(Debug, Clone, Copy, Default)]
 pub struct Initiator;
 
 impl sealed::Sealed for Initiator {}
@@ -39,6 +40,7 @@ impl Role for Initiator {
 }
 
 /// The responder — receives the first message.
+#[derive(Debug, Clone, Copy, Default)]
 pub struct Responder;
 
 impl sealed::Sealed for Responder {}

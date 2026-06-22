@@ -48,6 +48,7 @@ pub trait Pattern {
 ///   ...
 ///   -> e, es
 /// ```
+#[derive(Debug, Clone, Copy, Default)]
 pub struct N;
 
 impl Pattern for N {
@@ -80,6 +81,7 @@ assert_well_formed!(N);
 ///   ...
 ///   -> e, es, ss
 /// ```
+#[derive(Debug, Clone, Copy, Default)]
 pub struct K;
 
 impl Pattern for K {
@@ -110,6 +112,7 @@ assert_well_formed!(K);
 ///   ...
 ///   -> psk, e, es, ss
 /// ```
+#[derive(Debug, Clone, Copy, Default)]
 pub struct Kpsk0;
 
 impl Pattern for Kpsk0 {
@@ -144,6 +147,7 @@ assert_well_formed!(Kpsk0);
 ///   -> e, es, s, ss, psk
 ///   <- e, ee, se
 /// ```
+#[derive(Debug, Clone, Copy, Default)]
 pub struct IKpsk1;
 
 impl Pattern for IKpsk1 {
@@ -180,6 +184,7 @@ assert_well_formed!(IKpsk1);
 ///   -> e, es, s, ss
 ///   <- e, ee, se
 /// ```
+#[derive(Debug, Clone, Copy, Default)]
 pub struct IK;
 
 impl Pattern for IK {
@@ -219,6 +224,7 @@ assert_well_formed!(IK);
 ///   -> e, es
 ///   <- e, ee
 /// ```
+#[derive(Debug, Clone, Copy, Default)]
 pub struct NK;
 
 impl Pattern for NK {
@@ -261,6 +267,7 @@ assert_well_formed!(NK);
 ///   -> e, s
 ///   <- e, ee, se, s, es
 /// ```
+#[derive(Debug, Clone, Copy, Default)]
 pub struct IX;
 
 impl Pattern for IX {
@@ -304,6 +311,7 @@ assert_well_formed!(IX);
 ///   <- e, ee
 ///   -> s, se
 /// ```
+#[derive(Debug, Clone, Copy, Default)]
 pub struct XK;
 
 impl Pattern for XK {
@@ -348,6 +356,7 @@ assert_well_formed!(XK);
 ///   -> e
 ///   <- e, ee
 /// ```
+#[derive(Debug, Clone, Copy, Default)]
 pub struct NN;
 
 impl Pattern for NN {
@@ -394,6 +403,7 @@ assert_well_formed!(NN);
 ///   <- e, ee, s, es
 ///   -> s, se
 /// ```
+#[derive(Debug, Clone, Copy, Default)]
 pub struct XX;
 
 impl Pattern for XX {
