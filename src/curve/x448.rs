@@ -156,9 +156,7 @@ impl SoftwareX448PrivateKey {
     pub fn generate<R: RngCore + CryptoRng>(mut rng: R) -> Self {
         let mut secret = [0u8; 56];
         rng.fill_bytes(&mut secret);
-        let key = Self { secret };
-        crate::zeroize::zeroize_array(&mut secret);
-        key
+        Self { secret }
     }
 
     /// Construct from known 56-byte scalar material.

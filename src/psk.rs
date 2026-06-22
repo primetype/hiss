@@ -36,9 +36,7 @@ impl Psk {
     pub fn generate<R: RngCore + CryptoRng>(mut rng: R) -> Self {
         let mut bytes = [0u8; Self::SIZE];
         rng.fill_bytes(&mut bytes);
-        let key = Self(bytes);
-        crate::zeroize::zeroize_array(&mut bytes);
-        key
+        Self(bytes)
     }
 
     /// Borrow the raw bytes.
