@@ -46,6 +46,12 @@ pub mod apple;
 #[cfg_attr(docsrs, doc(cfg(any(target_os = "macos", target_os = "ios"))))]
 pub use apple::{AppleSecureEnclave, SeedError};
 
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg_attr(docsrs, doc(cfg(any(target_os = "macos", target_os = "ios"))))]
+impl SecretKey for crate::provider::apple::P256r1PrivateKey {
+    type Curve = P256;
+}
+
 // ── Provider trait family ────────────────────────────────────────
 
 /// The shared identity and key lifecycle of a crypto backend: its
@@ -551,9 +557,4 @@ impl<P> ProviderExt for P {
     {
         <Self as CryptoKeyProvider<K::Curve>>::public_key(self, key)
     }
-}
-
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-impl SecretKey for crate::provider::apple::P256r1PrivateKey {
-    type Curve = P256;
 }
