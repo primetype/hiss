@@ -2,7 +2,7 @@
 //!
 //! Where `src/noise/mod.rs` has hand-picked single-corruption tests, this
 //! file sweeps the adversarial space deterministically (via the
-//! [`ScriptedRng`] ephemeral-injection harness) across all ten supported
+//! [`ScriptedRng`] ephemeral-injection harness) across all eleven supported
 //! patterns:
 //!
 //! * **tamper** — flip *every* byte of *every* handshake message → the
@@ -43,6 +43,7 @@ type IX = Noise<pattern::IX, P256, ChaChaPoly, Blake2b>;
 type XK = Noise<pattern::XK, P256, ChaChaPoly, Blake2b>;
 type NN = Noise<pattern::NN, P256, ChaChaPoly, Blake2b>;
 type XX = Noise<pattern::XX, P256, ChaChaPoly, Blake2b>;
+type X = Noise<pattern::X, P256, ChaChaPoly, Blake2b>;
 
 // Fixed inputs — distinct values per role; all valid P-256 scalars.
 const INIT_STATIC: [u8; 32] = [0xA1; 32];
@@ -68,6 +69,7 @@ const NN_MSG2: usize = 81; // NN msg2: e + ee (keys cipher) + tag
 const XX_MSG1: usize = 65; // XX msg1: bare e (cipher never keyed → no tag)
 const XX_MSG2: usize = 162; // XX msg2: e + ee keys cipher + encrypted s + es + tag
 const XX_MSG3: usize = 97; // XX msg3: encrypted s (keyed) + se + tag
+const X_MSG1: usize = 162; // X msg1: e + es (keys cipher) + encrypted s + ss + tag
 
 /// Transform applied to a handshake message before the peer reads it.
 type Xform<'a> = dyn Fn(usize, Vec<u8>) -> Vec<u8> + 'a;
@@ -501,6 +503,46 @@ fn run_xx(xform: &Xform<'_>) -> Result<(), ()> {
     fully_drained(&i_stream, &r_stream)
 }
 
+fn run_x(xform: &Xform<'_>) -> Result<(), ()> {
+    // X pre-message `<- s`: the initiator pre-knows the responder static
+    // (`set_rs`); its own static is transmitted in msg1 (encrypted, after
+    // `es`) via the `s` token — IK's msg1 with no responder reply.
+    let i_stream = PeerStream::new();
+    let i = SyncHandshake::<X, Initiator, _, _, _, _>::initiate(
+        EphemeralOnly::new(ScriptedRng::new(&[&INIT_EPHEMERAL])),
+        &[],
+        i_stream.clone(),
+    )
+    .set_rs(public_key(&RESP_STATIC));
+    let _ = i
+        .e()
+        .unwrap()
+        .es()
+        .unwrap()
+        .s(private_key(&INIT_STATIC))
+        .unwrap()
+        .ss()
+        .unwrap();
+    let msg1 = xform(0, i_stream.take_written());
+
+    // Responder reads msg1 (-> e, es, s, ss); the `s` reveals the initiator
+    // static. The responder sends nothing (one-way), so its RNG is unused.
+    let r_stream = PeerStream::new();
+    r_stream.feed(&msg1);
+    let r = SyncHandshake::<X, Responder, _, _, _, _>::respond(
+        EphemeralOnly::new(StdRng::seed_from_u64(4)),
+        &[],
+        r_stream.clone(),
+    )
+    .set_s(private_key(&RESP_STATIC))
+    .map_err(|_| ())?;
+    let (_, recv) = r.recv().e().map_err(|_| ())?;
+    let recv = recv.es().map_err(|_| ())?;
+    let (_, recv) = recv.s().map_err(|_| ())?;
+    recv.ss().map_err(|_| ())?;
+    fully_drained(&i_stream, &r_stream)
+}
+
 // ── Sweep helpers ────────────────────────────────────────────────
 
 /// Assert that the genuine handshake completes, then that flipping any
@@ -637,6 +679,11 @@ fn xx_msg2_tamper_truncation_sweep() {
 #[test]
 fn xx_msg3_tamper_truncation_sweep() {
     sweep("XX msg3", 2, XX_MSG3, |xf| run_xx(&*xf));
+}
+
+#[test]
+fn x_msg1_tamper_truncation_sweep() {
+    sweep("X msg1", 0, X_MSG1, |xf| run_x(&*xf));
 }
 
 // ── Non-canonical on-wire public key (M1) ────────────────────────

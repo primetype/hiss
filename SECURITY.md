@@ -49,7 +49,7 @@ Noise matrix. The security claims below apply only to this surface:
 
 | Component | Supported |
 |-----------|-----------|
-| Handshake patterns | `N`, `K`, `Kpsk0`, `IKpsk1`, `IK`, `NK`, `IX`, `XK`, `NN`, `XX` (a 10-pattern subset) |
+| Handshake patterns | `N`, `K`, `Kpsk0`, `IKpsk1`, `IK`, `NK`, `IX`, `XK`, `NN`, `XX`, `X` (an 11-pattern subset) |
 | Noise DH curves | NIST **P-256** (the Noise DH curve), **X25519** (the Noise `25519` curve, Curve25519 / RFC 7748), and **X448** (the Noise `448` curve, RFC 7748) |
 | Signing curve | **Ed25519** (standalone signing; not used as a Noise DH curve) |
 | AEAD cipher | **ChaCha20-Poly1305** |
@@ -106,7 +106,7 @@ party's host OS or RNG.
   physical/hardware attacks beyond what the platform or Secure Enclave mitigates.
 - Traffic analysis (message sizes and timing of the application protocol itself).
 - Patterns, curves, ciphers, or hashes outside the [Scope](#scope) table.
-- Replay protection for the one-way patterns (`N`/`K`/`Kpsk0`) — they are one-shot
+- Replay protection for the one-way patterns (`N`/`K`/`Kpsk0`/`X`) — they are one-shot
   seals by construction; replay resistance is a property only of the interactive
   `IK` / `IKpsk1` / `NK` / `IX` / `XK` / `NN` / `XX` handshakes. See the per-pattern table.
 - Anything a caller does with secret bytes after copying them out of a `hiss` type
@@ -135,14 +135,21 @@ X448 has a single `XX` self round-trip (see [Validated test vectors](#validated-
 | **XK** | three messages (`-> e, es` / `<- e, ee` / `-> s, se`) | **mutual** — the responder is authenticated to the initiator via the `es` DH that binds the responder's known static key; the initiator is authenticated to the responder via `se` | encrypted to the responder's known static key; **the initiator's static identity is sent encrypted in msg3 (after `ee`) and is hidden from a passive eavesdropper** | **full** once both ephemerals are mixed (`ee`) | **yes** (responder contributes a fresh ephemeral) | — |
 | **NN** | two messages (`-> e` / `<- e, ee`) | **none — both parties are anonymous** (no static keys); **no protection against an active man-in-the-middle** | only against a **passive** eavesdropper — there are no static keys, so a passive observer cannot read the traffic but an active MITM can impersonate either side | **full** once both ephemerals are mixed (`ee`) | **yes** (responder contributes a fresh ephemeral) | — |
 | **XX** | three messages (`-> e` / `<- e, ee, s, es` / `-> s, se`) | **mutual** — no pre-known statics: the initiator is authenticated to the responder via `se`, the responder to the initiator via `es`; both statics are sent in-handshake | payload encrypted after `ee`; **both statics are sent encrypted (the responder's in msg2, the initiator's in msg3, both after `ee`), so both identities are hidden from a passive eavesdropper** | **full** once both ephemerals are mixed (`ee`) | **yes** (responder contributes a fresh ephemeral) | — |
+| **X** | one message (`-> e, es, s, ss`) | sender's static key, **vulnerable to key-compromise impersonation** (auth rests on the static–static `ss` DH); the sender's static is sent **encrypted in-band** (after `es`), not pre-shared | encrypted to the recipient's known static key; **the sender's identity is hidden from a passive eavesdropper** (its static rides encrypted after `es`) | sender-side only (fresh ephemeral per message); **lost if the recipient's static key is compromised** | **no** (one-way) | — |
 
 Notes:
 
-- `N`, `K`, and `Kpsk0` are **one-way seals** (a single message, no response). They
+- `N`, `K`, `Kpsk0`, and `X` are **one-way seals** (a single message, no response). They
   provide no replay protection and only sender-side forward secrecy; they are
   intended for encrypting data at rest to a known public key (for example, sealing a
   per-pair PSK to a device's own Secure Enclave key). Because there is no recipient
   ephemeral, compromise of the recipient's static private key exposes past payloads.
+- `X` is a **one-way, sender-authenticated seal with sender-identity hiding**. Like `K`
+  it authenticates the sender via the static–static `ss` DH, but where `K` pre-shares
+  *both* statics out of band, `X` pre-knows only the recipient's static (`<- s`) and
+  transmits the **sender's** static **encrypted in-band** (after `es` keys the cipher),
+  so the sender's identity is hidden from a passive eavesdropper. Its single message is
+  the same token sequence as `IK`'s msg1 with no responder reply.
 - `IK` and `IKpsk1` are the **interactive mutually-authenticated handshakes**
   (`IKpsk1` layers a PSK on top of `IK`). Forward secrecy and replay resistance are
   established only after the second message (the `ee` DH).
@@ -256,7 +263,7 @@ in-tree tests:
 | Wycheproof ECDH (secp256r1) | **355** vectors | Project Wycheproof, `ecpoint` encoding |
 | RFC 6979 deterministic ECDSA | Appendix A.2.5 (P-256/SHA-256) KAT | RFC 6979; raw `(r, s)` pinned for `"sample"` and `"test"` |
 | NIST ECC CDH | P-256 `Count=0` | NIST CAVP ECDH vector |
-| Noise handshake KATs (**P-256**) | patterns `N` / `K` / `Kpsk0` / `IKpsk1` / `IK` / `NK` / `IX` / `XK` / `NN` / `XX` | frozen, replayed byte-for-byte (handshake ciphertexts + handshake hash + transport) |
+| Noise handshake KATs (**P-256**) | patterns `N` / `K` / `Kpsk0` / `IKpsk1` / `IK` / `NK` / `IX` / `XK` / `NN` / `XX` / `X` | frozen, replayed byte-for-byte (handshake ciphertexts + handshake hash + transport) |
 | Noise interop, **X25519** | patterns `N` / `IK` / `XX` | byte-for-byte agreement with `snow` (no frozen KAT vectors) |
 | Noise round-trip, **X448** | pattern `XX` | single self round-trip (no frozen KAT vectors, no snow interop) |
 | Negative / boundary sweeps | per-pattern, deterministic | every-byte tamper, every-prefix truncation, over-length, ciphertext bit-flip, replay, out-of-order, wrong-PSK → all rejected |

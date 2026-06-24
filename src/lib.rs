@@ -18,14 +18,15 @@
 //!
 //! The default suite is **P-256 / ChaCha20-Poly1305 / BLAKE2b** —
 //! [`P256`](noise::P256), [`ChaChaPoly`](noise::ChaChaPoly), and
-//! [`Blake2b`](noise::Blake2b). Ten fundamental patterns are provided as
+//! [`Blake2b`](noise::Blake2b). Eleven fundamental patterns are provided as
 //! markers in [`noise::pattern`], each combined with a suite
 //! through [`Noise<P, Cu, Ci, H>`](noise::Noise):
 //! [`N`](noise::pattern::N), [`K`](noise::pattern::K),
 //! [`Kpsk0`](noise::pattern::Kpsk0), [`IKpsk1`](noise::pattern::IKpsk1),
 //! [`IK`](noise::pattern::IK), [`NK`](noise::pattern::NK),
 //! [`IX`](noise::pattern::IX), [`XK`](noise::pattern::XK),
-//! [`NN`](noise::pattern::NN), and [`XX`](noise::pattern::XX). Three
+//! [`NN`](noise::pattern::NN), [`XX`](noise::pattern::XX), and
+//! [`X`](noise::pattern::X). Three
 //! Diffie-Hellman curves are supported —
 //! [`P256`](noise::P256), [`X25519`](noise::X25519) (the Noise `25519`
 //! curve), and [`X448`](noise::X448) (the Noise `448` curve) — with

@@ -1597,3 +1597,74 @@ fn xx_snow_initiator_hiss_responder() {
     let pt_len = snow_initiator.read_message(&ct[..ct_len], &mut pt).unwrap();
     assert_eq!(&pt[..pt_len], reply);
 }
+
+// ── X: our initiator ↔ snow responder (one-way seal) ────────────
+
+#[test]
+fn x_hiss_initiator_snow_responder() {
+    let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
+
+    // The initiator's own static is transmitted (encrypted) in msg1.
+    let alice_static = provider.generate::<P256>().unwrap();
+
+    let payload: [u8; 32] = [0x42; 32];
+
+    let proto = "Noise_X_P256_ChaChaPoly_BLAKE2b";
+
+    // Snow generates Bob's keys.
+    let snow_builder = snow::Builder::new(proto.parse().unwrap());
+    let bob_keypair = snow_builder.generate_keypair().unwrap();
+    let bob_pub = P256::public_key_from_bytes(&bob_keypair.public).unwrap();
+
+    // X's only pre-message is `<- s`: the snow responder does NOT pre-know
+    // the initiator's static (it arrives encrypted in msg1 via the `s`
+    // token), so there is no `remote_public_key` on the responder builder.
+    let mut snow_responder = snow::Builder::new(proto.parse().unwrap())
+        .local_private_key(&bob_keypair.private)
+        .unwrap()
+        .build_responder()
+        .unwrap();
+
+    // ── Our initiator seals ──────────────────────────────────
+    type NoiseX = Noise<pattern::X, P256, ChaChaPoly, Blake2b>;
+
+    let stream = PeerStream::new();
+    let sealer = SyncHandshake::<NoiseX, Initiator, _, _, _, _>::initiate(
+        EphemeralOnly::new(StdRng::from_os_rng()),
+        &[],
+        stream.clone(),
+    )
+    .set_rs(bob_pub);
+
+    // msg1: -> e, es, s, ss
+    let (mut transport, _) = sealer
+        .e()
+        .unwrap()
+        .es()
+        .unwrap()
+        .s(alice_static)
+        .unwrap()
+        .ss()
+        .unwrap()
+        .into_parts();
+
+    let msg = stream.take_written();
+    assert_eq!(msg.len(), 162); // e (65) + encrypted s (81) + payload tag (16)
+
+    let mut sealed = [0u8; 64];
+    let sealed_len = transport.send(&payload, &mut sealed).unwrap();
+
+    // ── Snow responder opens ─────────────────────────────────
+    let mut buf = [0u8; 256];
+    let _len = snow_responder.read_message(&msg, &mut buf).unwrap();
+
+    let mut snow_responder = snow_responder.into_transport_mode().unwrap();
+
+    let mut opened = [0u8; 256];
+    let opened_len = snow_responder
+        .read_message(&sealed[..sealed_len], &mut opened)
+        .unwrap();
+
+    assert_eq!(opened_len, 32);
+    assert_eq!(&opened[..opened_len], &payload);
+}

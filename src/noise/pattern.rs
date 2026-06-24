@@ -418,3 +418,40 @@ impl Pattern for XX {
 }
 
 assert_well_formed!(XX);
+
+// ── X ───────────────────────────────────────────────────────────
+
+/// `X` — one-way authenticated pattern with sender-identity hiding. The
+/// sender knows the recipient's static key up front (pre-message `<- s`)
+/// and transmits its **own** static key, encrypted, within the single
+/// message; the sender is authenticated via `ss`.
+///
+/// Like [`K`] it is a one-shot seal to a known recipient, but where `K`
+/// pre-shares *both* statics, `X` pre-shares only the recipient's and
+/// carries the sender's static **encrypted in-band** (after `es` keys the
+/// cipher), so the sender's identity is hidden from a passive eavesdropper.
+/// Its single message is the same token sequence as [`IK`]'s msg1, without
+/// the responder's reply — confidential, sender-authenticated, and
+/// forward-secret per write.
+///
+/// ```text
+/// X:
+///   <- s
+///   ...
+///   -> e, es, s, ss
+/// ```
+#[derive(Debug, Clone, Copy, Default)]
+pub struct X;
+
+impl Pattern for X {
+    const NAME: &'static str = "X";
+    const NUM_MESSAGES: usize = 1;
+
+    // Pre-messages: <- s (recipient's static key known)
+    type PreMessages = Cons<Message<ToInitiator, Cons<S, Nil>>, Nil>;
+
+    // -> e, es, s, ss
+    type Messages = Cons<Message<ToResponder, Cons<E, Cons<Es, Cons<S, Cons<Ss, Nil>>>>>, Nil>;
+}
+
+assert_well_formed!(X);

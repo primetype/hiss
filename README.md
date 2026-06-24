@@ -39,13 +39,13 @@ This `0.1` targets one cipher suite and a fixed set of patterns:
 
 | Axis    | Supported |
 |---------|-----------|
-| Patterns | `N`, `K`, `Kpsk0`, `IKpsk1`, `IK`, `NK`, `IX`, `XK`, `NN`, `XX` |
+| Patterns | `N`, `K`, `Kpsk0`, `IKpsk1`, `IK`, `NK`, `IX`, `XK`, `NN`, `XX`, `X` |
 | Curves  | NIST **P-256** (secp256r1), **X25519** (Curve25519, the Noise `25519` curve), and **X448** (the Noise `448` curve) |
 | Cipher  | **ChaCha20-Poly1305** |
 | Hash    | **BLAKE2b** |
 
 Conformance is anchored against [`snow`](https://crates.io/crates/snow) via an interop
-test suite. All ten fundamental patterns are present; additional hashes and ciphers
+test suite. All eleven fundamental patterns are present; additional hashes and ciphers
 (AES-GCM) are planned for `0.2+`.
 
 The `fallback` modifier — and the compound protocols it enables (e.g. Noise Pipes /
@@ -167,6 +167,12 @@ active man-in-the-middle — with full forward secrecy once the ephemerals are m
 **both** statics are transmitted *encrypted* during the handshake (after `ee` keys the
 cipher), so **both identities are hidden from a passive eavesdropper**. Both parties send
 their static keys via `s` tokens; full forward secrecy follows the `ee` DH.
+`X` is a **one-way** authenticated seal: like the Quickstart's `N` it is a single message
+to a recipient whose static key the sender already pre-knows (via `set_rs`), but it
+additionally transmits the **sender's** own static key *encrypted in-band* (after `es`
+keys the cipher). The message is sender-authenticated via `ss` and the sender's identity
+stays hidden from a passive eavesdropper — `IK`'s msg1 with no reply. Compared with `K`
+(which pre-shares both statics out of band), `X` carries the sender's static on the wire.
 
 ## Providers
 

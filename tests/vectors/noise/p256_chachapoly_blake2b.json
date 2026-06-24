@@ -1,5 +1,5 @@
 {
-  "note": "Noise KAT vectors for P256/ChaChaPoly/BLAKE2b, generated from snow with fixed keys + pinned ephemerals. One-way patterns freeze msg1 + the initiator->responder transport; the interactive patterns (IKpsk1, IK, NK, IX, XK, NN, XX) freeze every handshake message + both transport directions. Provenance: agreement with snow (no spec P-256 vectors exist).",
+  "note": "Noise KAT vectors for P256/ChaChaPoly/BLAKE2b, generated from snow with fixed keys + pinned ephemerals. One-way patterns (N, K, Kpsk0, X) freeze msg1 + the initiator->responder transport; the interactive patterns (IKpsk1, IK, NK, IX, XK, NN, XX) freeze every handshake message + both transport directions. Provenance: agreement with snow (no spec P-256 vectors exist).",
   "vectors": [
     {
       "protocol_name": "Noise_N_P256_ChaChaPoly_BLAKE2b",
@@ -275,6 +275,26 @@
           "sender": "responder",
           "payload": "68697373204b41543a20726573706f6e646572202d3e20696e69746961746f72",
           "ciphertext": "0bd6a0a176f3f41a8bc0e78fa4393c16ff4b1328f80bf13f1c76c67b79621cc2089306f11d6956d6b85b6a563ef18358"
+        }
+      ]
+    },
+    {
+      "protocol_name": "Noise_X_P256_ChaChaPoly_BLAKE2b",
+      "init_static": "1111111111111111111111111111111111111111111111111111111111111111",
+      "init_ephemeral": "2222222222222222222222222222222222222222222222222222222222222222",
+      "resp_static": "3333333333333333333333333333333333333333333333333333333333333333",
+      "messages": [
+        {
+          "payload": "",
+          "ciphertext": "04d65a93977caa3d1b081852ff57a79e465f1660577304baead505dd3a48589cf350185e895372df6221ea3a137557e473fddb6755f05bd507c3c533fce9c9128514b8359a0d5b314b24d8c00746b6cd2d8a64ae31a892907b80c158951463a09c324e4d27782660c595d1d590d23dea66d9328a02afba951c4c0cb3f42ae2302604d6c91165cc9b3a2da9e32d7e728351b7230094b7f6815df15b1f428c8edc2a39"
+        }
+      ],
+      "handshake_hash": "9888ee2089a88dceeada497a030076055d332240d27cb33074aa0ccd69b4fc3aec483fe42e2911e149629ccbc6ff413d36ce69b8748936030db4aa525ebc395d",
+      "transport": [
+        {
+          "sender": "initiator",
+          "payload": "68697373204b41543a20696e69746961746f72202d3e20726573706f6e646572",
+          "ciphertext": "f17d9114ce86576bc1b40813a9116edf23424865cb75fefb7f7b56809e99a84ce8dd1b2fb4154f69d9d0ab7c912d957a"
         }
       ]
     }
