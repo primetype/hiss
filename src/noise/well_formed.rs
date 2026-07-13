@@ -35,9 +35,9 @@
 //! and the cipher must be [`Keyed`] by the end (a pattern that performs no DH
 //! or `psk` — e.g. a lone `-> e` — would finalise with transport keys derived
 //! only from the public protocol name, and is rejected). It is enforced two
-//! ways: `assert_well_formed!` forces the check at a pattern's definition
-//! site, and the [`Protocol`](super::Protocol) impl requires it, so an
-//! ill-formed pattern can never parameterise a handshake.
+//! ways: the `noise!` macro emits a `WellFormed` assertion at a pattern's
+//! definition site, and the [`Protocol`](super::Protocol) impl requires it,
+//! so an ill-formed pattern can never parameterise a handshake.
 
 use std::marker::PhantomData;
 
@@ -212,9 +212,9 @@ impl<IE, RE, IS, RS> Keyed for State<IE, RE, IS, RS, True> {}
 /// Implemented automatically for every [`Pattern`] that passes the
 /// compile-time fold described in the [module docs](self) — so a malformed
 /// pattern simply does not implement it. The [`Protocol`](super::Protocol)
-/// impl requires `WellFormed`, so an ill-formed pattern cannot reach a
-/// handshake; use `assert_well_formed!` to surface the failure at the
-/// pattern's own definition.
+/// impl requires `WellFormed`, and the `noise!` macro asserts it at the
+/// pattern's own definition, so an ill-formed pattern cannot reach a
+/// handshake.
 ///
 /// # Examples
 ///
@@ -326,15 +326,7 @@ impl<P: Pattern> DerivedHasPsk for P {
     const HAS_PSK: bool = <P::Messages as ContainsPsk>::VALUE;
 }
 
-/// Assert at compile time that a [`Pattern`] is [`WellFormed`], reporting the
-/// failure at the macro's call site (a pattern's definition) rather than at a
-/// distant handshake call.
-macro_rules! assert_well_formed {
-    ($pattern:ty) => {
-        const _: fn() = || {
-            fn assert<P: $crate::noise::well_formed::WellFormed>() {}
-            assert::<$pattern>();
-        };
-    };
-}
-pub(crate) use assert_well_formed;
+// A pattern definition's compile-time `WellFormed` assertion is emitted
+// by the `noise!` macro itself (see `hiss-macros`), so a malformed
+// pattern is reported at its definition site rather than at a distant
+// handshake call.
