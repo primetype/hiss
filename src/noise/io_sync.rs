@@ -85,6 +85,10 @@ use super::process::{
     do_psk, recv_e, recv_payload, recv_s, recv_to_transport, send_payload, send_s,
 };
 use super::role::{Initiator, Responder, Role};
+use super::support::{
+    ee as sync_do_ee, es_initiator as sync_do_es_initiator, es_responder as sync_do_es_responder,
+    se_initiator as sync_do_se_initiator, se_responder as sync_do_se_responder, ss as sync_do_ss,
+};
 use super::tokens::*;
 use super::transport::Transport;
 use super::{Noise, Protocol};
@@ -98,192 +102,11 @@ const TOKEN_SCRATCH: usize = 128;
 
 // ── Synchronous token crypto ─────────────────────────────────────
 //
-// Mirror the provider-calling helpers in `process.rs`, but call the
-// synchronous `DhProvider` methods instead of awaiting. The
-// provider-free helpers are reused from `process.rs` directly.
-
-/// Generate our ephemeral, write its public key, mix it in.
-fn sync_send_e<Cu, Ci, H, CP>(
-    inner: &mut HandshakeInner<Cu, Ci, H, CP>,
-    buffer: &mut SendBuffer<'_>,
-) -> Result<(), HandshakeError>
-where
-    Cu: DhCurve,
-    Cu::PublicKey: AsRef<[u8]>,
-    Ci: Cipher,
-    H: Hash,
-    CP: DhProvider<Cu>,
-{
-    let e = inner
-        .provider
-        .generate_ephemeral_key()
-        .map_err(|e| HandshakeError::Crypto(Box::new(e)))?;
-    let e_pub = inner
-        .provider
-        .public_key(&e)
-        .map_err(|e| HandshakeError::Crypto(Box::new(e)))?;
-    buffer.write(e_pub.as_ref());
-    inner.symmetric.mix_hash(e_pub.as_ref());
-    if inner.has_psk {
-        inner.symmetric.mix_key(e_pub.as_ref());
-    }
-    inner.e = Some(e);
-    inner.e_pub = Some(e_pub);
-    Ok(())
-}
-
-/// Initiator `es`: DH(e, rs).
-fn sync_do_es_initiator<Cu, Ci, H, CP>(
-    inner: &mut HandshakeInner<Cu, Ci, H, CP>,
-) -> Result<(), HandshakeError>
-where
-    Cu: DhCurve,
-    Cu::SharedSecret: AsRef<[u8]>,
-    Ci: Cipher,
-    H: Hash,
-    CP: DhProvider<Cu>,
-{
-    let e = inner
-        .e
-        .as_ref()
-        .ok_or(HandshakeError::MissingEphemeralKey)?;
-    let rs = inner
-        .rs
-        .as_ref()
-        .ok_or(HandshakeError::MissingRemoteStatic)?;
-    let ss = inner
-        .provider
-        .dh(e, rs)
-        .map_err(|e| HandshakeError::Crypto(Box::new(e)))?;
-    inner.symmetric.mix_key(ss.as_ref());
-    Ok(())
-}
-
-/// Responder `es`: DH(s, re).
-fn sync_do_es_responder<Cu, Ci, H, CP>(
-    inner: &mut HandshakeInner<Cu, Ci, H, CP>,
-) -> Result<(), HandshakeError>
-where
-    Cu: DhCurve,
-    Cu::SharedSecret: AsRef<[u8]>,
-    Ci: Cipher,
-    H: Hash,
-    CP: DhProvider<Cu>,
-{
-    let s = inner.s.as_ref().ok_or(HandshakeError::MissingStaticKey)?;
-    let re = inner
-        .re
-        .as_ref()
-        .ok_or(HandshakeError::MissingRemoteEphemeral)?;
-    let ss = inner
-        .provider
-        .dh(s, re)
-        .map_err(|e| HandshakeError::Crypto(Box::new(e)))?;
-    inner.symmetric.mix_key(ss.as_ref());
-    Ok(())
-}
-
-/// `ee`: DH(e, re) (role-independent).
-fn sync_do_ee<Cu, Ci, H, CP>(
-    inner: &mut HandshakeInner<Cu, Ci, H, CP>,
-) -> Result<(), HandshakeError>
-where
-    Cu: DhCurve,
-    Cu::SharedSecret: AsRef<[u8]>,
-    Ci: Cipher,
-    H: Hash,
-    CP: DhProvider<Cu>,
-{
-    let e = inner
-        .e
-        .as_ref()
-        .ok_or(HandshakeError::MissingEphemeralKey)?;
-    let re = inner
-        .re
-        .as_ref()
-        .ok_or(HandshakeError::MissingRemoteEphemeral)?;
-    let ss = inner
-        .provider
-        .dh(e, re)
-        .map_err(|e| HandshakeError::Crypto(Box::new(e)))?;
-    inner.symmetric.mix_key(ss.as_ref());
-    Ok(())
-}
-
-/// Initiator `se`: DH(s, re).
-fn sync_do_se_initiator<Cu, Ci, H, CP>(
-    inner: &mut HandshakeInner<Cu, Ci, H, CP>,
-) -> Result<(), HandshakeError>
-where
-    Cu: DhCurve,
-    Cu::SharedSecret: AsRef<[u8]>,
-    Ci: Cipher,
-    H: Hash,
-    CP: DhProvider<Cu>,
-{
-    let s = inner.s.as_ref().ok_or(HandshakeError::MissingStaticKey)?;
-    let re = inner
-        .re
-        .as_ref()
-        .ok_or(HandshakeError::MissingRemoteEphemeral)?;
-    let ss = inner
-        .provider
-        .dh(s, re)
-        .map_err(|e| HandshakeError::Crypto(Box::new(e)))?;
-    inner.symmetric.mix_key(ss.as_ref());
-    Ok(())
-}
-
-/// Responder `se`: DH(e, rs).
-fn sync_do_se_responder<Cu, Ci, H, CP>(
-    inner: &mut HandshakeInner<Cu, Ci, H, CP>,
-) -> Result<(), HandshakeError>
-where
-    Cu: DhCurve,
-    Cu::SharedSecret: AsRef<[u8]>,
-    Ci: Cipher,
-    H: Hash,
-    CP: DhProvider<Cu>,
-{
-    let e = inner
-        .e
-        .as_ref()
-        .ok_or(HandshakeError::MissingEphemeralKey)?;
-    let rs = inner
-        .rs
-        .as_ref()
-        .ok_or(HandshakeError::MissingRemoteStatic)?;
-    let ss = inner
-        .provider
-        .dh(e, rs)
-        .map_err(|e| HandshakeError::Crypto(Box::new(e)))?;
-    inner.symmetric.mix_key(ss.as_ref());
-    Ok(())
-}
-
-/// `ss`: DH(s, rs) (role-independent).
-fn sync_do_ss<Cu, Ci, H, CP>(
-    inner: &mut HandshakeInner<Cu, Ci, H, CP>,
-) -> Result<(), HandshakeError>
-where
-    Cu: DhCurve,
-    Cu::SharedSecret: AsRef<[u8]>,
-    Ci: Cipher,
-    H: Hash,
-    CP: DhProvider<Cu>,
-{
-    let s = inner.s.as_ref().ok_or(HandshakeError::MissingStaticKey)?;
-    let rs = inner
-        .rs
-        .as_ref()
-        .ok_or(HandshakeError::MissingRemoteStatic)?;
-    let ss = inner
-        .provider
-        .dh(s, rs)
-        .map_err(|e| HandshakeError::Crypto(Box::new(e)))?;
-    inner.symmetric.mix_key(ss.as_ref());
-    Ok(())
-}
+// The synchronous provider-calling mirrors of the `process.rs` helpers
+// live in the hidden `support` module (shared with the macro-generated
+// sans-io states); they are aliased to their old `sync_do_*` names in
+// the imports above. The provider-free helpers are reused from
+// `process.rs` directly.
 
 // ── Streaming token helpers (compute bytes → write/read the wire) ──
 
@@ -301,9 +124,8 @@ where
     Io: Write,
 {
     let mut scratch = [0u8; TOKEN_SCRATCH];
-    let mut buffer = SendBuffer::new(&mut scratch);
-    sync_send_e(inner, &mut buffer)?;
-    stream.write_all(buffer.finish())?;
+    let n = super::support::send_e(inner, &mut scratch)?;
+    stream.write_all(&scratch[..n])?;
     Ok(())
 }
 

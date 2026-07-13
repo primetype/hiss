@@ -29,7 +29,13 @@ use crate::provider::CryptoKeyProvider;
 /// Separated from the type-state wrappers so that the shared per-token
 /// crypto in [`process`](super::process) can operate on it without
 /// fighting ownership.
-pub(crate) struct HandshakeInner<Cu, Ci, H, CP>
+///
+/// `pub` (but `#[doc(hidden)]`, re-exported only through
+/// [`support`](super::support)) so that `hiss-macros`-generated state
+/// machines — which expand in the caller's crate — can hold it. Its
+/// fields stay `pub(crate)`.
+#[doc(hidden)]
+pub struct HandshakeInner<Cu, Ci, H, CP>
 where
     Cu: Curve,
     Ci: Cipher,
