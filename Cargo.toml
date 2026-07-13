@@ -1,3 +1,8 @@
+[workspace]
+members = ["hiss-macros"]
+# The browser playground is its own independent crate/workspace.
+exclude = ["demo"]
+
 [package]
 name = "hiss"
 version = "0.1.0"
@@ -16,8 +21,9 @@ documentation = "https://docs.rs/hiss"
 keywords = ["noise", "handshake", "secure-enclave", "x25519", "keychain"]
 categories = ["cryptography", "network-programming"]
 # The browser playground (`demo/`) is a separate, non-published crate that
-# depends on this one by path. Keep it out of the packaged crate.
-exclude = ["/demo"]
+# depends on this one by path; `hiss-macros` is published separately. Keep
+# both out of the packaged crate.
+exclude = ["/demo", "/hiss-macros"]
 
 # docs.rs builds with every feature so the `async-io` driver is documented,
 # and passes `--cfg docsrs` so the `#[doc(cfg(...))]` feature/platform badges
@@ -32,6 +38,9 @@ rustdoc-args = ["--cfg", "docsrs"]
 cryptoxide = { version = "0.5.1", default-features = false, features = ["chacha", "poly1305", "blake2", "sha2", "hmac", "ed25519"] }
 eccoxide = { version = "0.4", default-features = false, features = ["p256r1", "table", "x25519", "x448"] }
 hex = "0.4"
+# The `noise!` pattern-DSL macro — the built-in patterns are defined with
+# it, so it is a required (build-time-only) dependency.
+hiss-macros = { version = "0.1.0", path = "hiss-macros" }
 packtool = "0.4"
 rand_core = "0.9"
 thiserror = "2"
@@ -90,3 +99,6 @@ harness = false
 [[example]]
 name = "tcp_xx_channel"
 required-features = ["async-io"]
+
+[[example]]
+name = "tcp_ikpsk1_ceremony"

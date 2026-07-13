@@ -71,6 +71,15 @@ pub enum HandshakeError {
     #[error("cannot rekey — no key has been established")]
     RekeyWithoutKey,
 
+    /// The caller rejected the peer mid-handshake — e.g. a PSK-lookup
+    /// closure found no pre-shared key enrolled for the identity the
+    /// handshake just revealed.
+    #[error("peer rejected: {reason}")]
+    PeerRejected {
+        /// Why the peer was rejected.
+        reason: String,
+    },
+
     /// An I/O error occurred while reading or writing the handshake
     /// transcript. This variant is always present: the blocking
     /// [`SyncHandshake`](super::io_sync::SyncHandshake) driver surfaces

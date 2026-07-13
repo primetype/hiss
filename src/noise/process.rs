@@ -119,11 +119,12 @@ where
     let session_id = inner.symmetric.handshake_hash().to_vec().into();
     let local_e = inner.e_pub;
     let remote_e = inner.re;
+    let remote_s = inner.rs;
     let (c1, c2) = inner.symmetric.split();
     if R::IS_INITIATOR {
-        Transport::new(c1, c2, session_id, local_e, remote_e)
+        Transport::new(c1, c2, session_id, local_e, remote_e, remote_s)
     } else {
-        Transport::new(c2, c1, session_id, local_e, remote_e)
+        Transport::new(c2, c1, session_id, local_e, remote_e, remote_s)
     }
 }
 

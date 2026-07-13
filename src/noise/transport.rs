@@ -54,6 +54,9 @@ pub struct Transport<Proto: Protocol> {
     local_ephemeral: Option<<Proto::Curve as Curve>::PublicKey>,
     /// The remote party's ephemeral public key, if they sent one.
     remote_ephemeral: Option<<Proto::Curve as Curve>::PublicKey>,
+    /// The remote party's static public key, if the handshake
+    /// established one (via a pre-message or an `s` token).
+    remote_static: Option<<Proto::Curve as Curve>::PublicKey>,
 }
 
 impl<Proto: Protocol> Transport<Proto> {
@@ -63,6 +66,7 @@ impl<Proto: Protocol> Transport<Proto> {
         session_id: SessionId,
         local_ephemeral: Option<<Proto::Curve as Curve>::PublicKey>,
         remote_ephemeral: Option<<Proto::Curve as Curve>::PublicKey>,
+        remote_static: Option<<Proto::Curve as Curve>::PublicKey>,
     ) -> Self {
         Self {
             send,
@@ -70,6 +74,7 @@ impl<Proto: Protocol> Transport<Proto> {
             session_id,
             local_ephemeral,
             remote_ephemeral,
+            remote_static,
         }
     }
 
@@ -153,22 +158,34 @@ impl<Proto: Protocol> Transport<Proto> {
         self.remote_ephemeral.as_ref()
     }
 
+    /// The remote party's static public key — the peer's verified-by-DH
+    /// identity — if the handshake established one (via a pre-message or
+    /// an `s` token).
+    ///
+    /// `None` only for patterns whose peer is anonymous (e.g. `NN`, or
+    /// the responder's view of `N`/`NK`).
+    pub fn remote_static(&self) -> Option<&<Proto::Curve as Curve>::PublicKey> {
+        self.remote_static.as_ref()
+    }
+
     /// Split the transport into independent send and receive halves.
     ///
-    /// Each half owns its own [`CipherState`] and a clone of both
-    /// ephemeral keys and the [`SessionId`].
+    /// Each half owns its own [`CipherState`] and a clone of the peer
+    /// keys and the [`SessionId`].
     pub fn split(self) -> (TransportSend<Proto>, TransportRecv<Proto>) {
         let send = TransportSend {
             cipher: self.send,
             session_id: self.session_id.clone(),
             local_ephemeral: self.local_ephemeral.clone(),
             remote_ephemeral: self.remote_ephemeral.clone(),
+            remote_static: self.remote_static.clone(),
         };
         let recv = TransportRecv {
             cipher: self.recv,
             session_id: self.session_id,
             local_ephemeral: self.local_ephemeral,
             remote_ephemeral: self.remote_ephemeral,
+            remote_static: self.remote_static,
         };
         (send, recv)
     }
@@ -182,6 +199,7 @@ pub struct TransportSend<Proto: Protocol> {
     session_id: SessionId,
     local_ephemeral: Option<<Proto::Curve as Curve>::PublicKey>,
     remote_ephemeral: Option<<Proto::Curve as Curve>::PublicKey>,
+    remote_static: Option<<Proto::Curve as Curve>::PublicKey>,
 }
 
 impl<Proto: Protocol> TransportSend<Proto> {
@@ -219,6 +237,12 @@ impl<Proto: Protocol> TransportSend<Proto> {
     pub fn remote_ephemeral(&self) -> Option<&<Proto::Curve as Curve>::PublicKey> {
         self.remote_ephemeral.as_ref()
     }
+
+    /// The remote party's static public key, if the handshake
+    /// established one.
+    pub fn remote_static(&self) -> Option<&<Proto::Curve as Curve>::PublicKey> {
+        self.remote_static.as_ref()
+    }
 }
 
 /// The receive half of a split [`Transport`].
@@ -229,6 +253,7 @@ pub struct TransportRecv<Proto: Protocol> {
     session_id: SessionId,
     local_ephemeral: Option<<Proto::Curve as Curve>::PublicKey>,
     remote_ephemeral: Option<<Proto::Curve as Curve>::PublicKey>,
+    remote_static: Option<<Proto::Curve as Curve>::PublicKey>,
 }
 
 impl<Proto: Protocol> TransportRecv<Proto> {
@@ -273,5 +298,11 @@ impl<Proto: Protocol> TransportRecv<Proto> {
     /// The remote party's ephemeral public key for this session.
     pub fn remote_ephemeral(&self) -> Option<&<Proto::Curve as Curve>::PublicKey> {
         self.remote_ephemeral.as_ref()
+    }
+
+    /// The remote party's static public key, if the handshake
+    /// established one.
+    pub fn remote_static(&self) -> Option<&<Proto::Curve as Curve>::PublicKey> {
+        self.remote_static.as_ref()
     }
 }

@@ -114,7 +114,7 @@
 //!   `AppleSecureEnclave` (P-256 in the Secure Enclave; software Ed25519
 //!   with a hardware-sealed seed).
 //!
-//! * **[`noise`]** — Compile-time Noise protocol descriptor. Encodes
+//! * **[`mod@noise`]** — Compile-time Noise protocol descriptor. Encodes
 //!   the handshake pattern, curve, cipher, and hash as zero-sized
 //!   types so all buffer sizes and operations are known at
 //!   monomorphisation time.
@@ -289,6 +289,11 @@
 #![warn(missing_docs)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
+// The code emitted by `noise!` references `::hiss::…` paths so it works in
+// any downstream crate; this self-alias makes those paths resolve when the
+// macro is invoked *inside* hiss itself (the built-in patterns).
+extern crate self as hiss;
+
 // The DER codec (`ASN1Reader`/`ASN1Writer`) is Apple/test-only, but its error
 // type `Asn1Error` is part of the public `curve::p256::Error` enum on every
 // platform, so the module itself is always compiled (the codec is gated inside).
@@ -298,3 +303,23 @@ pub mod noise;
 pub mod provider;
 pub mod psk;
 pub mod zeroize;
+
+/// Define a Noise handshake in the specification's own pattern notation
+/// — see the macro's documentation for the DSL and the generated API.
+///
+/// Naming a suite generates a documented, sans-io state machine with
+/// fixed-size messages; omitting it defines a suite-generic pattern
+/// marker (how [`noise::pattern`]'s built-ins are defined).
+///
+/// ```ignore
+/// hiss::noise! {
+///     /// Ceremony channel between two enrolled devices.
+///     pub Ceremony<X25519, ChaChaPoly, Blake2b> {
+///         <- s
+///         ...
+///         -> e, es, s, ss, psk
+///         <- e, ee, se
+///     }
+/// }
+/// ```
+pub use hiss_macros::noise;

@@ -1,0 +1,23 @@
+[package]
+name = "hiss-macros"
+version = "0.1.0"
+edition = "2024"
+# Keep in lockstep with the `hiss` crate's MSRV policy (see ../Cargo.toml).
+rust-version = "1.96"
+authors = ["Nicolas Di Prima <nicolas@primetype.co.uk>"]
+license = "MIT OR Apache-2.0"
+description = "Compile-time Noise handshake code generation for the hiss crate."
+readme = "README.md"
+repository = "https://github.com/primetype/hiss"
+homepage = "https://github.com/primetype/hiss"
+documentation = "https://docs.rs/hiss-macros"
+keywords = ["noise", "handshake", "proc-macro"]
+categories = ["cryptography", "development-tools::procedural-macro-helpers"]
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1"
+quote = "1"
+syn = "2"
