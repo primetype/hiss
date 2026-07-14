@@ -1,0 +1,5 @@
+error: expected `->`, `<-`, or `...`
+ --> tests/ui/missing_arrow.rs:3:9
+  |
+3 |         e, es
+  |         ^

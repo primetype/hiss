@@ -1,0 +1,5 @@
+error: only `s` pre-messages are supported, found `e`
+ --> tests/ui/premessage_e.rs:3:12
+  |
+3 |         <- e
+  |            ^

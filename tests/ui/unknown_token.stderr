@@ -1,0 +1,5 @@
+error: unknown Noise token `foo`; expected one of `e`, `s`, `ee`, `es`, `se`, `ss`, `psk`
+ --> tests/ui/unknown_token.rs:3:15
+  |
+3 |         -> e, foo
+  |               ^^^

@@ -1,0 +1,5 @@
+error: a Noise pattern needs at least one handshake message after `...`
+ --> tests/ui/empty_body.rs:2:9
+  |
+2 |     pub P<X25519, ChaChaPoly, Blake2b> {
+  |         ^

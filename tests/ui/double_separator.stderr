@@ -1,0 +1,5 @@
+error: the `...` pre-message separator may appear only once
+ --> tests/ui/double_separator.rs:6:9
+  |
+6 |         ...
+  |         ^

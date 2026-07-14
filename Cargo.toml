@@ -91,6 +91,11 @@ serde_json = "1"
 snow = { version = "0.10.0", features = ["default-resolver", "use-p256", "use-chacha20poly1305", "use-blake2"] }
 tempfile = "3.12"
 tokio = { version = "1.50", features = ["macros", "rt", "rt-multi-thread", "net", "signal", "time", "sync", "io-util", "fs"] }
+# Compile-fail (UI) harness for the `noise!` parser diagnostics
+# (`tests/macro_ui.rs` + `tests/ui/`). Test-only; hosted in the root crate
+# because CI's gate commands are root-package scoped (`hiss-macros`'s own
+# `tests/` never run under `cargo test`).
+trybuild = "1.0"
 
 [[bench]]
 name = "noise"

@@ -1,0 +1,5 @@
+error: token `e` appears twice in the same message
+ --> tests/ui/duplicate_token.rs:3:15
+  |
+3 |         -> e, e
+  |               ^
