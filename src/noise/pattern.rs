@@ -216,6 +216,10 @@ hiss_macros::noise! {
     /// the wire. Once `ee` mixes both ephemerals, the session has **full
     /// forward secrecy**.
     ///
+    /// **Authentication is conditional:** completing XX proves the peer holds a
+    /// static private key, not that you trust it — check `remote_static()`
+    /// against your own trust policy before acting on the channel.
+    ///
     /// msg1 (`-> e`) never keys the cipher, so it is the bare ephemeral
     /// with no payload tag; msg3 (`-> s, se`) sends the initiator's static
     /// encrypted.

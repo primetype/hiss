@@ -100,6 +100,14 @@ party's host OS or RNG.
 - Constant-time secret-scalar **point** multiplication in the software P-256
   backend (subject to the upstream caveat in [Side-channel posture](#side-channel-posture-per-backend)).
 
+> **Mutual authentication is conditional on the application checking the peer's
+> static key.** Completing IK / IKpsk1 / IX / XK / XX proves the peer holds the
+> private half of *a* static key — not that you trust that identity. hiss
+> surfaces the verified key via `Transport::remote_static()` (and the handshake
+> state's `remote_static()` accessor) but does **not** check it against any
+> policy for you; the application must compare it to its own trust store /
+> allow-list and reject unknown peers. See `examples/tcp_xx_channel.rs`.
+
 ### Out of scope
 
 - A compromised host OS, a malicious or broken RNG supplied by the caller, or
