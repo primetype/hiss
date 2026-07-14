@@ -7,7 +7,7 @@
 //! Run with:
 //!
 //! ```text
-//! cargo run --example tcp_ikpsk1_ceremony --features macros
+//! cargo run --example tcp_ikpsk1_ceremony
 //! ```
 //!
 //! # The pattern

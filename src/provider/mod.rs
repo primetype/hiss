@@ -209,9 +209,9 @@ pub trait SigningProviderAsync<C: SigningCurve>: CryptoKeyProvider<C> {
 /// operations resolve immediately — no hardware, no prompts.
 ///
 /// "Ephemeral-only" means *no built-in persistence*, not "no static
-/// keys": it still generates long-term keys for a handshake — persisting
-/// their bytes, if wanted, is the caller's job. For hardware-backed,
-/// persistent keys on Apple platforms use
+/// keys": it still **generates long-term (static) keys in software** for a
+/// handshake — persisting their bytes, if wanted, is the caller's job. For
+/// hardware-backed, persistent keys on Apple platforms use
 /// `AppleSecureEnclave`.
 ///
 /// Owns a caller-supplied CSPRNG `R` (`CryptoRng + RngCore`). You must

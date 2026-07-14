@@ -42,7 +42,7 @@ use crate::curve::Curve;
 /// implicit and never transmitted, so any "resync" value would be
 /// attacker-supplied.
 ///
-/// Ephemeral keys are `Option` because one-way patterns (Proto, K, Kpsk0)
+/// Ephemeral keys are `Option` because one-way patterns (N, K, Kpsk0)
 /// produce only one ephemeral: the sender has `local_ephemeral` but no
 /// `remote_ephemeral`, and vice versa for the receiver. Interactive
 /// patterns (IK, XK) always produce both.
@@ -102,9 +102,8 @@ impl<Proto: Protocol> Transport<Proto> {
     /// any error the receive nonce does **not** advance; treat a failure
     /// as **terminal** and tear the session down rather than retrying the
     /// record. On a [`DecryptionFailed`](HandshakeError::DecryptionFailed)
-    /// error the unverified plaintext has already been written into
-    /// `output`, so `output` holds **unauthenticated** bytes that must not
-    /// be read.
+    /// error `output` must be treated as **unreadable** — do not act on its
+    /// contents.
     pub fn receive(
         &mut self,
         ciphertext: &[u8],
@@ -145,7 +144,7 @@ impl<Proto: Protocol> Transport<Proto> {
     /// Our ephemeral public key for this session, if we generated one.
     ///
     /// Always `Some` for interactive patterns (IK, XK). `None` for the
-    /// receiver side of one-way patterns (Proto, K, Kpsk0).
+    /// receiver side of one-way patterns (N, K, Kpsk0).
     pub fn local_ephemeral(&self) -> Option<&<Proto::Curve as Curve>::PublicKey> {
         self.local_ephemeral.as_ref()
     }
@@ -153,7 +152,7 @@ impl<Proto: Protocol> Transport<Proto> {
     /// The remote party's ephemeral public key, if they sent one.
     ///
     /// Always `Some` for interactive patterns (IK, XK). `None` for the
-    /// sender side of one-way patterns (Proto, K, Kpsk0).
+    /// sender side of one-way patterns (N, K, Kpsk0).
     pub fn remote_ephemeral(&self) -> Option<&<Proto::Curve as Curve>::PublicKey> {
         self.remote_ephemeral.as_ref()
     }
@@ -269,9 +268,8 @@ impl<Proto: Protocol> TransportRecv<Proto> {
     /// [`Transport` delivery contract](Transport#delivery-contract)). On
     /// any error the receive nonce does **not** advance; a failure is
     /// **terminal** — tear the session down rather than retrying or
-    /// resynchronising from the wire. On a
-    /// [`DecryptionFailed`](HandshakeError::DecryptionFailed) error
-    /// `output` holds **unauthenticated** bytes that must not be read.
+    /// resynchronising from the wire. On any error treat `output` as
+    /// **unreadable**.
     pub fn decrypt(
         &mut self,
         ciphertext: &[u8],

@@ -6,8 +6,8 @@
 //! concrete suite, and generates a pair of documented, sans-io,
 //! type-state handshake state machines for it.
 //!
-//! Use it through the `hiss` crate (feature `macros`), which re-exports
-//! it as `hiss::noise!` — the generated code references `::hiss` paths
+//! Use it through the `hiss` crate, which re-exports it as `hiss::noise!`
+//! — the generated code references `::hiss` paths
 //! and needs that crate in scope.
 
 mod codegen;

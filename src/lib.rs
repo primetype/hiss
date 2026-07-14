@@ -32,22 +32,25 @@
 //! curve), and [`X448`](noise::X448) (the Noise `448` curve) — with
 //! Ed25519 reserved for identity and signing.
 //!
-//! # Drivers
+//! # Choosing an API
 //!
-//! A handshake is advanced over a transport by one of two drivers. Both
-//! own the I/O object and step the handshake through its messages:
+//! There are two ways to drive a handshake, and the **`noise!` macro is the
+//! primary, recommended one**:
 //!
-//! * [`SyncHandshake`](noise::SyncHandshake) drives the handshake over a
-//!   blocking [`std::io::Read`] + [`std::io::Write`]. Always available,
-//!   no runtime required.
-//! * `AsyncHandshake` (feature `async-io`) drives it over
-//!   `tokio::io::AsyncRead` + `AsyncWrite`, yielding an
-//!   `AsyncTransport` once the handshake completes.
+//! * **The [`noise!`](crate::noise!) macro (sans-io).** You write the pattern
+//!   in Noise notation and a concrete suite; the macro generates a type-state
+//!   state machine whose every handshake message is a fixed-size `[u8; N]`.
+//!   It performs **no I/O** — `write_message_N` returns the bytes, you
+//!   transport them however you like. This is the "buffer core" / no-syscall
+//!   API; there is no separate sans-io layer to reach for. See the
+//!   [`noise!`](crate::noise!) docs and the `tcp_ikpsk1_ceremony` example.
 //!
-//! There is no separate sans-io or "buffer core" API. The
-//! buffer / no-syscall case is simply an in-memory `Io` — a
-//! [`std::io::Cursor`], a [`Vec`], or a `&mut [u8]` — handed to the
-//! synchronous driver, as the [Quickstart](#quickstart) below shows.
+//! * **The driver API (secondary).** [`SyncHandshake`](noise::SyncHandshake)
+//!   owns a blocking [`std::io::Read`] + [`std::io::Write`] and steps the
+//!   handshake over it; `AsyncHandshake` (feature `async-io`) does the same
+//!   over `tokio::io`. The drivers own the transport and are convenient when
+//!   you already have an I/O object; the step-by-step Quickstart below uses
+//!   the sync driver.
 //!
 //! # Providers
 //!
@@ -138,6 +141,23 @@
 //!
 //! # Quickstart — seal a message with the `N` pattern, step by step
 //!
+//! The sans-io macro API in miniature (see [`noise!`](crate::noise!) for the
+//! full DSL and generated methods):
+//!
+//! ```ignore
+//! hiss::noise! {
+//!     pub Channel<X25519, ChaChaPoly, Blake2b> {
+//!         -> e
+//!         <- e, ee, s, es
+//!         -> s, se
+//!     }
+//! }
+//! // let (msg1, hs) = Channel::initiator(provider, prologue).write_message_1()?;
+//! ```
+//!
+//! The remaining steps use the **driver API** for a fully-worked, runnable
+//! tour:
+//!
 //! [`N`](noise::pattern::N) is a one-way, sender-anonymous seal: anyone who knows a
 //! recipient's static public key can send it one confidential, authenticated
 //! message, with no reply. The whole exchange is the single Noise message
@@ -157,7 +177,8 @@
 //! use hiss::provider::{EphemeralOnly, ProviderExt};
 //! use hiss::noise::X25519;
 //!
-//! // `EphemeralOnly` is the software backend; it wraps a CSPRNG.
+//! // `EphemeralOnly` is the software backend — it still generates static
+//! // keys, just in software; it wraps a CSPRNG.
 //! let mut recipient = EphemeralOnly::new(rand::rng());
 //!
 //! let recipient_static = recipient.generate::<X25519>()?; // secret half — never shared
