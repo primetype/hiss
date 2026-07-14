@@ -85,6 +85,12 @@ impl<Ci: Cipher> CipherState<Ci> {
                 if len > MAX_MESSAGE_LEN {
                     return Err(HandshakeError::MessageTooLong { len });
                 }
+                if output.len() < len {
+                    return Err(HandshakeError::OutputBufferTooSmall {
+                        needed: len,
+                        actual: output.len(),
+                    });
+                }
                 output[..len].copy_from_slice(plaintext);
                 Ok(len)
             }
@@ -114,6 +120,12 @@ impl<Ci: Cipher> CipherState<Ci> {
     ///
     /// Returns `Err` if this CipherState has no key.
     pub fn rekey(&mut self) -> Result<(), HandshakeError> {
+        const {
+            assert!(
+                Ci::TAG_SIZE <= 16,
+                "rekey scratch [0u8; 48] assumes TAG_SIZE <= 16"
+            )
+        };
         let key = self.k.as_ref().ok_or(HandshakeError::RekeyWithoutKey)?;
 
         let zeros = [0u8; 32];
@@ -148,10 +160,8 @@ impl<Ci: Cipher> CipherState<Ci> {
     /// than retrying.
     ///
     /// On a [`DecryptionFailed`](HandshakeError::DecryptionFailed) error
-    /// the underlying AEAD has already written its (unverified) plaintext
-    /// into `output` before the tag check ran, so `output` holds
-    /// **unauthenticated** bytes that must not be read. (Authentication is
-    /// not bypassed: the nonce does not advance and the error is returned.)
+    /// `output` is zeroed before returning; the nonce does not advance and
+    /// the error is returned.
     pub fn decrypt_with_ad(
         &mut self,
         ad: &[u8],
@@ -168,6 +178,12 @@ impl<Ci: Cipher> CipherState<Ci> {
         match self.k {
             None => {
                 let len = ciphertext.len();
+                if output.len() < len {
+                    return Err(HandshakeError::OutputBufferTooSmall {
+                        needed: len,
+                        actual: output.len(),
+                    });
+                }
                 output[..len].copy_from_slice(ciphertext);
                 Ok(len)
             }
@@ -227,5 +243,41 @@ mod tests {
             .decrypt_with_ad(&[], &ciphertext, &mut out)
             .expect_err("decrypt at u64::MAX must overflow");
         assert!(matches!(err, HandshakeError::NonceOverflow));
+    }
+
+    #[test]
+    fn unkeyed_encrypt_rejects_short_output() {
+        let mut cs = Cs::empty();
+        let mut out = [0u8; 2];
+        let err = cs.encrypt_with_ad(&[], b"four", &mut out).unwrap_err();
+        assert!(matches!(
+            err,
+            HandshakeError::OutputBufferTooSmall {
+                needed: 4,
+                actual: 2
+            }
+        ));
+    }
+
+    #[test]
+    fn unkeyed_decrypt_rejects_short_output() {
+        let mut cs = Cs::empty();
+        let mut out = [0u8; 2];
+        let err = cs.decrypt_with_ad(&[], b"four", &mut out).unwrap_err();
+        assert!(matches!(
+            err,
+            HandshakeError::OutputBufferTooSmall {
+                needed: 4,
+                actual: 2
+            }
+        ));
+    }
+
+    #[test]
+    fn unkeyed_passthrough_with_exact_output_succeeds() {
+        let mut cs = Cs::empty();
+        let mut out = [0u8; 4];
+        assert_eq!(cs.encrypt_with_ad(&[], b"four", &mut out).unwrap(), 4);
+        assert_eq!(&out, b"four");
     }
 }
