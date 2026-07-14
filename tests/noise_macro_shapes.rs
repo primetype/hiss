@@ -17,6 +17,15 @@
 //! * `IX` — interactive, no pre-messages (infallible constructors), with an
 //!   `s` token in each message (adding a `static_key` argument) and a final
 //!   message that completes into the `Transport`.
+//! * `X` — one-way whose single message itself reveals the initiator's
+//!   static (`s` mid-message, unlike `N`'s anonymous initiator).
+//!
+//! `X`, `Xpsk0`, and `IX` also pin the `read_message_N_with` **verification**
+//! variant: when the final message a role receives reveals the peer's static,
+//! the generated `_with` read hands that identity to a closure before the
+//! handshake may complete, so an unverified peer never yields a `Transport`.
+//! `Xpsk0` additionally pins the argument order when that message carries a
+//! plain `psk` ahead of the revealed static: `(message, psk, verify)`.
 //!
 //! Beyond the macro↔macro round trips (T2), `n_macro_initiator_interops_with_
 //! classic_responder` drives the macro `N` initiator against the classic
@@ -43,6 +52,8 @@ hiss::noise! { pub N<X25519, ChaChaPoly, Blake2b>     { <- s ... -> e, es } }
 hiss::noise! { pub K<X25519, ChaChaPoly, Blake2b>     { -> s <- s ... -> e, es, ss } }
 hiss::noise! { pub Kpsk0<X25519, ChaChaPoly, Blake2b> { -> s <- s ... -> psk, e, es, ss } }
 hiss::noise! { pub IX<X25519, ChaChaPoly, Blake2b>    { -> e, s <- e, ee, se, s, es } }
+hiss::noise! { pub X<X25519, ChaChaPoly, Blake2b>     { <- s ... -> e, es, s, ss } }
+hiss::noise! { pub Xpsk0<X25519, ChaChaPoly, Blake2b> { <- s ... -> psk, e, es, s, ss } }
 
 const PROLOGUE: &[u8] = b"hiss macro shapes";
 
@@ -181,6 +192,183 @@ fn ix_macro_round_trip() {
     let mut opened = vec![0u8; n];
     let m = i_t.receive(&sealed[..n], &mut opened).unwrap();
     assert_eq!(&opened[..m], reply);
+}
+
+#[test]
+fn x_macro_round_trip() {
+    let mut ip = provider(501);
+    let i_static = ip.generate::<X25519>().unwrap();
+    let i_pub = ip.public(&i_static).unwrap();
+    let mut rp = provider(502);
+    let r_static = rp.generate::<X25519>().unwrap();
+    let r_pub = rp.public(&r_static).unwrap();
+
+    // One-way like N, but the message itself carries the initiator's
+    // static (encrypted), so `write_message_1` takes it as an argument.
+    let (msg1, mut i_t) = X::initiator(ip, PROLOGUE, r_pub)
+        .write_message_1(i_static)
+        .unwrap();
+    let mut r_t = X::responder(rp, PROLOGUE, r_static)
+        .unwrap()
+        .read_message_1(&msg1)
+        .unwrap();
+
+    assert_eq!(i_t.session_id(), r_t.session_id());
+    // The revealed initiator static survives onto the responder's transport.
+    assert_eq!(r_t.remote_static().unwrap().as_ref(), i_pub.as_ref());
+
+    let payload = b"X: identified courier";
+    let mut sealed = vec![0u8; payload.len() + Transport::<X>::OVERHEAD];
+    let n = i_t.send(payload, &mut sealed).unwrap();
+    let mut opened = vec![0u8; n];
+    let m = r_t.receive(&sealed[..n], &mut opened).unwrap();
+    assert_eq!(&opened[..m], payload);
+}
+
+// ── the `read_message_N_with` verification variant ────────────────
+//
+// Generated only where the *final* message a role receives reveals the
+// peer's static: there is no later handshake state to observe the key on
+// (only `Transport::remote_static()`, an `Option`), so the closure sees it
+// at the protocol-correct moment instead — after decryption, before the
+// handshake completes.
+
+#[test]
+fn x_macro_verify_accepts_the_enrolled_peer() {
+    let mut ip = provider(511);
+    let i_static = ip.generate::<X25519>().unwrap();
+    let i_pub = ip.public(&i_static).unwrap();
+    let mut rp = provider(512);
+    let r_static = rp.generate::<X25519>().unwrap();
+    let r_pub = rp.public(&r_static).unwrap();
+
+    let (msg1, mut i_t) = X::initiator(ip, PROLOGUE, r_pub)
+        .write_message_1(i_static)
+        .unwrap();
+    let mut r_t = X::responder(rp, PROLOGUE, r_static)
+        .unwrap()
+        .read_message_1_with(&msg1, |peer| {
+            if peer.as_ref() == i_pub.as_ref() {
+                Ok(())
+            } else {
+                Err(HandshakeError::PeerRejected {
+                    reason: "not enrolled".into(),
+                })
+            }
+        })
+        .unwrap();
+
+    assert_eq!(i_t.session_id(), r_t.session_id());
+
+    let payload = b"verified before completion";
+    let mut sealed = vec![0u8; payload.len() + Transport::<X>::OVERHEAD];
+    let n = i_t.send(payload, &mut sealed).unwrap();
+    let mut opened = vec![0u8; n];
+    let m = r_t.receive(&sealed[..n], &mut opened).unwrap();
+    assert_eq!(&opened[..m], payload);
+}
+
+#[test]
+fn x_macro_verify_rejects_the_unknown_peer() {
+    let mut ip = provider(521);
+    let i_static = ip.generate::<X25519>().unwrap();
+    let mut rp = provider(522);
+    let r_static = rp.generate::<X25519>().unwrap();
+    let r_pub = rp.public(&r_static).unwrap();
+
+    let (msg1, _i_t) = X::initiator(ip, PROLOGUE, r_pub)
+        .write_message_1(i_static)
+        .unwrap();
+    // The closure rejects: the handshake aborts and no `Transport` exists
+    // for the unverified peer.
+    let result = X::responder(rp, PROLOGUE, r_static)
+        .unwrap()
+        .read_message_1_with(&msg1, |_peer| {
+            Err(HandshakeError::PeerRejected {
+                reason: "unknown courier".into(),
+            })
+        });
+    assert!(matches!(
+        result,
+        Err(HandshakeError::PeerRejected { reason }) if reason == "unknown courier"
+    ));
+}
+
+#[test]
+fn xpsk0_macro_verify_takes_the_psk_then_the_closure() {
+    let mut ip = provider(541);
+    let i_static = ip.generate::<X25519>().unwrap();
+    let i_pub = ip.public(&i_static).unwrap();
+    let mut rp = provider(542);
+    let r_static = rp.generate::<X25519>().unwrap();
+    let r_pub = rp.public(&r_static).unwrap();
+    let psk = Psk::from_bytes([0xCC; 32]);
+
+    // The `psk` precedes the `s`, so the verification variant keeps a
+    // plain `psk` parameter, in token order ahead of the closure:
+    // `read_message_1_with(&msg, &psk, verify)`.
+    let (msg1, mut i_t) = Xpsk0::initiator(ip, PROLOGUE, r_pub)
+        .write_message_1(&psk, i_static)
+        .unwrap();
+    let mut r_t = Xpsk0::responder(rp, PROLOGUE, r_static)
+        .unwrap()
+        .read_message_1_with(&msg1, &psk, |peer| {
+            if peer.as_ref() == i_pub.as_ref() {
+                Ok(())
+            } else {
+                Err(HandshakeError::PeerRejected {
+                    reason: "not enrolled".into(),
+                })
+            }
+        })
+        .unwrap();
+
+    assert_eq!(i_t.session_id(), r_t.session_id());
+
+    let payload = b"psk, then identity check";
+    let mut sealed = vec![0u8; payload.len() + Transport::<Xpsk0>::OVERHEAD];
+    let n = i_t.send(payload, &mut sealed).unwrap();
+    let mut opened = vec![0u8; n];
+    let m = r_t.receive(&sealed[..n], &mut opened).unwrap();
+    assert_eq!(&opened[..m], payload);
+}
+
+#[test]
+fn ix_macro_verify_runs_before_the_initiator_completes() {
+    let mut ip = provider(531);
+    let i_static = ip.generate::<X25519>().unwrap();
+    let mut rp = provider(532);
+    let r_static = rp.generate::<X25519>().unwrap();
+    let r_pub = rp.public(&r_static).unwrap();
+
+    // Interactive shape: the *initiator*'s final read (msg2) reveals the
+    // responder's static, so it is the side that gets the `_with` variant.
+    let (msg1, i_hs) = IX::initiator(ip, PROLOGUE)
+        .write_message_1(i_static)
+        .unwrap();
+    let r_hs = IX::responder(rp, PROLOGUE).read_message_1(&msg1).unwrap();
+    let (msg2, mut r_t) = r_hs.write_message_2(r_static).unwrap();
+
+    let mut i_t = i_hs
+        .read_message_2_with(&msg2, |peer| {
+            if peer.as_ref() == r_pub.as_ref() {
+                Ok(())
+            } else {
+                Err(HandshakeError::PeerRejected {
+                    reason: "unexpected responder".into(),
+                })
+            }
+        })
+        .unwrap();
+
+    assert_eq!(i_t.session_id(), r_t.session_id());
+
+    let payload = b"mutually verified";
+    let mut sealed = vec![0u8; payload.len() + Transport::<IX>::OVERHEAD];
+    let n = i_t.send(payload, &mut sealed).unwrap();
+    let mut opened = vec![0u8; n];
+    let m = r_t.receive(&sealed[..n], &mut opened).unwrap();
+    assert_eq!(&opened[..m], payload);
 }
 
 // ── T2: byte-level interop against the classic io_sync driver ─────

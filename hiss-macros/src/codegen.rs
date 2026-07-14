@@ -795,14 +795,28 @@ fn gen_write_message(ctx: &Ctx<'_>, role: Role, msg: usize) -> TokenStream {
     }
 }
 
-/// How a receive method obtains the PSK for a `psk` token.
+/// How a receive method exposes the identities its tokens reveal.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum PskStyle {
-    /// The PSK is known in advance: a plain `psk: &Psk` parameter.
+enum ReadStyle {
+    /// Everything is known in advance: a plain `psk: &Psk` parameter for
+    /// a `psk` token; revealed keys observable through state accessors.
     Plain,
     /// The PSK is selected per peer: a lookup closure over the identity
     /// the message reveals before its `psk` token.
     Lookup,
+    /// The pattern's final message reveals the peer's static: a
+    /// verification closure sees the identity as soon as it is
+    /// decrypted, before the handshake may complete into a `Transport`.
+    Verify,
+}
+
+/// Whether a *received* final message gets the `_with` verification
+/// variant: it reveals the peer's static and there is no later state to
+/// observe it on — only `Transport::remote_static()`. Mutually exclusive
+/// with the PSK-lookup variant, which is already an identity hook.
+fn verify_on_final(ctx: &Ctx<'_>, msg: usize) -> bool {
+    let line = &ctx.input.messages[msg];
+    msg + 1 == ctx.input.messages.len() && has_tok(line, Tok::S) && !psk_after_s(line)
 }
 
 fn gen_read_message(ctx: &Ctx<'_>, role: Role, msg: usize) -> TokenStream {
@@ -813,9 +827,14 @@ fn gen_read_message(ctx: &Ctx<'_>, role: Role, msg: usize) -> TokenStream {
     // The plain form is always the primary method. When the message
     // reveals the peer's static before its `psk` token, an additional
     // `read_message_N_with` variant lets the PSK be selected per peer.
-    let mut methods = gen_read_method(ctx, role, msg, PskStyle::Plain);
+    // When the *final* message reveals the peer's static, the `_with`
+    // variant instead takes a verification closure, so the peer can be
+    // rejected before the handshake completes.
+    let mut methods = gen_read_method(ctx, role, msg, ReadStyle::Plain);
     if psk_after_s(line) {
-        methods.extend(gen_read_method(ctx, role, msg, PskStyle::Lookup));
+        methods.extend(gen_read_method(ctx, role, msg, ReadStyle::Lookup));
+    } else if verify_on_final(ctx, msg) {
+        methods.extend(gen_read_method(ctx, role, msg, ReadStyle::Verify));
     }
 
     quote! {
@@ -828,19 +847,19 @@ fn gen_read_message(ctx: &Ctx<'_>, role: Role, msg: usize) -> TokenStream {
     }
 }
 
-fn gen_read_method(ctx: &Ctx<'_>, role: Role, msg: usize, style: PskStyle) -> TokenStream {
+fn gen_read_method(ctx: &Ctx<'_>, role: Role, msg: usize, style: ReadStyle) -> TokenStream {
     let line = &ctx.input.messages[msg];
     let size = ctx.size_path(msg);
     let support = quote!(::hiss::noise::support);
     let base = method_ident(false, msg);
     let method = match style {
-        PskStyle::Plain => base.clone(),
-        PskStyle::Lookup => format_ident!("{base}_with"),
+        ReadStyle::Plain => base.clone(),
+        ReadStyle::Lookup | ReadStyle::Verify => format_ident!("{base}_with"),
     };
     let (next_ty, next_expr) = next_state(ctx, role, msg);
     let mut doc = message_doc(ctx, msg, false);
     match style {
-        PskStyle::Plain if psk_after_s(line) => {
+        ReadStyle::Plain if psk_after_s(line) => {
             let with = format_ident!("{base}_with");
             doc.push_str(&format!(
                 "\n\nThe PSK is supplied up front. When it must instead be \
@@ -848,17 +867,50 @@ fn gen_read_method(ctx: &Ctx<'_>, role: Role, msg: usize, style: PskStyle) -> To
                  PSKs), use [`{with}`](Self::{with}).",
             ));
         }
-        PskStyle::Lookup => {
+        ReadStyle::Plain if verify_on_final(ctx, msg) => {
+            let with = format_ident!("{base}_with");
+            doc.push_str(&format!(
+                "\n\nThis final message reveals the peer's static identity; \
+                 afterwards it is only observable via \
+                 `Transport::remote_static` (an `Option`). To verify the \
+                 peer at the protocol-correct moment — after the identity \
+                 is revealed but **before** the handshake completes — use \
+                 [`{with}`](Self::{with}).",
+            ));
+        }
+        ReadStyle::Lookup => {
             doc.push_str(
                 "\n\nVariant taking the PSK as a **lookup**: the pattern \
                  places `psk` after the peer's identity is revealed, so the \
                  closure receives that identity and returns the PSK enrolled \
                  for it — or an error (e.g. \
                  `HandshakeError::PeerRejected`) to reject an unknown peer \
-                 and abort the handshake.",
+                 and abort the handshake. At that point the identity is \
+                 claimed, not yet proven — ownership of the key is only \
+                 established as the message's remaining tokens are processed \
+                 — so selecting a PSK by it is sound (a mismatch fails the \
+                 handshake), but side effects in the closure must not treat \
+                 the key as authenticated.",
             );
         }
-        PskStyle::Plain => {}
+        ReadStyle::Verify => {
+            doc.push_str(
+                "\n\nVariant taking a **verification** closure: this final \
+                 message reveals the peer's static identity, and the closure \
+                 receives it as soon as it is read — before the remaining \
+                 tokens are processed. Return `Ok(())` to accept the peer, \
+                 or an error (e.g. `HandshakeError::PeerRejected`) to \
+                 reject it: the handshake aborts and no `Transport` is \
+                 produced for an unverified peer. At that point the \
+                 identity is **claimed, not yet proven**: ownership of the \
+                 key is only established by the message's remaining DH \
+                 tokens and final tag, so rejecting is always safe, but \
+                 side effects in the closure must not treat the key as \
+                 authenticated — and in a pattern whose `s` precedes every \
+                 DH token it arrives unencrypted.",
+            );
+        }
+        ReadStyle::Plain => {}
     }
 
     let mut args = TokenStream::new();
@@ -872,19 +924,34 @@ fn gen_read_method(ctx: &Ctx<'_>, role: Role, msg: usize, style: PskStyle) -> To
             }),
             // The revealed static is not returned: it stays observable via
             // `remote_static()` on the next state (or on the `Transport`).
-            // The binding is only consumed by a PSK-lookup closure.
-            Tok::S if style == PskStyle::Lookup => stmts.extend(quote! {
+            // The binding is only consumed by a PSK-lookup or verification
+            // closure.
+            Tok::S if style == ReadStyle::Lookup => stmts.extend(quote! {
                 let (remote_static, n) =
                     #support::recv_s(&mut self.inner, &message[cursor..])?;
                 let cursor = cursor + n;
             }),
+            Tok::S if style == ReadStyle::Verify => {
+                let pubkey = ctx.pubkey_ty();
+                args.extend(quote! {
+                    , verify: impl ::core::ops::FnOnce(
+                        &#pubkey,
+                    ) -> ::core::result::Result<(), ::hiss::noise::HandshakeError>
+                });
+                stmts.extend(quote! {
+                    let (remote_static, n) =
+                        #support::recv_s(&mut self.inner, &message[cursor..])?;
+                    let cursor = cursor + n;
+                    verify(&remote_static)?;
+                });
+            }
             Tok::S => stmts.extend(quote! {
                 let (_remote_static, n) =
                     #support::recv_s(&mut self.inner, &message[cursor..])?;
                 let cursor = cursor + n;
             }),
             Tok::Psk => match style {
-                PskStyle::Lookup => {
+                ReadStyle::Lookup => {
                     let pubkey = ctx.pubkey_ty();
                     args.extend(quote! {
                         , psk: impl ::core::ops::FnOnce(
@@ -896,7 +963,11 @@ fn gen_read_method(ctx: &Ctx<'_>, role: Role, msg: usize, style: PskStyle) -> To
                         #support::psk(&mut self.inner, &psk_key)?;
                     });
                 }
-                PskStyle::Plain => {
+                // A `psk` in a Verify message precedes the `s` (else the
+                // lookup variant would have been generated), so it is a
+                // plain parameter; token order keeps it ahead of `verify`
+                // in the signature.
+                ReadStyle::Plain | ReadStyle::Verify => {
                     args.extend(quote!(, psk: &::hiss::psk::Psk));
                     stmts.extend(quote! {
                         #support::psk(&mut self.inner, psk)?;

@@ -75,6 +75,17 @@ use syn::parse_macro_input;
 /// identity, for deployments that select a per-peer PSK (or reject
 /// unknown peers) at exactly that point.
 ///
+/// When the **final** message a role receives reveals the peer's static
+/// (e.g. XX's, X's, or IX's last message), there is no later state to
+/// observe it on
+/// — only `Transport::remote_static()`, an `Option`. For those reads a
+/// `read_message_N_with` variant is generated whose closure receives
+/// the just-revealed identity and returns `Ok(())` to accept the peer,
+/// or an error (e.g. `HandshakeError::PeerRejected`) to abort — the
+/// peer is verified *before* the handshake is allowed to complete into
+/// a `Transport`. (A read with a PSK lookup keeps that form instead:
+/// the lookup closure is already the identity hook.)
+///
 /// # Example
 ///
 /// ```ignore
