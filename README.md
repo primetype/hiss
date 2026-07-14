@@ -218,8 +218,10 @@ responsible:
 - **Constant-time P-256 scalar multiplication** via `eccoxide`'s constant-time backend.
 - **Deterministic ECDSA** (RFC 6979) with low-S normalization; no signing RNG.
 - **Peer-key and DH-output validation** — operations on attacker-supplied points return
-  `Result` rather than panicking; a degenerate (point-at-infinity) shared secret is
-  rejected.
+  `Result` rather than panicking. On **P-256** a degenerate (point-at-infinity) shared
+  secret is rejected; the Noise **`25519`/`448`** curves perform no low-order or
+  contributory-key check — per RFC 7748 a low-order peer key simply yields an all-zero
+  shared secret rather than an error.
 - **Noise's 65535-byte message-length limit** is enforced at the cipher-state chokepoint.
 - **Secret material is zeroized on drop** and is never required to be `Clone`.
 
