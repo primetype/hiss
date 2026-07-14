@@ -31,10 +31,10 @@ pub trait Cipher {
     ///
     /// **Output contract on failure.** The AEAD writes the decrypted
     /// plaintext into `output` *before* the authentication tag is
-    /// verified. On a [`DecryptionFailed`](HandshakeError::DecryptionFailed)
-    /// error `output` therefore holds **unauthenticated** bytes that must
-    /// **not** be read or acted on. (This is purely an output-buffer
-    /// caveat — authentication is not bypassed: a tag mismatch still
+    /// verified. Implementations must zero `output[..pt_len]` before
+    /// returning [`DecryptionFailed`](HandshakeError::DecryptionFailed),
+    /// so a caller that ignores the error cannot read unverified
+    /// plaintext. (Authentication is not bypassed: a tag mismatch still
     /// returns the error.)
     fn decrypt(
         key: &[u8; 32],
@@ -52,6 +52,11 @@ pub trait Cipher {
 /// * Key = 32 bytes
 /// * Nonce = 12 bytes (8-byte counter zero-padded to 12)
 /// * Tag = 16 bytes
+///
+/// On a [`DecryptionFailed`](HandshakeError::DecryptionFailed) error `hiss`
+/// zeroes `output` before returning, so a caller that ignores the error
+/// cannot read the unverified plaintext. (Auth is not bypassed: a tag
+/// mismatch still errors.)
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ChaChaPoly;
 
@@ -112,8 +117,33 @@ impl Cipher for ChaChaPoly {
         let (ct, tag) = ciphertext.split_at(pt_len);
         let mut cipher = cryptoxide::chacha20poly1305::ChaCha20Poly1305::new(key, &nonce, ad);
         if !cipher.decrypt(ct, &mut output[..pt_len], tag) {
+            // Auth failed: the AEAD already wrote unverified plaintext into
+            // `output`. Zero it so a caller that ignores the `Err` cannot read
+            // attacker-influenced bytes. (Fail-safe only — auth is not bypassed.)
+            crate::zeroize::zeroize_bytes(&mut output[..pt_len]);
             return Err(HandshakeError::DecryptionFailed);
         }
         Ok(pt_len)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decrypt_failure_zeroes_output() {
+        let key = [0x42u8; 32];
+        let mut ct = [0u8; 64];
+        let n = ChaChaPoly::encrypt(&key, 0, &[], b"secret payload", &mut ct).unwrap();
+        ct[n - 1] ^= 0xFF; // corrupt the tag
+        let mut pt = [0xAAu8; 64];
+        let err = ChaChaPoly::decrypt(&key, 0, &[], &ct[..n], &mut pt).unwrap_err();
+        assert!(matches!(err, HandshakeError::DecryptionFailed));
+        let pt_len = n - ChaChaPoly::TAG_SIZE;
+        assert!(
+            pt[..pt_len].iter().all(|&b| b == 0),
+            "plaintext region must be zeroed on auth failure"
+        );
     }
 }
