@@ -101,7 +101,6 @@ pub trait SigningCurve: Curve {
 /// required by the Noise protocol specification: `N = 32` for the 32-byte
 /// curves (P-256's shared-point x-coordinate, X25519) and `N = 56` for
 /// X448. The bytes are zeroed on drop.
-#[derive(Clone, PartialEq, Eq)]
 pub struct SharedSecret<const N: usize>([u8; N]);
 
 impl<const N: usize> SharedSecret<N> {

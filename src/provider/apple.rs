@@ -862,7 +862,7 @@ mod tests {
         let ss1 = sk1.dh(&pk2).unwrap();
         let ss2 = sk2.dh(&pk1).unwrap();
 
-        assert_eq!(ss1, ss2);
+        assert_eq!(ss1.as_bytes(), ss2.as_bytes());
     }
 
     #[test]
@@ -876,7 +876,7 @@ mod tests {
         let apple_dh = sk1.dh(&pk2).unwrap();
         let our_dh = sk2.dh(&pk1).unwrap();
 
-        assert_eq!(apple_dh, our_dh);
+        assert_eq!(apple_dh.as_bytes(), our_dh.as_bytes());
     }
 
     /// Drive the async provider trait methods (which offload to
@@ -903,7 +903,7 @@ mod tests {
         let ba = DhProviderAsync::<P256>::dh_async(&provider, &b, &a_pub)
             .await
             .unwrap();
-        assert_eq!(ab, ba);
+        assert_eq!(ab.as_bytes(), ba.as_bytes());
 
         // The offloaded signing path round-trips too.
         let sig = SigningProviderAsync::<P256>::sign_async(&provider, &a, b"hello")

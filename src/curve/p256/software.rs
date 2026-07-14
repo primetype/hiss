@@ -284,7 +284,7 @@ mod tests {
         let ss2 = DhProviderAsync::<P256>::dh_async(&provider, &sk2, &pk1)
             .await
             .unwrap();
-        assert_eq!(ss1, ss2);
+        assert_eq!(ss1.as_bytes(), ss2.as_bytes());
     }
 
     #[test]

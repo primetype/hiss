@@ -419,7 +419,7 @@ mod tests {
 
         let ss1 = sk1.dh(&pk2);
         let ss2 = sk2.dh(&pk1);
-        assert_eq!(ss1, ss2);
+        assert_eq!(ss1.as_bytes(), ss2.as_bytes());
     }
 
     #[test]
@@ -430,7 +430,7 @@ mod tests {
 
         let ss1 = sk.dh(&peer1);
         let ss2 = sk.dh(&peer2);
-        assert_ne!(ss1, ss2);
+        assert_ne!(ss1.as_bytes(), ss2.as_bytes());
     }
 
     // ── DhProviderAsync trait tests ───────────────────────────────
@@ -464,6 +464,6 @@ mod tests {
         let ss2 = DhProviderAsync::<Ed25519>::dh_async(&provider, &sk2, &pk1)
             .await
             .unwrap();
-        assert_eq!(ss1, ss2);
+        assert_eq!(ss1.as_bytes(), ss2.as_bytes());
     }
 }

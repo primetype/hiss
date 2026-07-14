@@ -933,7 +933,7 @@ mod tests {
 
         let ss1 = sk.dh(&peer1).unwrap();
         let ss2 = sk.dh(&peer2).unwrap();
-        assert_ne!(ss1, ss2);
+        assert_ne!(ss1.as_bytes(), ss2.as_bytes());
     }
 
     #[test]
@@ -946,11 +946,11 @@ mod tests {
 
         let ss1 = sk1.dh(&pk2).unwrap();
         let ss2 = sk2.dh(&pk1).unwrap();
-        assert_eq!(ss1, ss2);
+        assert_eq!(ss1.as_bytes(), ss2.as_bytes());
 
         // But dh(sk1, pk1) != dh(sk1, pk2) — different peers.
         let ss_self = sk1.dh(&pk1).unwrap();
-        assert_ne!(ss_self, ss1);
+        assert_ne!(ss_self.as_bytes(), ss1.as_bytes());
     }
 
     // ── Modular reduction (H2) ────────────────────────────────────

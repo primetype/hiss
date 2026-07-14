@@ -285,7 +285,7 @@ mod tests {
         let sk2 = SoftwareX448PrivateKey::generate(rand::rng());
         let pk2 = sk2.public_key();
 
-        assert_eq!(sk1.dh(&pk2), sk2.dh(&pk1));
+        assert_eq!(sk1.dh(&pk2).as_bytes(), sk2.dh(&pk1).as_bytes());
     }
 
     #[test]
@@ -294,7 +294,7 @@ mod tests {
         let peer1 = SoftwareX448PrivateKey::generate(rand::rng()).public_key();
         let peer2 = SoftwareX448PrivateKey::generate(rand::rng()).public_key();
 
-        assert_ne!(sk.dh(&peer1), sk.dh(&peer2));
+        assert_ne!(sk.dh(&peer1).as_bytes(), sk.dh(&peer2).as_bytes());
     }
 
     #[test]
