@@ -41,7 +41,7 @@ hex = "0.4"
 # The `noise!` pattern-DSL macro — the built-in patterns are defined with
 # it, so it is a required (build-time-only) dependency.
 hiss-macros = { version = "0.1.0", path = "hiss-macros" }
-packtool = "0.4"
+packtool = "0.6"
 rand_core = "0.9"
 thiserror = "2"
 # Only pulled in by the `async-io` feature (the `tokio::io` handshake
