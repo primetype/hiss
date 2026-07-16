@@ -188,6 +188,26 @@ impl<Proto: Protocol> Transport<Proto> {
         };
         (send, recv)
     }
+
+    /// Consume the transport, yielding its directional [`CipherState`]s and
+    /// the [`SessionId`].
+    ///
+    /// A crate-internal bridge that lets the sibling `datagram` module
+    /// build the [`DatagramSend`](super::datagram::DatagramSend) /
+    /// [`DatagramRecv`](super::datagram::DatagramRecv) pair from a
+    /// completed transport (see
+    /// [`into_datagram`](Self::into_datagram)). The ephemeral public keys are
+    /// dropped: the datagram halves carry none, because a datagram protocol
+    /// re-handshakes rather than inspecting them.
+    pub(crate) fn into_cipher_states(
+        self,
+    ) -> (
+        CipherState<Proto::Cipher>,
+        CipherState<Proto::Cipher>,
+        SessionId,
+    ) {
+        (self.send, self.recv, self.session_id)
+    }
 }
 
 /// The send half of a split [`Transport`].

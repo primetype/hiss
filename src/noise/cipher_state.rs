@@ -111,6 +111,30 @@ impl<Ci: Cipher> CipherState<Ci> {
         }
     }
 
+    /// Encrypt `plaintext` with associated data `ad` using the next send
+    /// counter, reporting that counter alongside the byte count.
+    ///
+    /// Behaves exactly like [`encrypt_with_ad`](Self::encrypt_with_ad) —
+    /// the same [`MAX_MESSAGE_LEN`] cap, the same `u64::MAX`
+    /// nonce-exhaustion guard, the same strictly monotonic increment on
+    /// success — but additionally hands back the nonce the message was
+    /// sealed under. That counter is what an out-of-order transport (see
+    /// [`DatagramSend`](super::datagram::DatagramSend)) transmits in its
+    /// packet header so the peer can open the message with the matching
+    /// explicit nonce. Because the counter is owned here and never
+    /// supplied by the caller, two messages can never share a nonce. On
+    /// any error the nonce does **not** advance and nothing is written.
+    pub(crate) fn encrypt_next_with_ad(
+        &mut self,
+        ad: &[u8],
+        plaintext: &[u8],
+        output: &mut [u8],
+    ) -> Result<(u64, usize), HandshakeError> {
+        let counter = self.n;
+        let len = self.encrypt_with_ad(ad, plaintext, output)?;
+        Ok((counter, len))
+    }
+
     /// Re-key this CipherState in place.
     ///
     /// Noise spec §5.1: `Rekey(): k = ENCRYPT(k, maxnonce, zerolen, zeros)`
@@ -194,6 +218,54 @@ impl<Ci: Cipher> CipherState<Ci> {
                 let len = Ci::decrypt(key, self.n, ad, ciphertext, output)?;
                 self.n += 1;
                 Ok(len)
+            }
+        }
+    }
+
+    /// Decrypt a datagram sealed under an explicit `counter`, writing
+    /// plaintext into `output`.
+    ///
+    /// Unlike [`decrypt_with_ad`](Self::decrypt_with_ad) this is
+    /// **stateless**: it decrypts under the supplied `counter` rather than
+    /// the internal nonce, advances no counter, and takes `&self` — so one
+    /// state can open datagrams that arrive out of order, more than once,
+    /// or not at all. Replay protection is therefore **not** provided here;
+    /// it is the caller's duty (see
+    /// [`DatagramRecv::decrypt_at`](super::datagram::DatagramRecv::decrypt_at)).
+    /// The [`MAX_MESSAGE_LEN`] cap and the `u64::MAX` nonce guard are
+    /// enforced exactly as in [`decrypt_with_ad`](Self::decrypt_with_ad):
+    /// no legitimately sealed message ever carries `u64::MAX`, since
+    /// [`encrypt_next_with_ad`](Self::encrypt_next_with_ad) refuses that
+    /// counter. On any error nothing is learnt and no state changes.
+    ///
+    /// On a [`DecryptionFailed`](HandshakeError::DecryptionFailed) error
+    /// `output` holds **unauthenticated** bytes that must not be read, per
+    /// the AEAD output contract.
+    pub(crate) fn decrypt_at(
+        &self,
+        counter: u64,
+        ad: &[u8],
+        ciphertext: &[u8],
+        output: &mut [u8],
+    ) -> Result<usize, HandshakeError> {
+        // Reject an over-cap incoming message (spec §3) before any work, so
+        // a peer cannot dictate unbounded buffers.
+        if ciphertext.len() > MAX_MESSAGE_LEN {
+            return Err(HandshakeError::MessageTooLong {
+                len: ciphertext.len(),
+            });
+        }
+        match self.k {
+            None => {
+                let len = ciphertext.len();
+                output[..len].copy_from_slice(ciphertext);
+                Ok(len)
+            }
+            Some(ref key) => {
+                if counter == u64::MAX {
+                    return Err(HandshakeError::NonceOverflow);
+                }
+                Ci::decrypt(key, counter, ad, ciphertext, output)
             }
         }
     }

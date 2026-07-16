@@ -203,6 +203,7 @@ pub(crate) mod buffers;
 pub mod cipher;
 pub mod cipher_state;
 pub mod curve;
+pub mod datagram;
 pub mod error;
 pub(crate) mod handshake;
 pub mod hash;
@@ -228,6 +229,7 @@ pub mod well_formed;
 pub use self::cipher::{ChaChaPoly, Cipher};
 pub use self::cipher_state::CipherState;
 pub use self::curve::{Curve, DhCurve, P256, X448, X25519};
+pub use self::datagram::{DatagramRecv, DatagramSend};
 pub use self::error::HandshakeError;
 #[cfg(feature = "async-io")]
 #[cfg_attr(docsrs, doc(cfg(feature = "async-io")))]
@@ -2085,6 +2087,259 @@ mod tests {
         let ct_len = r_send.encrypt(b"reply after rekey", &mut ct).unwrap();
         let pt_len = i_recv.decrypt(&ct[..ct_len], &mut pt).unwrap();
         assert_eq!(&pt[..pt_len], b"reply after rekey");
+    }
+
+    // ── Datagram-mode transport (into_datagram) ───────────────────────
+    //
+    // These exercise the out-of-order pair from `Transport::into_datagram`:
+    // an explicit send counter that `hiss` owns, and a stateless receive
+    // half that opens whatever counter it is handed. Each test runs a real
+    // IKpsk1 handshake through the shared helper so the datagram pair is
+    // backed by genuine, matched keys.
+
+    /// Run a full IKpsk1 handshake over the in-memory `Pipe` harness and
+    /// return the two completed transports `(initiator, responder)`. The
+    /// datagram tests each need a real, matched transport pair; this factors
+    /// out the handshake dance they would otherwise repeat verbatim.
+    fn ikpsk1_transport_pair() -> (Transport<Channel>, Transport<Channel>) {
+        let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
+
+        let initiator_static = provider.generate::<P256>().unwrap();
+        let responder_static = provider.generate::<P256>().unwrap();
+        let responder_pub = provider.public(&responder_static).unwrap();
+        let psk = Psk::from_bytes([0x7A; 32]);
+
+        let (i_pipe, r_pipe) = Pipe::pair();
+        let i_hs = SyncHandshake::<Channel, Initiator, _, _, _, _>::initiate(
+            EphemeralOnly::new(StdRng::from_os_rng()),
+            &[],
+            i_pipe.clone(),
+        )
+        .set_rs(responder_pub);
+        let r_hs = SyncHandshake::<Channel, Responder, _, _, _, _>::respond(
+            EphemeralOnly::new(StdRng::from_os_rng()),
+            &[],
+            r_pipe.clone(),
+        )
+        .set_s(responder_static)
+        .unwrap();
+
+        let i_hs = i_hs
+            .e()
+            .unwrap()
+            .es()
+            .unwrap()
+            .s(initiator_static)
+            .unwrap()
+            .ss()
+            .unwrap()
+            .psk(&psk)
+            .unwrap();
+        let (_, recv) = r_hs.recv().e().unwrap();
+        let recv = recv.es().unwrap();
+        let (_, recv) = recv.s().unwrap();
+        let recv = recv.ss().unwrap();
+        let r_hs = recv.psk(&psk).unwrap();
+
+        let (r_transport, _) = r_hs.e().unwrap().ee().unwrap().se().unwrap().into_parts();
+        let (_, recv) = i_hs.recv().e().unwrap();
+        let (i_transport, _) = recv.ee().unwrap().se().unwrap().into_parts();
+        (i_transport, r_transport)
+    }
+
+    /// Seal several datagrams, shuffle them, and open each at its stated
+    /// counter — all must decrypt. Also pins that `encrypt_next` hands out a
+    /// strictly monotonic counter and that both halves share a session id.
+    #[test]
+    fn datagram_shuffled_delivery_all_open() {
+        let (i_transport, r_transport) = ikpsk1_transport_pair();
+        let (mut i_send, _i_recv) = i_transport.into_datagram();
+        let (_r_send, r_recv) = r_transport.into_datagram();
+
+        assert!(i_send.session_id() == r_recv.session_id());
+
+        // Seal N messages, remembering each (counter, ciphertext).
+        let mut ct = [0u8; 256];
+        let mut sealed: Vec<(u64, Vec<u8>)> = Vec::new();
+        for i in 0..8u64 {
+            let msg = format!("datagram {i}");
+            let (counter, ct_len) = i_send.encrypt_next(&[], msg.as_bytes(), &mut ct).unwrap();
+            assert_eq!(counter, i); // hiss owns a strictly monotonic counter
+            sealed.push((counter, ct[..ct_len].to_vec()));
+        }
+
+        // A fixed, non-trivial permutation keeps the shuffle deterministic.
+        sealed.swap(0, 7);
+        sealed.swap(1, 4);
+        sealed.swap(2, 6);
+        sealed.swap(3, 5);
+
+        let mut pt = [0u8; 256];
+        for (counter, packet) in &sealed {
+            let pt_len = r_recv.decrypt_at(*counter, &[], packet, &mut pt).unwrap();
+            assert_eq!(&pt[..pt_len], format!("datagram {counter}").as_bytes());
+        }
+    }
+
+    /// A gap in the counter sequence (a dropped packet) does not stop later
+    /// counters opening — the receive half is stateless.
+    #[test]
+    fn datagram_gap_later_counters_still_open() {
+        let (i_transport, r_transport) = ikpsk1_transport_pair();
+        let (mut i_send, _) = i_transport.into_datagram();
+        let (_, r_recv) = r_transport.into_datagram();
+
+        let mut ct = [0u8; 256];
+        let mut sealed: Vec<(u64, Vec<u8>)> = Vec::new();
+        for i in 0..5u64 {
+            let msg = format!("packet {i}");
+            let (counter, ct_len) = i_send.encrypt_next(&[], msg.as_bytes(), &mut ct).unwrap();
+            sealed.push((counter, ct[..ct_len].to_vec()));
+        }
+
+        // Drop counter 2 entirely, as a lossy wire would — the rest still open.
+        let mut pt = [0u8; 256];
+        for (counter, packet) in sealed.iter().filter(|(c, _)| *c != 2) {
+            let pt_len = r_recv.decrypt_at(*counter, &[], packet, &mut pt).unwrap();
+            assert_eq!(&pt[..pt_len], format!("packet {counter}").as_bytes());
+        }
+    }
+
+    /// The same counter can be opened twice (replay rejection is the
+    /// caller's duty, documented on `decrypt_at`), while `encrypt_next`
+    /// never re-issues a counter.
+    #[test]
+    fn datagram_replay_opens_and_counter_is_monotonic() {
+        let (i_transport, r_transport) = ikpsk1_transport_pair();
+        let (mut i_send, _) = i_transport.into_datagram();
+        let (_, r_recv) = r_transport.into_datagram();
+
+        // Counters handed out are strictly monotonic and never repeat.
+        let mut ct = [0u8; 256];
+        let mut seen: Vec<u64> = Vec::new();
+        for _ in 0..4 {
+            let (counter, _) = i_send.encrypt_next(&[], b"tick", &mut ct).unwrap();
+            assert!(seen.iter().all(|c| *c != counter));
+            seen.push(counter);
+        }
+        assert_eq!(seen, vec![0, 1, 2, 3]);
+
+        // Seal one packet, then open the SAME counter twice — both succeed,
+        // because the receiver keeps no state to reject a replay.
+        let (counter, ct_len) = i_send.encrypt_next(&[], b"payload", &mut ct).unwrap();
+        let mut pt = [0u8; 256];
+        let first = r_recv
+            .decrypt_at(counter, &[], &ct[..ct_len], &mut pt)
+            .unwrap();
+        assert_eq!(&pt[..first], b"payload");
+        let second = r_recv
+            .decrypt_at(counter, &[], &ct[..ct_len], &mut pt)
+            .unwrap();
+        assert_eq!(&pt[..second], b"payload");
+    }
+
+    /// Tampered ciphertext, the wrong associated data, and the wrong counter
+    /// all error; a subsequent honest decrypt still succeeds, because
+    /// `decrypt_at` is `&self` and cannot poison any state.
+    #[test]
+    fn datagram_bad_inputs_error_without_poisoning_state() {
+        let (i_transport, r_transport) = ikpsk1_transport_pair();
+        let (mut i_send, _) = i_transport.into_datagram();
+        let (_, r_recv) = r_transport.into_datagram();
+
+        let mut ct = [0u8; 256];
+        let (counter, ct_len) = i_send.encrypt_next(b"ad", b"honest", &mut ct).unwrap();
+        let good = ct[..ct_len].to_vec();
+        let mut pt = [0u8; 256];
+
+        // Tampered ciphertext → DecryptionFailed.
+        let mut tampered = good.clone();
+        tampered[0] ^= 0xFF;
+        let err = r_recv
+            .decrypt_at(counter, b"ad", &tampered, &mut pt)
+            .unwrap_err();
+        assert!(matches!(err, error::HandshakeError::DecryptionFailed));
+
+        // Wrong associated data → DecryptionFailed.
+        let err = r_recv
+            .decrypt_at(counter, b"other", &good, &mut pt)
+            .unwrap_err();
+        assert!(matches!(err, error::HandshakeError::DecryptionFailed));
+
+        // Wrong counter → DecryptionFailed.
+        let err = r_recv
+            .decrypt_at(counter + 1, b"ad", &good, &mut pt)
+            .unwrap_err();
+        assert!(matches!(err, error::HandshakeError::DecryptionFailed));
+
+        // The honest decrypt at the true counter still works.
+        let pt_len = r_recv.decrypt_at(counter, b"ad", &good, &mut pt).unwrap();
+        assert_eq!(&pt[..pt_len], b"honest");
+    }
+
+    /// The send counter refuses to wrap: driven to `u64::MAX`, `encrypt_next`
+    /// errors with `NonceOverflow` and writes nothing.
+    #[test]
+    fn datagram_encrypt_next_guards_nonce_exhaustion() {
+        let (i_transport, _r_transport) = ikpsk1_transport_pair();
+        let (mut i_send, _) = i_transport.into_datagram();
+
+        // One short of the cap: this call succeeds and reports u64::MAX - 1.
+        i_send.set_counter_for_test(u64::MAX - 1);
+        let mut ct = [0u8; 64];
+        let (counter, _) = i_send.encrypt_next(&[], b"x", &mut ct).unwrap();
+        assert_eq!(counter, u64::MAX - 1);
+
+        // The counter is now u64::MAX: the next seal must refuse to reuse the
+        // nonce, and must leave the output untouched.
+        let mut ct2 = [0xABu8; 64];
+        let err = i_send.encrypt_next(&[], b"x", &mut ct2).unwrap_err();
+        assert!(matches!(err, error::HandshakeError::NonceOverflow));
+        assert_eq!(ct2, [0xABu8; 64]);
+    }
+
+    /// A datagram half and a stream half from the *same* handshake transcript
+    /// interoperate for the in-order counter sequence 0, 1, 2, …: the
+    /// explicit-nonce datagram path computes exactly the bytes the implicit-
+    /// nonce stream path expects. This is the security argument that
+    /// `into_datagram` invents no new cryptography — it only surfaces the
+    /// nonce Noise already uses.
+    #[test]
+    fn datagram_and_stream_interoperate_in_order() {
+        let (i_transport, r_transport) = ikpsk1_transport_pair();
+        let (mut i_dg_send, i_dg_recv) = i_transport.into_datagram();
+        let (mut r_send, mut r_recv) = r_transport.split();
+
+        let mut ct = [0u8; 256];
+        let mut pt = [0u8; 256];
+
+        // Datagram sender → stream receiver: the stream half decrypts with
+        // its implicit counter 0, 1, 2, …, proving the datagram bytes at
+        // counter k are byte-for-byte the stream record k.
+        for i in 0..4u64 {
+            let msg = format!("dg->stream {i}");
+            let (counter, ct_len) = i_dg_send
+                .encrypt_next(&[], msg.as_bytes(), &mut ct)
+                .unwrap();
+            assert_eq!(counter, i);
+            let pt_len = r_recv.decrypt(&ct[..ct_len], &mut pt).unwrap();
+            assert_eq!(&pt[..pt_len], msg.as_bytes());
+        }
+
+        // Stream sender → datagram receiver: `decrypt_at` opens each stream
+        // record at its explicit counter.
+        for i in 0..4u64 {
+            let msg = format!("stream->dg {i}");
+            let ct_len = r_send.encrypt(msg.as_bytes(), &mut ct).unwrap();
+            let pt_len = i_dg_recv
+                .decrypt_at(i, &[], &ct[..ct_len], &mut pt)
+                .unwrap();
+            assert_eq!(&pt[..pt_len], msg.as_bytes());
+        }
+
+        // Both halves agree on the session id with their stream counterparts.
+        assert!(i_dg_send.session_id() == r_recv.session_id());
+        assert!(i_dg_recv.session_id() == r_send.session_id());
     }
 
     #[test]
