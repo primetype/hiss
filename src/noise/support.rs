@@ -420,13 +420,15 @@ where
 //  Message tails and finalisation
 // ═══════════════════════════════════════════════════════════════
 
-/// Close an outgoing message: encrypt-and-hash the empty payload into
-/// `out` (`TAG_SIZE` bytes when keyed, none otherwise). Returns the byte
-/// count written.
+/// Close an outgoing message: encrypt-and-hash `payload` (the message's
+/// declared application payload; empty for a payload-free message) into
+/// `out` — its ciphertext plus a `TAG_SIZE` tag when keyed, the bare
+/// payload bytes otherwise. Returns the byte count written.
 #[doc(hidden)]
 pub fn send_tail<Cu, Ci, H, CP>(
     inner: &mut HandshakeInner<Cu, Ci, H, CP>,
     out: &mut [u8],
+    payload: &[u8],
 ) -> Result<usize, HandshakeError>
 where
     Cu: Curve,
@@ -435,16 +437,20 @@ where
     CP: CryptoKeyProvider<Cu>,
 {
     let mut buffer = SendBuffer::new(out);
-    process::send_payload(inner, &mut buffer)?;
+    process::send_payload(inner, &mut buffer, payload)?;
     Ok(buffer.finish().len())
 }
 
-/// Close an incoming message: verify the trailing empty-payload tag,
-/// consuming all of `input`.
+/// Close an incoming message: decrypt the trailing payload into
+/// `payload_out` (empty for a payload-free message, making the tail the
+/// bare tag), consuming all of `input` and verifying the tag where one
+/// exists. On a failed tag the cipher zeroes `payload_out` before the
+/// error returns.
 #[doc(hidden)]
 pub fn recv_tail<Cu, Ci, H, CP>(
     inner: &mut HandshakeInner<Cu, Ci, H, CP>,
     input: &[u8],
+    payload_out: &mut [u8],
 ) -> Result<(), HandshakeError>
 where
     Cu: Curve,
@@ -453,7 +459,7 @@ where
     CP: CryptoKeyProvider<Cu>,
 {
     let mut buffer = RecvBuffer::new(input);
-    process::recv_payload(inner, &mut buffer)
+    process::recv_payload(inner, &mut buffer, payload_out)
 }
 
 /// Split the completed handshake into the post-handshake [`Transport`].

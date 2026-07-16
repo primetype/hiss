@@ -22,6 +22,16 @@
 //! are the handshake messages. Without a `...` the whole body is
 //! handshake messages (patterns like `NN`/`XX` have no pre-messages).
 //!
+//! A handshake message line may end with a bracketed length, e.g.
+//! `-> e, es, s, ss [12]`: the message carries a 12-byte application
+//! payload as its tail (Noise sanctions a payload on every handshake
+//! message). The suffix is this DSL's one extension to the
+//! specification's notation — the spec's tables leave payloads
+//! implicit. It is valid only on a handshake message of a suite-mode
+//! invocation (a pre-message conveys no wire message, and marker mode
+//! generates no state machines to carry one), and `[0]` is rejected —
+//! no suffix already means an empty payload.
+//!
 //! Only *surface* syntax is validated here (unknown tokens, misplaced
 //! separators, duplicate tokens within a message). Noise §7.3 validity —
 //! every DH operating on transmitted keys, the cipher ending keyed — is
@@ -31,7 +41,7 @@
 
 use proc_macro2::Span;
 use syn::parse::{Parse, ParseStream};
-use syn::{Attribute, Ident, Path, Token, Visibility, braced};
+use syn::{Attribute, Ident, LitInt, Path, Token, Visibility, braced, bracketed};
 
 /// One Noise token, with the span of the identifier that named it.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -109,14 +119,27 @@ impl Dir {
     }
 }
 
-/// One pre-message or handshake message line: an arrow and its tokens.
+/// A declared application payload: the `[N]` bracket suffix on a
+/// handshake message line, with the span of the length literal for
+/// diagnostics.
+#[derive(Clone, Copy)]
+pub(crate) struct Payload {
+    pub(crate) len: usize,
+    pub(crate) span: Span,
+}
+
+/// One pre-message or handshake message line: an arrow, its tokens, and
+/// an optional application-payload declaration (never set on a
+/// pre-message — the parser rejects that).
 pub(crate) struct Line {
     pub(crate) dir: Dir,
     pub(crate) tokens: Vec<(Tok, Span)>,
+    pub(crate) payload: Option<Payload>,
 }
 
 impl Line {
-    /// Render the line in Noise notation, e.g. `-> e, es, s, ss, psk`.
+    /// Render the line in this DSL's notation, e.g.
+    /// `-> e, es, s, ss, psk` or `-> e, es, s, ss [12]`.
     pub(crate) fn render(&self) -> String {
         let tokens = self
             .tokens
@@ -124,7 +147,10 @@ impl Line {
             .map(|(t, _)| t.noise_name())
             .collect::<Vec<_>>()
             .join(", ");
-        format!("{} {}", self.dir.arrow(), tokens)
+        match self.payload {
+            Some(payload) => format!("{} {} [{}]", self.dir.arrow(), tokens, payload.len),
+            None => format!("{} {}", self.dir.arrow(), tokens),
+        }
     }
 }
 
@@ -232,7 +258,34 @@ impl Parse for NoiseInput {
                     break;
                 }
             }
-            messages.push(Line { dir, tokens });
+
+            let payload = if content.peek(syn::token::Bracket) {
+                let inside;
+                bracketed!(inside in content);
+                let lit: LitInt = inside.parse()?;
+                if !inside.is_empty() {
+                    return Err(inside.error("expected a single payload length, e.g. `[12]`"));
+                }
+                let len: usize = lit.base10_parse()?;
+                if len == 0 {
+                    return Err(syn::Error::new(
+                        lit.span(),
+                        "a `[0]` payload declares nothing; omit the suffix instead",
+                    ));
+                }
+                Some(Payload {
+                    len,
+                    span: lit.span(),
+                })
+            } else {
+                None
+            };
+
+            messages.push(Line {
+                dir,
+                tokens,
+                payload,
+            });
         }
 
         if messages.is_empty() {
@@ -243,6 +296,13 @@ impl Parse for NoiseInput {
         }
 
         for line in &pre_messages {
+            if let Some(payload) = line.payload {
+                return Err(syn::Error::new(
+                    payload.span,
+                    "a pre-message conveys no wire message, so it cannot carry a payload; \
+                     move the `[N]` suffix onto a handshake message after `...`",
+                ));
+            }
             for (tok, span) in &line.tokens {
                 if *tok != Tok::S {
                     return Err(syn::Error::new(
@@ -254,6 +314,19 @@ impl Parse for NoiseInput {
                     ));
                 }
             }
+        }
+
+        // Marker mode (no suite) generates only the pattern marker — no
+        // state machines, no wire-size consts — so a declared payload
+        // would be silently dropped. Reject it rather than ignore it.
+        if suite.is_none()
+            && let Some(payload) = messages.iter().find_map(|line| line.payload)
+        {
+            return Err(syn::Error::new(
+                payload.span,
+                "a payload suffix requires a suite (`Name<Curve, Cipher, Hash>`): \
+                 a marker-mode pattern generates no handshake messages to carry it",
+            ));
         }
 
         Ok(NoiseInput {

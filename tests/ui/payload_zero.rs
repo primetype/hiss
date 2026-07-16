@@ -1,0 +1,9 @@
+hiss::noise! {
+    pub P<X25519, ChaChaPoly, Blake2b> {
+        <- s
+        ...
+        -> e, es [0]
+    }
+}
+
+fn main() {}

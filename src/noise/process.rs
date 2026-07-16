@@ -46,23 +46,30 @@ use crate::provider::CryptoKeyProvider;
 use crate::provider::DhProviderAsync;
 
 // ═══════════════════════════════════════════════════════════════
-//  Payload helpers — EncryptAndHash("") / DecryptAndHash("")
+//  Payload helpers — EncryptAndHash(payload) / DecryptAndHash(payload)
 // ═══════════════════════════════════════════════════════════════
 //
 // The Noise spec requires calling EncryptAndHash(payload) after
-// processing all tokens in each handshake message. Even with an
-// empty payload, a keyed cipher state produces a TAG_SIZE-byte
-// authentication tag that is appended to the message and mixed
-// into the handshake hash.
+// processing all tokens in each handshake message. The classic drivers
+// and the seal helpers always pass the empty payload, whose tail is a
+// bare TAG_SIZE-byte authentication tag once the cipher is keyed; the
+// macro-generated states thread a message's declared `[N]` application
+// payload through the same call, so exactly one encrypt-and-hash closes
+// every message either way.
 
-/// Encrypt the empty payload at the end of a send message.
+/// Encrypt `payload` (empty for a payload-free message) at the end of a
+/// send message.
 ///
-/// When keyed, reserves `TAG_SIZE` bytes in the buffer for the
-/// authentication tag. When unkeyed, this is effectively a no-op
+/// When keyed, reserves `payload.len() + TAG_SIZE` bytes in the buffer
+/// for the ciphertext and its authentication tag. When unkeyed, the
+/// payload travels in the clear (correct Noise behaviour for a
+/// pre-keyed tail — confidentiality is positional and the caller's
+/// concern); with an empty payload this is effectively a no-op
 /// (mix_hash of empty).
 pub(crate) fn send_payload<Cu, Ci, H, CP>(
     inner: &mut HandshakeInner<Cu, Ci, H, CP>,
     buffer: &mut SendBuffer<'_>,
+    payload: &[u8],
 ) -> Result<(), HandshakeError>
 where
     Cu: Curve,
@@ -75,18 +82,23 @@ where
     } else {
         0
     };
-    let output = buffer.reserve(tag_len);
-    inner.symmetric.encrypt_and_hash(&[], output)?;
+    let output = buffer.reserve(payload.len() + tag_len);
+    inner.symmetric.encrypt_and_hash(payload, output)?;
     Ok(())
 }
 
-/// Decrypt the empty payload at the end of a receive message.
+/// Decrypt the payload at the end of a receive message into
+/// `payload_out` (empty for a payload-free message).
 ///
-/// Consumes remaining bytes (TAG_SIZE when keyed, 0 when unkeyed)
-/// and verifies the authentication tag.
+/// Consumes every remaining byte in the buffer — `payload_out.len()`
+/// payload bytes plus the TAG_SIZE tag when keyed, the bare payload
+/// bytes when unkeyed — verifying the authentication tag where one
+/// exists. On a failed tag the cipher zeroes `payload_out` before the
+/// error returns, so no unauthenticated plaintext escapes.
 pub(crate) fn recv_payload<Cu, Ci, H, CP>(
     inner: &mut HandshakeInner<Cu, Ci, H, CP>,
     buffer: &mut RecvBuffer<'_>,
+    payload_out: &mut [u8],
 ) -> Result<(), HandshakeError>
 where
     Cu: Curve,
@@ -95,8 +107,8 @@ where
     CP: CryptoKeyProvider<Cu>,
 {
     let remaining_len = buffer.remaining().len();
-    let tag = buffer.read(remaining_len)?;
-    inner.symmetric.decrypt_and_hash(tag, &mut [])?;
+    let ciphertext = buffer.read(remaining_len)?;
+    inner.symmetric.decrypt_and_hash(ciphertext, payload_out)?;
     Ok(())
 }
 

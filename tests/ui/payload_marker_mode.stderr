@@ -1,0 +1,5 @@
+error: a payload suffix requires a suite (`Name<Curve, Cipher, Hash>`): a marker-mode pattern generates no handshake messages to carry it
+ --> tests/ui/payload_marker_mode.rs:3:19
+  |
+3 |         -> e, es [8]
+  |                   ^

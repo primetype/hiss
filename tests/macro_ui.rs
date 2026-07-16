@@ -1,14 +1,16 @@
-//! Compile-fail (UI) tests pinning the eight surface-syntax diagnostics the
+//! Compile-fail (UI) tests pinning the twelve surface-syntax diagnostics the
 //! `noise!` parser emits (`hiss-macros/src/parse.rs`).
 //!
 //! Each case in `tests/ui/*.rs` invokes `hiss::noise! { … }` with a
 //! deliberately malformed pattern and is matched against its committed
-//! `.stderr`. Seven of the eight pinned messages are `compile_error!`s
+//! `.stderr`. Ten of the twelve pinned messages are `compile_error!`s
 //! produced during **parsing** (before code generation runs), so the
 //! diagnostics are stable across compiler versions — the usual source of
-//! trybuild stderr churn. The exception is `suite_arity`, which pins syn's
-//! generic ``expected `,` `` from the suite-header parse; if that snapshot
-//! churns on a syn upgrade, regenerate it with `TRYBUILD=overwrite`. In every
+//! trybuild stderr churn. The exceptions are `suite_arity`, which pins syn's
+//! generic ``expected `,` `` from the suite-header parse, and
+//! `payload_not_integer`, which pins syn's `expected integer literal` from
+//! the `[N]` payload suffix; if those snapshots churn on a syn upgrade,
+//! regenerate them with `TRYBUILD=overwrite`. In every
 //! case the unresolved `X25519`/`ChaChaPoly`/`Blake2b` suite paths never
 //! matter (a parse error aborts before any `::hiss` path is emitted).
 //!

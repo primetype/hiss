@@ -29,6 +29,16 @@
 //! call. All runtime behaviour bottoms out in `hiss::noise::support` —
 //! the same per-token engine the crate's own drivers use.
 //!
+//! A message declared with a `[N]` payload suffix carries an N-byte
+//! application payload in its tail: the writer takes `payload: &[u8; N]`
+//! as its last parameter and the reader returns the recovered `[u8; N]`
+//! by value alongside the next state. The payload rides the same
+//! `encrypt_and_hash` that already closes every message, so `MSGn_SIZE`
+//! grows by exactly `N` and the tail's tag byte-count is unchanged.
+//! Whether that tail is encrypted is **positional** — see
+//! [`keyed_at_tail`] — and the generated docs state the concrete
+//! property per message.
+//!
 //! PSKs are plain `&Psk` parameters — most deployments know the PSK in
 //! advance. When a *received* message reveals the peer's static (`s`)
 //! before its `psk` token (e.g. IKpsk1), an additional
@@ -122,6 +132,26 @@ fn psk_after_s(line: &Line) -> bool {
 
 fn has_tok(line: &Line, tok: Tok) -> bool {
     line.tokens.iter().any(|(t, _)| *t == tok)
+}
+
+/// Whether the cipher is keyed by the time message `msg`'s tail closes —
+/// i.e. a `mix_key` has run: any DH or `psk` token so far or, in a PSK
+/// pattern, any `e` (which also calls `mix_key`).
+///
+/// This mirrors the engine's `WireSize` keying rule for **documentation
+/// only** — a keyed tail means the payload is encrypted, an unkeyed one
+/// means it travels in the clear, and the generated docs say which. The
+/// sizes themselves still come from the `WireSize` consts, never from
+/// this function.
+fn keyed_at_tail(ctx: &Ctx<'_>, msg: usize) -> bool {
+    let has_psk = ctx.input.has_psk();
+    ctx.input.messages[..=msg].iter().any(|line| {
+        line.tokens.iter().any(|(t, _)| match t {
+            Tok::Ee | Tok::Es | Tok::Se | Tok::Ss | Tok::Psk => true,
+            Tok::E => has_psk,
+            Tok::S => false,
+        })
+    })
 }
 
 /// Right-fold a token list into `Cons<E, Cons<…, Nil>>`.
@@ -320,10 +350,30 @@ fn gen_sizes(ctx: &Ctx<'_>) -> TokenStream {
         let before = format_ident!("__KEYED_BEFORE_MSG{}", i + 1);
         let after = format_ident!("__KEYED_BEFORE_MSG{}", i + 2);
         let size = format_ident!("MSG{}_SIZE", i + 1);
+        // The declared payload length is caller data passed straight
+        // through — the token bytes and the tag's presence still come
+        // from the `WireSize` machinery alone.
+        let (payload_term, tail_doc) = match line.payload {
+            Some(payload) => {
+                let n = payload.len;
+                (
+                    quote!(+ #n),
+                    format!(
+                        "the {n}-byte application payload, and its trailing \
+                         authentication tag once the cipher is keyed"
+                    ),
+                )
+            }
+            None => (
+                quote!(),
+                "the trailing empty-payload authentication tag once the \
+                 cipher is keyed"
+                    .to_string(),
+            ),
+        };
         let doc = format!(
             "Exact wire size in bytes of handshake message {} (`{}`): the \
-             token bytes plus the trailing empty-payload authentication \
-             tag once the cipher is keyed.",
+             token bytes plus {tail_doc}.",
             i + 1,
             line.render(),
         );
@@ -344,7 +394,7 @@ fn gen_sizes(ctx: &Ctx<'_>) -> TokenStream {
                 <#cipher as ::hiss::noise::Cipher>::TAG_SIZE
             } else {
                 0
-            });
+            }) #payload_term;
         });
     }
     quote! {
@@ -723,6 +773,9 @@ fn message_doc(ctx: &Ctx<'_>, msg: usize, sending: bool) -> String {
     for (tok, _) in &line.tokens {
         doc.push_str(&format!("\n* {}", token_bullet(*tok, sending)));
     }
+    if let Some(payload) = line.payload {
+        doc.push_str(&payload_doc(ctx, msg, payload.len, sending));
+    }
     if msg + 1 == ctx.input.messages.len() {
         doc.push_str(
             "\n\nThis is the final handshake message: it completes into the \
@@ -730,6 +783,54 @@ fn message_doc(ctx: &Ctx<'_>, msg: usize, sending: bool) -> String {
         );
     }
     doc
+}
+
+/// The documentation paragraph for a message's `[N]` application payload.
+///
+/// Confidentiality and integrity are **positional** — they depend on
+/// whether the cipher is keyed when the tail closes — so the text states
+/// the concrete property for this message rather than a generic hedge.
+fn payload_doc(ctx: &Ctx<'_>, msg: usize, n: usize, sending: bool) -> String {
+    match (sending, keyed_at_tail(ctx, msg)) {
+        (true, true) => format!(
+            "\n\nThe message also carries a {n}-byte application payload, \
+             supplied as `payload` and sealed into the message's tail. The \
+             cipher **is keyed** at this point, so the payload is encrypted \
+             and authenticated — readable only by a peer that can complete \
+             this handshake's key schedule. Its exact security is that of \
+             this message's position in the handshake: consult the \
+             pattern's payload security properties (Noise §7.7) before \
+             trusting it with secrets."
+        ),
+        (true, false) => format!(
+            "\n\nThe message also carries a {n}-byte application payload, \
+             supplied as `payload` and appended as the message's tail. The \
+             cipher is **not yet keyed** at this point, so the payload \
+             travels **in the clear** — readable, and undetectably \
+             alterable at this message, by anyone on the wire. It is still \
+             mixed into the transcript, so a tampered payload fails the \
+             next authenticated token later in the handshake."
+        ),
+        (false, true) => format!(
+            "\n\nThe message also carries a {n}-byte application payload, \
+             returned by value on success. The cipher **is keyed** at this \
+             point, so the tail was decrypted and its authentication tag \
+             verified — a tampered tail fails with `DecryptionFailed` and \
+             yields neither payload nor state, and the fixed-size message \
+             makes a length mismatch unrepresentable at this API. Its \
+             confidentiality is that of this message's position in the \
+             handshake (Noise §7.7)."
+        ),
+        (false, false) => format!(
+            "\n\nThe message also carries a {n}-byte application payload, \
+             returned by value on success. The cipher is **not yet keyed** \
+             at this point, so the payload travelled **in the clear** and \
+             nothing verifies it at this read — a wire tamper is only \
+             caught by the next authenticated token later in the \
+             handshake. Treat the bytes as unauthenticated input until \
+             then."
+        ),
+    }
 }
 
 fn gen_write_message(ctx: &Ctx<'_>, role: Role, msg: usize) -> TokenStream {
@@ -773,6 +874,17 @@ fn gen_write_message(ctx: &Ctx<'_>, role: Role, msg: usize) -> TokenStream {
         }
     }
 
+    // The payload is the message's tail, so its parameter comes last, in
+    // keeping with token order.
+    let tail_arg = match line.payload {
+        Some(payload) => {
+            let n = payload.len;
+            args.extend(quote!(, payload: &[u8; #n]));
+            quote!(payload)
+        }
+        None => quote!(&[]),
+    };
+
     quote! {
         impl<CP> #id<CP>
         where
@@ -787,7 +899,7 @@ fn gen_write_message(ctx: &Ctx<'_>, role: Role, msg: usize) -> TokenStream {
                 let mut buf = [0u8; #size];
                 let cursor = 0usize;
                 #stmts
-                let tail = #support::send_tail(&mut self.inner, &mut buf[cursor..])?;
+                let tail = #support::send_tail(&mut self.inner, &mut buf[cursor..], #tail_arg)?;
                 debug_assert_eq!(cursor + tail, #size, "message size bookkeeping");
                 Ok((buf, #next_expr))
             }
@@ -804,19 +916,23 @@ enum ReadStyle {
     /// The PSK is selected per peer: a lookup closure over the identity
     /// the message reveals before its `psk` token.
     Lookup,
-    /// The pattern's final message reveals the peer's static: a
-    /// verification closure sees the identity as soon as it is
-    /// decrypted, before the handshake may complete into a `Transport`.
+    /// The message reveals the peer's static: a verification closure
+    /// sees the identity as soon as it is decrypted, before any of the
+    /// message's remaining tokens are processed.
     Verify,
 }
 
-/// Whether a *received* final message gets the `_with` verification
-/// variant: it reveals the peer's static and there is no later state to
-/// observe it on — only `Transport::remote_static()`. Mutually exclusive
-/// with the PSK-lookup variant, which is already an identity hook.
-fn verify_on_final(ctx: &Ctx<'_>, msg: usize) -> bool {
-    let line = &ctx.input.messages[msg];
-    msg + 1 == ctx.input.messages.len() && has_tok(line, Tok::S) && !psk_after_s(line)
+/// Whether a *received* message gets the `_with` verification variant:
+/// it reveals the peer's static and is not the PSK-lookup shape (whose
+/// lookup closure is already the identity hook). Every `s`-revealing
+/// read qualifies, final or not — on the final message there is no later
+/// state to observe the key on (only `Transport::remote_static()`, an
+/// `Option`); on a non-final message the closure rejects the claimed
+/// identity before the message's remaining DH tokens are computed, so
+/// an unwanted peer costs no further provider work (on IK's first
+/// message, rejection costs the responder exactly the one `es` DH).
+fn verify_on_read(line: &Line) -> bool {
+    has_tok(line, Tok::S) && !psk_after_s(line)
 }
 
 fn gen_read_message(ctx: &Ctx<'_>, role: Role, msg: usize) -> TokenStream {
@@ -827,13 +943,14 @@ fn gen_read_message(ctx: &Ctx<'_>, role: Role, msg: usize) -> TokenStream {
     // The plain form is always the primary method. When the message
     // reveals the peer's static before its `psk` token, an additional
     // `read_message_N_with` variant lets the PSK be selected per peer.
-    // When the *final* message reveals the peer's static, the `_with`
-    // variant instead takes a verification closure, so the peer can be
-    // rejected before the handshake completes.
+    // When any other received message reveals the peer's static, the
+    // `_with` variant instead takes a verification closure, so the peer
+    // can be rejected before the message's remaining tokens are
+    // processed.
     let mut methods = gen_read_method(ctx, role, msg, ReadStyle::Plain);
     if psk_after_s(line) {
         methods.extend(gen_read_method(ctx, role, msg, ReadStyle::Lookup));
-    } else if verify_on_final(ctx, msg) {
+    } else if verify_on_read(line) {
         methods.extend(gen_read_method(ctx, role, msg, ReadStyle::Verify));
     }
 
@@ -857,6 +974,7 @@ fn gen_read_method(ctx: &Ctx<'_>, role: Role, msg: usize, style: ReadStyle) -> T
         ReadStyle::Lookup | ReadStyle::Verify => format_ident!("{base}_with"),
     };
     let (next_ty, next_expr) = next_state(ctx, role, msg);
+    let final_msg = msg + 1 == ctx.input.messages.len();
     let mut doc = message_doc(ctx, msg, false);
     match style {
         ReadStyle::Plain if psk_after_s(line) => {
@@ -867,7 +985,7 @@ fn gen_read_method(ctx: &Ctx<'_>, role: Role, msg: usize, style: ReadStyle) -> T
                  PSKs), use [`{with}`](Self::{with}).",
             ));
         }
-        ReadStyle::Plain if verify_on_final(ctx, msg) => {
+        ReadStyle::Plain if verify_on_read(line) && final_msg => {
             let with = format_ident!("{base}_with");
             doc.push_str(&format!(
                 "\n\nThis final message reveals the peer's static identity; \
@@ -876,6 +994,16 @@ fn gen_read_method(ctx: &Ctx<'_>, role: Role, msg: usize, style: ReadStyle) -> T
                  peer at the protocol-correct moment — after the identity \
                  is revealed but **before** the handshake completes — use \
                  [`{with}`](Self::{with}).",
+            ));
+        }
+        ReadStyle::Plain if verify_on_read(line) => {
+            let with = format_ident!("{base}_with");
+            doc.push_str(&format!(
+                "\n\nThis message reveals the peer's static identity; it \
+                 becomes observable via `remote_static()` on the returned \
+                 state. To reject an unknown peer at the earliest protocol \
+                 moment — before the message's remaining DH tokens are \
+                 even computed — use [`{with}`](Self::{with}).",
             ));
         }
         ReadStyle::Lookup => {
@@ -893,7 +1021,7 @@ fn gen_read_method(ctx: &Ctx<'_>, role: Role, msg: usize, style: ReadStyle) -> T
                  the key as authenticated.",
             );
         }
-        ReadStyle::Verify => {
+        ReadStyle::Verify if final_msg => {
             doc.push_str(
                 "\n\nVariant taking a **verification** closure: this final \
                  message reveals the peer's static identity, and the closure \
@@ -910,7 +1038,35 @@ fn gen_read_method(ctx: &Ctx<'_>, role: Role, msg: usize, style: ReadStyle) -> T
                  DH token it arrives unencrypted.",
             );
         }
+        ReadStyle::Verify => {
+            doc.push_str(
+                "\n\nVariant taking a **verification** closure: this \
+                 message reveals the peer's static identity, and the \
+                 closure receives it as soon as it is read — before the \
+                 message's remaining DH tokens are even computed. Return \
+                 `Ok(())` to accept the peer, or an error (e.g. \
+                 `HandshakeError::PeerRejected`) to reject it: the \
+                 handshake aborts at the cheapest possible moment and no \
+                 next state is produced for an unverified peer. At that \
+                 point the identity is **claimed, not yet proven**: \
+                 ownership of the key is only established by the message's \
+                 remaining DH tokens and later tags, so rejecting is always \
+                 safe, but side effects in the closure must not treat the \
+                 key as authenticated — and in a pattern whose `s` precedes \
+                 every DH token it arrives unencrypted.",
+            );
+        }
         ReadStyle::Plain => {}
+    }
+    // Composition with a `[N]` payload: the tail is processed after every
+    // token, so an identity closure always fires before the payload is
+    // touched — an accepted read is the only way to the payload.
+    if line.payload.is_some() && matches!(style, ReadStyle::Lookup | ReadStyle::Verify) {
+        doc.push_str(
+            "\n\nThe closure fires before the message's remaining tokens, \
+             and therefore before the payload's tail is decrypted: the \
+             payload is only ever returned from an accepted read.",
+        );
     }
 
     let mut args = TokenStream::new();
@@ -983,17 +1139,42 @@ fn gen_read_method(ctx: &Ctx<'_>, role: Role, msg: usize, style: ReadStyle) -> T
         }
     }
 
+    // A `[N]` payload is recovered from the tail into a caller-owned
+    // array, returned by value alongside the next state. On the error
+    // paths nothing authenticated was written: the cipher zeroes the
+    // output on a failed tag, and the array never leaves this frame.
+    let (ret_ty, tail, ok_expr) = match line.payload {
+        Some(payload) => {
+            let n = payload.len;
+            (
+                quote!(([u8; #n], #next_ty)),
+                quote! {
+                    let mut payload = [0u8; #n];
+                    #support::recv_tail(&mut self.inner, &message[cursor..], &mut payload)?;
+                },
+                quote!((payload, #next_expr)),
+            )
+        }
+        None => (
+            quote!(#next_ty),
+            quote! {
+                #support::recv_tail(&mut self.inner, &message[cursor..], &mut [])?;
+            },
+            quote!(#next_expr),
+        ),
+    };
+
     quote! {
         #[doc = #doc]
         pub fn #method(
             mut self,
             message: &[u8; #size]
             #args
-        ) -> ::core::result::Result<#next_ty, ::hiss::noise::HandshakeError> {
+        ) -> ::core::result::Result<#ret_ty, ::hiss::noise::HandshakeError> {
             let cursor = 0usize;
             #stmts
-            #support::recv_tail(&mut self.inner, &message[cursor..])?;
-            Ok(#next_expr)
+            #tail
+            Ok(#ok_expr)
         }
     }
 }
@@ -1047,6 +1228,9 @@ fn usage_snippet(ctx: &Ctx<'_>, role: Role) -> String {
                     _ => {}
                 }
             }
+            if line.payload.is_some() {
+                args.push_str(&format!(", &payload{}", i + 1));
+            }
             let args = args.trim_start_matches(", ");
             out.push_str(&format!(
                 "let (msg{}, {state}) = hs.write_message_{}({args})?; // {}\n",
@@ -1059,8 +1243,13 @@ fn usage_snippet(ctx: &Ctx<'_>, role: Role) -> String {
             if has_tok(line, Tok::Psk) {
                 args.push_str(", &psk");
             }
+            let binding = if line.payload.is_some() {
+                format!("(payload{}, {state})", i + 1)
+            } else {
+                state.to_string()
+            };
             out.push_str(&format!(
-                "let {state} = hs.read_message_{}({args})?; // {}\n",
+                "let {binding} = hs.read_message_{}({args})?; // {}\n",
                 i + 1,
                 line.render(),
             ));

@@ -41,6 +41,13 @@ use syn::parse_macro_input;
 /// are the handshake messages. A pattern with no pre-messages (`NN`,
 /// `XX`, …) simply omits the `...`.
 ///
+/// A handshake message line may end with a bracketed byte length —
+/// `-> e, es, s, ss [12]` — declaring a fixed-size **application
+/// payload** carried in that message's tail (Noise sanctions a payload
+/// on every handshake message; the suffix is this DSL's one extension
+/// to the specification's notation, whose tables leave payloads
+/// implicit).
+///
 /// # What is generated
 ///
 /// For a pattern named `P` the macro emits, at the invocation site:
@@ -68,6 +75,15 @@ use syn::parse_macro_input;
 /// borrows the incoming `&[u8; P::MSGn_SIZE]` for the duration of the
 /// call. Framing and transporting the messages is the caller's job.
 ///
+/// For a message declared with a `[N]` payload suffix, the writer takes
+/// `payload: &[u8; N]` as its last parameter (the payload is the tail)
+/// and the reader returns the recovered `[u8; N]` by value alongside
+/// the next state; `MSGn_SIZE` grows by exactly `N`. Whether the
+/// payload is encrypted is **positional** — it depends on whether the
+/// cipher is keyed when that message's tail closes — and the generated
+/// method docs state the concrete property ("encrypted to …" vs
+/// "travels in the clear") per message.
+///
 /// PSKs are plain `&Psk` parameters. When a *received* message reveals
 /// the peer's static (`s`) before its `psk` token — IKpsk1's signature
 /// move — an additional `read_message_N_with` variant is generated
@@ -75,15 +91,16 @@ use syn::parse_macro_input;
 /// identity, for deployments that select a per-peer PSK (or reject
 /// unknown peers) at exactly that point.
 ///
-/// When the **final** message a role receives reveals the peer's static
-/// (e.g. XX's, X's, or IX's last message), there is no later state to
-/// observe it on
-/// — only `Transport::remote_static()`, an `Option`. For those reads a
-/// `read_message_N_with` variant is generated whose closure receives
-/// the just-revealed identity and returns `Ok(())` to accept the peer,
-/// or an error (e.g. `HandshakeError::PeerRejected`) to abort — the
-/// peer is verified *before* the handshake is allowed to complete into
-/// a `Transport`. (A read with a PSK lookup keeps that form instead:
+/// Every other *received* message that reveals the peer's static gets a
+/// `read_message_N_with` variant whose closure receives the
+/// just-revealed identity and returns `Ok(())` to accept the peer, or
+/// an error (e.g. `HandshakeError::PeerRejected`) to abort. The closure
+/// fires as soon as the static is decrypted, **before** the message's
+/// remaining DH tokens are computed: on the final message a role
+/// receives (XX's, X's, or IX's last) that is the last moment before
+/// the handshake completes into a `Transport`; on an earlier message
+/// (IK's first) it rejects an unwanted peer before spending further
+/// provider work. (A read with a PSK lookup keeps that form instead:
 /// the lookup closure is already the identity hook.)
 ///
 /// # Example

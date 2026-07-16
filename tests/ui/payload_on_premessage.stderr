@@ -1,0 +1,5 @@
+error: a pre-message conveys no wire message, so it cannot carry a payload; move the `[N]` suffix onto a handshake message after `...`
+ --> tests/ui/payload_on_premessage.rs:3:15
+  |
+3 |         <- s [8]
+  |               ^

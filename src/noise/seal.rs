@@ -112,7 +112,7 @@ where
         let mut buffer = SendBuffer::new(&mut msg1);
         send_e(&mut inner, &mut buffer).await.map_err(seal)?;
         do_es_initiator(&mut inner).await.map_err(seal)?;
-        send_payload(&mut inner, &mut buffer).map_err(seal)?;
+        send_payload(&mut inner, &mut buffer, &[]).map_err(seal)?;
     }
 
     let mut transport = recv_to_transport::<N, Initiator, P>(inner);
@@ -176,7 +176,7 @@ where
     do_es_responder(&mut inner).await.map_err(open)?;
     {
         let mut tag_buffer = RecvBuffer::new(tag);
-        recv_payload(&mut inner, &mut tag_buffer).map_err(open)?;
+        recv_payload(&mut inner, &mut tag_buffer, &mut []).map_err(open)?;
     }
 
     let mut transport = recv_to_transport::<N, Responder, P>(inner);

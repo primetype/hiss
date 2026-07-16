@@ -21,11 +21,30 @@
 //!   static (`s` mid-message, unlike `N`'s anonymous initiator).
 //!
 //! `X`, `Xpsk0`, and `IX` also pin the `read_message_N_with` **verification**
-//! variant: when the final message a role receives reveals the peer's static,
-//! the generated `_with` read hands that identity to a closure before the
-//! handshake may complete, so an unverified peer never yields a `Transport`.
-//! `Xpsk0` additionally pins the argument order when that message carries a
-//! plain `psk` ahead of the revealed static: `(message, psk, verify)`.
+//! variant: when a received message reveals the peer's static, the generated
+//! `_with` read hands that identity to a closure before the message's
+//! remaining tokens are processed — on a final message (these three), before
+//! the handshake may complete, so an unverified peer never yields a
+//! `Transport`. `Xpsk0` additionally pins the argument order when that
+//! message carries a plain `psk` ahead of the revealed static:
+//! `(message, psk, verify)`.
+//!
+//! Three further patterns pin the `[N]` **application-payload** suffix and
+//! the *non-final* verification hook (slither's IK-with-timestamp shape):
+//!
+//! * `IK` — the plain twin, compiled only for its wire-size consts;
+//! * `IKPayload` — IK with `[12]` on msg1: the writer takes
+//!   `payload: &[u8; 12]` last, the reader returns the recovered array
+//!   alongside the next state, `MSG1_SIZE` grows by exactly 12, and the
+//!   keyed tail keeps the payload off the wire verbatim. Msg1 also reveals
+//!   the initiator's static mid-handshake, so the responder's read gains
+//!   the `_with` variant: a counting provider pins that the closure fires
+//!   after exactly one DH (`es`) — rejection never spends the `ss` — and
+//!   that an accepted read proceeds identically to the plain one;
+//! * `NNPayload` — the honest twin: `-> e [12]` closes before any DH, so
+//!   the payload travels verbatim in the clear, nothing verifies it at
+//!   that read, and a tamper only surfaces at the next authenticated
+//!   token (msg2's tag).
 //!
 //! Beyond the macro↔macro round trips (T2), `n_macro_initiator_interops_with_
 //! classic_responder` drives the macro `N` initiator against the classic
@@ -36,12 +55,16 @@
 
 mod common;
 
+use std::cell::Cell;
+use std::rc::Rc;
+
 use common::PeerStream;
+use hiss::curve::{Curve, DhCurve};
 use hiss::noise::{
     Blake2b, ChaChaPoly, HandshakeError, Noise, Responder, SyncHandshake, Transport, X25519,
     pattern,
 };
-use hiss::provider::{EphemeralOnly, ProviderExt};
+use hiss::provider::{CryptoKeyProvider, DhProvider, EphemeralOnly, ProviderExt};
 use hiss::psk::Psk;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
@@ -55,10 +78,54 @@ hiss::noise! { pub IX<X25519, ChaChaPoly, Blake2b>    { -> e, s <- e, ee, se, s,
 hiss::noise! { pub X<X25519, ChaChaPoly, Blake2b>     { <- s ... -> e, es, s, ss } }
 hiss::noise! { pub Xpsk0<X25519, ChaChaPoly, Blake2b> { <- s ... -> psk, e, es, s, ss } }
 
+// The `[N]` application-payload suffix and its plain twin (see the module
+// docs): IK carrying a 12-byte payload in msg1's keyed tail, and NN
+// carrying one in msg1's unkeyed tail.
+hiss::noise! { pub IK<X25519, ChaChaPoly, Blake2b>        { <- s ... -> e, es, s, ss <- e, ee, se } }
+hiss::noise! { pub IKPayload<X25519, ChaChaPoly, Blake2b> { <- s ... -> e, es, s, ss [12] <- e, ee, se } }
+hiss::noise! { pub NNPayload<X25519, ChaChaPoly, Blake2b> { -> e [12] <- e, ee } }
+
 const PROLOGUE: &[u8] = b"hiss macro shapes";
 
 fn provider(seed: u64) -> EphemeralOnly<StdRng> {
     EphemeralOnly::new(StdRng::seed_from_u64(seed))
+}
+
+/// Wraps a provider and counts its `dh` calls through a shared cell, so a
+/// test can pin exactly how much provider work a read performed — the
+/// point of the non-final verification hook is that a rejection stops
+/// before the message's remaining DH tokens.
+struct CountingDh<P> {
+    inner: P,
+    dhs: Rc<Cell<usize>>,
+}
+
+impl<C: Curve, P: CryptoKeyProvider<C>> CryptoKeyProvider<C> for CountingDh<P> {
+    type Error = P::Error;
+    type PrivateKey = P::PrivateKey;
+
+    fn public_key(&self, key: &Self::PrivateKey) -> Result<C::PublicKey, Self::Error> {
+        self.inner.public_key(key)
+    }
+
+    fn generate_static_key(&mut self) -> Result<Self::PrivateKey, Self::Error> {
+        self.inner.generate_static_key()
+    }
+
+    fn generate_ephemeral_key(&mut self) -> Result<Self::PrivateKey, Self::Error> {
+        self.inner.generate_ephemeral_key()
+    }
+}
+
+impl<C: DhCurve, P: DhProvider<C>> DhProvider<C> for CountingDh<P> {
+    fn dh(
+        &self,
+        key: &Self::PrivateKey,
+        peer: &C::PublicKey,
+    ) -> Result<C::SharedSecret, Self::Error> {
+        self.dhs.set(self.dhs.get() + 1);
+        self.inner.dh(key, peer)
+    }
 }
 
 // ── T2: round trips ──────────────────────────────────────────────
@@ -227,11 +294,13 @@ fn x_macro_round_trip() {
 
 // ── the `read_message_N_with` verification variant ────────────────
 //
-// Generated only where the *final* message a role receives reveals the
-// peer's static: there is no later handshake state to observe the key on
-// (only `Transport::remote_static()`, an `Option`), so the closure sees it
-// at the protocol-correct moment instead — after decryption, before the
-// handshake completes.
+// Generated wherever a received message reveals the peer's static (and
+// is not the PSK-lookup shape). The three patterns here exercise the
+// *final*-message case: there is no later handshake state to observe the
+// key on (only `Transport::remote_static()`, an `Option`), so the
+// closure sees it at the protocol-correct moment instead — after
+// decryption, before the handshake completes. The non-final case is
+// pinned further down, on `IKPayload`.
 
 #[test]
 fn x_macro_verify_accepts_the_enrolled_peer() {
@@ -369,6 +438,244 @@ fn ix_macro_verify_runs_before_the_initiator_completes() {
     let mut opened = vec![0u8; n];
     let m = r_t.receive(&sealed[..n], &mut opened).unwrap();
     assert_eq!(&opened[..m], payload);
+}
+
+// ── the `[N]` application-payload suffix ──────────────────────────
+//
+// The payload rides the same encrypt-and-hash that already closes every
+// message, so its security is positional: keyed on IKPayload's msg1
+// (encrypted and authenticated), unkeyed on NNPayload's (verbatim in the
+// clear, unverified until the next authenticated token). IKPayload's
+// msg1 also reveals the initiator's static mid-handshake, so it pins the
+// *non-final* verification hook and its composition with the payload:
+// the closure fires after `es` and before `ss` — and therefore before
+// the tail decrypts — so the payload only ever comes back from an
+// accepted read, and a rejection costs exactly one DH.
+
+#[test]
+fn payload_sizes_grow_by_exactly_the_declared_length() {
+    // IK msg1: e(32) + s(32+16, keyed) + tag(16) = 96; the `[12]` twin
+    // adds exactly its payload. Msg2 carries none and is unchanged.
+    assert_eq!(IK::MSG1_SIZE, 96);
+    assert_eq!(IKPayload::MSG1_SIZE, IK::MSG1_SIZE + 12);
+    assert_eq!(IKPayload::MSG2_SIZE, IK::MSG2_SIZE);
+    // NN msg1: bare e(32) + 12 cleartext payload bytes, no key => no tag.
+    assert_eq!(NNPayload::MSG1_SIZE, 32 + 12);
+}
+
+#[test]
+fn ik_payload_round_trip() {
+    let mut ip = provider(801);
+    let i_static = ip.generate::<X25519>().unwrap();
+    let mut rp = provider(802);
+    let r_static = rp.generate::<X25519>().unwrap();
+    let r_pub = rp.public(&r_static).unwrap();
+    let stamp: [u8; 12] = *b"ts0123456789";
+
+    // The payload is the message's tail, so it is the writer's last
+    // argument; the reader hands the recovered array back by value,
+    // alongside the next state.
+    let (msg1, i_hs) = IKPayload::initiator(ip, PROLOGUE, r_pub)
+        .write_message_1(i_static, &stamp)
+        .unwrap();
+    let (got, r_hs) = IKPayload::responder(rp, PROLOGUE, r_static)
+        .unwrap()
+        .read_message_1(&msg1)
+        .unwrap();
+    assert_eq!(got, stamp);
+
+    let (msg2, mut r_t) = r_hs.write_message_2().unwrap();
+    let mut i_t = i_hs.read_message_2(&msg2).unwrap();
+    assert_eq!(i_t.session_id(), r_t.session_id());
+
+    let quote = b"stamped and sealed";
+    let mut sealed = vec![0u8; quote.len() + Transport::<IKPayload>::OVERHEAD];
+    let n = i_t.send(quote, &mut sealed).unwrap();
+    let mut opened = vec![0u8; n];
+    let m = r_t.receive(&sealed[..n], &mut opened).unwrap();
+    assert_eq!(&opened[..m], quote);
+}
+
+#[test]
+fn ik_payload_keyed_tail_is_not_on_the_wire() {
+    let mut ip = provider(811);
+    let i_static = ip.generate::<X25519>().unwrap();
+    let mut rp = provider(812);
+    let r_static = rp.generate::<X25519>().unwrap();
+    let r_pub = rp.public(&r_static).unwrap();
+    // A distinctive, unlikely-to-collide plaintext.
+    let stamp: [u8; 12] = *b"SECRET-STAMP";
+
+    let (msg1, _i_hs) = IKPayload::initiator(ip, PROLOGUE, r_pub)
+        .write_message_1(i_static, &stamp)
+        .unwrap();
+    assert!(
+        !msg1.windows(stamp.len()).any(|w| w == stamp),
+        "a keyed payload's plaintext must not appear on the wire",
+    );
+}
+
+#[test]
+fn ik_payload_tampered_tail_fails_the_read() {
+    let mut ip = provider(821);
+    let i_static = ip.generate::<X25519>().unwrap();
+    let mut rp = provider(822);
+    let r_static = rp.generate::<X25519>().unwrap();
+    let r_pub = rp.public(&r_static).unwrap();
+    let stamp = [0x5A; 12];
+
+    let (mut msg1, _i_hs) = IKPayload::initiator(ip, PROLOGUE, r_pub)
+        .write_message_1(i_static, &stamp)
+        .unwrap();
+    // First byte of the payload ciphertext: after e (32) + encrypted s (48).
+    msg1[80] ^= 0xFF;
+
+    // The keyed tail's tag check fails: no payload, no next state.
+    let outcome = IKPayload::responder(rp, PROLOGUE, r_static)
+        .unwrap()
+        .read_message_1(&msg1);
+    assert!(matches!(outcome, Err(HandshakeError::DecryptionFailed)));
+}
+
+#[test]
+fn nn_payload_unkeyed_tail_travels_verbatim() {
+    let ip = provider(831);
+    let rp = provider(832);
+    let stamp: [u8; 12] = *b"CLEAR-STAMP!";
+
+    // `-> e [12]` closes before any DH: no key, no tag — the honest twin
+    // of the encrypted case, verbatim on the wire after the ephemeral.
+    let (msg1, i_hs) = NNPayload::initiator(ip, PROLOGUE)
+        .write_message_1(&stamp)
+        .unwrap();
+    assert_eq!(&msg1[32..], &stamp);
+
+    let (got, r_hs) = NNPayload::responder(rp, PROLOGUE)
+        .read_message_1(&msg1)
+        .unwrap();
+    assert_eq!(got, stamp);
+
+    // The cleartext tail is mixed into the transcript like any other
+    // payload, and the handshake still completes.
+    let (msg2, r_t) = r_hs.write_message_2().unwrap();
+    let i_t = i_hs.read_message_2(&msg2).unwrap();
+    assert_eq!(i_t.session_id(), r_t.session_id());
+}
+
+#[test]
+fn nn_payload_unkeyed_tamper_is_caught_at_the_next_authenticated_token() {
+    let ip = provider(841);
+    let rp = provider(842);
+    let stamp: [u8; 12] = *b"in the clear";
+
+    let (mut msg1, i_hs) = NNPayload::initiator(ip, PROLOGUE)
+        .write_message_1(&stamp)
+        .unwrap();
+    // First byte of the cleartext payload.
+    msg1[32] ^= 0xFF;
+
+    // The read itself accepts — an unkeyed tail has no tag to fail — and
+    // hands back the tampered bytes as unauthenticated input.
+    let (got, r_hs) = NNPayload::responder(rp, PROLOGUE)
+        .read_message_1(&msg1)
+        .unwrap();
+    assert_ne!(got, stamp);
+
+    // But the tail is mixed into the transcript, so the diverged hashes
+    // fail the next authenticated token: msg2's tag, on the initiator.
+    let (msg2, _r_t) = r_hs.write_message_2().unwrap();
+    let outcome = i_hs.read_message_2(&msg2);
+    assert!(matches!(outcome, Err(HandshakeError::DecryptionFailed)));
+}
+
+#[test]
+fn ik_payload_verify_reject_costs_exactly_one_dh() {
+    let mut ip = provider(851);
+    let i_static = ip.generate::<X25519>().unwrap();
+    let mut rp = provider(852);
+    let r_static = rp.generate::<X25519>().unwrap();
+    let r_pub = rp.public(&r_static).unwrap();
+    let stamp = [0xA5; 12];
+
+    let (msg1, _i_hs) = IKPayload::initiator(ip, PROLOGUE, r_pub)
+        .write_message_1(i_static, &stamp)
+        .unwrap();
+
+    // Msg1 is not final, yet the `_with` variant exists: the closure
+    // rejects the claimed identity as soon as `s` decrypts, so the read
+    // never reaches `ss` — or the payload behind it.
+    let dhs = Rc::new(Cell::new(0usize));
+    let counting = CountingDh {
+        inner: rp,
+        dhs: dhs.clone(),
+    };
+    let outcome = IKPayload::responder(counting, PROLOGUE, r_static)
+        .unwrap()
+        .read_message_1_with(&msg1, |_peer| {
+            Err(HandshakeError::PeerRejected {
+                reason: "not enrolled".into(),
+            })
+        });
+    assert!(matches!(outcome, Err(HandshakeError::PeerRejected { .. })));
+    assert_eq!(
+        dhs.get(),
+        1,
+        "rejection costs exactly the one `es` DH — `ss` never runs",
+    );
+}
+
+#[test]
+fn ik_payload_verify_fires_after_es_and_before_ss() {
+    // Two identical handshakes (same seeds), one read plain and one read
+    // through an accepting closure: the closure observes the identity
+    // after exactly one DH (`es`) — `ss` has demonstrably not run — and
+    // the accepted read proceeds identically to the plain one.
+    let stamp: [u8; 12] = *b"ts9876543210";
+    let run = |with_closure: bool| {
+        let mut ip = provider(861);
+        let i_static = ip.generate::<X25519>().unwrap();
+        let i_pub = ip.public(&i_static).unwrap();
+        let mut rp = provider(862);
+        let r_static = rp.generate::<X25519>().unwrap();
+        let r_pub = rp.public(&r_static).unwrap();
+
+        let (msg1, i_hs) = IKPayload::initiator(ip, PROLOGUE, r_pub)
+            .write_message_1(i_static, &stamp)
+            .unwrap();
+
+        let dhs = Rc::new(Cell::new(0usize));
+        let counting = CountingDh {
+            inner: rp,
+            dhs: dhs.clone(),
+        };
+        let hs = IKPayload::responder(counting, PROLOGUE, r_static).unwrap();
+        let (got, hs) = if with_closure {
+            hs.read_message_1_with(&msg1, |peer| {
+                assert_eq!(
+                    peer.as_ref(),
+                    i_pub.as_ref(),
+                    "the closure sees the claimed identity",
+                );
+                assert_eq!(dhs.get(), 1, "`es` has run; `ss` has not");
+                Ok(())
+            })
+            .unwrap()
+        } else {
+            hs.read_message_1(&msg1).unwrap()
+        };
+        assert_eq!(dhs.get(), 2, "the completed read ran both `es` and `ss`");
+        assert_eq!(got, stamp);
+
+        let (msg2, r_t) = hs.write_message_2().unwrap();
+        let i_t = i_hs.read_message_2(&msg2).unwrap();
+        assert_eq!(i_t.session_id(), r_t.session_id());
+        (msg2, i_t.session_id().as_ref().to_vec())
+    };
+
+    let (plain_msg2, plain_sid) = run(false);
+    let (with_msg2, with_sid) = run(true);
+    assert_eq!(plain_msg2, with_msg2);
+    assert_eq!(plain_sid, with_sid);
 }
 
 // ── T2: byte-level interop against the classic io_sync driver ─────

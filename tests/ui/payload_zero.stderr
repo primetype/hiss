@@ -1,0 +1,5 @@
+error: a `[0]` payload declares nothing; omit the suffix instead
+ --> tests/ui/payload_zero.rs:5:19
+  |
+5 |         -> e, es [0]
+  |                   ^

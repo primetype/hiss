@@ -221,7 +221,7 @@ where
     };
     let mut scratch = [0u8; TOKEN_SCRATCH];
     let mut buffer = SendBuffer::new(&mut scratch[..tag_len]);
-    send_payload(inner, &mut buffer)?;
+    send_payload(inner, &mut buffer, &[])?;
     stream.write_all(buffer.finish())?;
     stream.flush()?;
     Ok(())
@@ -248,7 +248,7 @@ where
     let mut scratch = [0u8; TOKEN_SCRATCH];
     stream.read_exact(&mut scratch[..tag_len])?;
     let mut buffer = RecvBuffer::new(&scratch[..tag_len]);
-    recv_payload(inner, &mut buffer)
+    recv_payload(inner, &mut buffer, &mut [])
 }
 
 // ═══════════════════════════════════════════════════════════════
