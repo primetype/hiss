@@ -144,21 +144,8 @@ impl<Ci: Cipher> CipherState<Ci> {
     ///
     /// Returns `Err` if this CipherState has no key.
     pub fn rekey(&mut self) -> Result<(), HandshakeError> {
-        const {
-            assert!(
-                Ci::TAG_SIZE <= 16,
-                "rekey scratch [0u8; 48] assumes TAG_SIZE <= 16"
-            )
-        };
         let key = self.k.as_ref().ok_or(HandshakeError::RekeyWithoutKey)?;
-
-        let zeros = [0u8; 32];
-        // ENCRYPT(k, 2^64−1, "", zeros) → 32 bytes ciphertext + 16 tag = 48 bytes.
-        let mut output = [0u8; 48];
-        Ci::encrypt(key, u64::MAX, &[], &zeros, &mut output)?;
-
-        let mut new_key = [0u8; 32];
-        new_key.copy_from_slice(&output[..32]);
+        let mut new_key = rekey_key::<Ci>(key)?;
 
         // Zero the old key and install the new one.
         if let Some(ref mut old) = self.k {
@@ -167,6 +154,27 @@ impl<Ci: Cipher> CipherState<Ci> {
         self.k = Some(new_key);
         zeroize_array(&mut new_key);
         Ok(())
+    }
+
+    /// The current nonce counter (`n` in the Noise spec).
+    ///
+    /// Crate-internal: the datagram send half (see
+    /// [`DatagramSend`](super::datagram::DatagramSend)) reads it before a
+    /// seal to learn whether the counter about to be used has crossed into
+    /// a new key epoch, so it can ratchet the key forward to match.
+    pub(crate) fn nonce(&self) -> u64 {
+        self.n
+    }
+
+    /// A copy of this state's key, or `None` in plaintext mode.
+    ///
+    /// Crate-internal: the datagram receive half (see
+    /// [`DatagramRecv`](super::datagram::DatagramRecv)) reads it exactly
+    /// once, at construction, to seed the epoch-0 key of its ratchet. The
+    /// source [`CipherState`] is dropped straight afterwards, scrubbing its
+    /// own copy, so no residue outlives the hand-off.
+    pub(crate) fn key(&self) -> Option<[u8; 32]> {
+        self.k
     }
 
     /// Decrypt `ciphertext` with associated data `ad`, writing
@@ -269,6 +277,39 @@ impl<Ci: Cipher> CipherState<Ci> {
             }
         }
     }
+}
+
+/// Derive the next key from `key` per the Noise §5.1 / §11.3 `Rekey()`
+/// transform: `ENCRYPT(k, 2^64−1, "", zeros[32])`, taking the first 32
+/// ciphertext bytes (the trailing 16-byte AEAD tag is discarded).
+///
+/// The transform is deterministic and one-way — the previous key cannot be
+/// recovered from the result — so chaining it derives a forward-only
+/// sequence of epoch keys. It advances no counter and touches no
+/// [`CipherState`]; the caller owns the returned key.
+///
+/// The 48-byte AEAD scratch (32 key bytes + 16 tag) is zeroised before
+/// return, so no derived-key residue is left on the stack frame. The
+/// returned key is the live value and is the caller's to scrub.
+pub(crate) fn rekey_key<Ci: Cipher>(key: &[u8; 32]) -> Result<[u8; 32], HandshakeError> {
+    const {
+        assert!(
+            Ci::TAG_SIZE <= 16,
+            "rekey scratch [0u8; 48] assumes TAG_SIZE <= 16"
+        )
+    };
+
+    let zeros = [0u8; 32];
+    // ENCRYPT(k, 2^64−1, "", zeros) → 32 bytes ciphertext + 16 tag = 48 bytes.
+    let mut output = [0u8; 48];
+    Ci::encrypt(key, u64::MAX, &[], &zeros, &mut output)?;
+
+    let mut new_key = [0u8; 32];
+    new_key.copy_from_slice(&output[..32]);
+
+    // Scrub the scratch, which holds a copy of the new key alongside the tag.
+    zeroize_array(&mut output);
+    Ok(new_key)
 }
 
 impl<Ci: Cipher> Drop for CipherState<Ci> {

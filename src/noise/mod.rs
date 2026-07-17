@@ -340,6 +340,7 @@ mod tests {
     use rand::{SeedableRng, rngs::StdRng};
     use std::cell::RefCell;
     use std::collections::VecDeque;
+    use std::num::NonZeroU64;
     use std::rc::Rc;
     type Channel = Noise<pattern::IKpsk1, P256, ChaChaPoly, Blake2b>;
     type NoiseSeal = Noise<pattern::N, P256, ChaChaPoly, Blake2b>;
@@ -2154,7 +2155,7 @@ mod tests {
     fn datagram_shuffled_delivery_all_open() {
         let (i_transport, r_transport) = ikpsk1_transport_pair();
         let (mut i_send, _i_recv) = i_transport.into_datagram();
-        let (_r_send, r_recv) = r_transport.into_datagram();
+        let (_r_send, mut r_recv) = r_transport.into_datagram();
 
         assert!(i_send.session_id() == r_recv.session_id());
 
@@ -2187,7 +2188,7 @@ mod tests {
     fn datagram_gap_later_counters_still_open() {
         let (i_transport, r_transport) = ikpsk1_transport_pair();
         let (mut i_send, _) = i_transport.into_datagram();
-        let (_, r_recv) = r_transport.into_datagram();
+        let (_, mut r_recv) = r_transport.into_datagram();
 
         let mut ct = [0u8; 256];
         let mut sealed: Vec<(u64, Vec<u8>)> = Vec::new();
@@ -2212,7 +2213,7 @@ mod tests {
     fn datagram_replay_opens_and_counter_is_monotonic() {
         let (i_transport, r_transport) = ikpsk1_transport_pair();
         let (mut i_send, _) = i_transport.into_datagram();
-        let (_, r_recv) = r_transport.into_datagram();
+        let (_, mut r_recv) = r_transport.into_datagram();
 
         // Counters handed out are strictly monotonic and never repeat.
         let mut ct = [0u8; 256];
@@ -2245,7 +2246,7 @@ mod tests {
     fn datagram_bad_inputs_error_without_poisoning_state() {
         let (i_transport, r_transport) = ikpsk1_transport_pair();
         let (mut i_send, _) = i_transport.into_datagram();
-        let (_, r_recv) = r_transport.into_datagram();
+        let (_, mut r_recv) = r_transport.into_datagram();
 
         let mut ct = [0u8; 256];
         let (counter, ct_len) = i_send.encrypt_next(b"ad", b"honest", &mut ct).unwrap();
@@ -2307,7 +2308,7 @@ mod tests {
     #[test]
     fn datagram_and_stream_interoperate_in_order() {
         let (i_transport, r_transport) = ikpsk1_transport_pair();
-        let (mut i_dg_send, i_dg_recv) = i_transport.into_datagram();
+        let (mut i_dg_send, mut i_dg_recv) = i_transport.into_datagram();
         let (mut r_send, mut r_recv) = r_transport.split();
 
         let mut ct = [0u8; 256];
@@ -2340,6 +2341,281 @@ mod tests {
         // Both halves agree on the session id with their stream counterparts.
         assert!(i_dg_send.session_id() == r_recv.session_id());
         assert!(i_dg_recv.session_id() == r_send.session_id());
+    }
+
+    // ── Epoch-ratcheting datagram transport (into_datagram_with_epoch) ─
+    //
+    // These exercise the counter-derived Rekey ratchet. Most use a
+    // deterministic fixed-key transport (`fixed_epoch_transport`) so a test
+    // can seal known bytes and open them on as many independent, matched
+    // receivers as it needs — a real handshake yields fresh random keys and
+    // only one receiver per pair.
+
+    /// A shorthand for a non-zero epoch size.
+    fn epoch(n: u64) -> NonZeroU64 {
+        NonZeroU64::new(n).expect("epoch size must be non-zero")
+    }
+
+    /// A transport built from a fixed, known key in both directions, so
+    /// datagram bytes it seals are deterministic and open on any receiver
+    /// built the same way. Not a real handshake — a test fixture.
+    fn fixed_epoch_transport() -> Transport<Channel> {
+        let key = [0x24u8; 32];
+        Transport::<Channel>::new(
+            CipherState::from_key(key),
+            CipherState::from_key(key),
+            SessionId::from(vec![0xEE; 8]),
+            None,
+            None,
+            None,
+        )
+    }
+
+    /// The Noise §11.3 REKEY known-answer test. Pins the next key derived
+    /// from an all-zero key, cross-checking the raw definition path
+    /// (`ENCRYPT(k, 2^64−1, "", zeros)[..32]`), the `rekey_key` helper, and
+    /// `CipherState::rekey` against one another and against the pinned hex.
+    #[test]
+    fn rekey_kat() {
+        use super::cipher_state::rekey_key;
+
+        let k = [0u8; 32];
+
+        // Definition path: encrypt 32 zeros at nonce 2^64−1 with empty ad,
+        // take the first 32 ciphertext bytes (the 16-byte tag is discarded).
+        let mut scratch = [0u8; 48];
+        ChaChaPoly::encrypt(&k, u64::MAX, &[], &[0u8; 32], &mut scratch).unwrap();
+        let mut definition = [0u8; 32];
+        definition.copy_from_slice(&scratch[..32]);
+
+        // The helper path must agree with the definition, byte for byte.
+        let derived = rekey_key::<ChaChaPoly>(&k).unwrap();
+        assert_eq!(derived, definition);
+
+        // `CipherState::rekey` installs exactly that next key.
+        let mut cs = CipherState::<ChaChaPoly>::from_key(k);
+        cs.rekey().unwrap();
+        assert_eq!(cs.key(), Some(definition));
+
+        // The pinned answer (computed once, cross-checked against the
+        // definition above).
+        assert_eq!(
+            hex::encode(derived),
+            "25ce5d37df19f3783185f2ffd5ab17fa3397c212f02d62fb1733e0b875b74c58",
+            "REKEY next-key KAT drifted"
+        );
+    }
+
+    /// The no-ratchet path is byte-identical to a plain half at epoch 0, and
+    /// the ratchet demonstrably fires at the first boundary. Uses a fixed key
+    /// so the two senders' output can be compared byte for byte.
+    #[test]
+    fn datagram_no_ratchet_byte_identity() {
+        let size = epoch(4);
+        let (mut plain_send, _) = fixed_epoch_transport().into_datagram();
+        let (mut epoch_send, _) = fixed_epoch_transport().into_datagram_with_epoch(size);
+
+        let mut a = [0u8; 64];
+        let mut b = [0u8; 64];
+
+        // Epoch 0 (counters 0..4): the ratcheting sender has not rekeyed, so
+        // its output is byte-for-byte the plain sender's.
+        for _ in 0..4u64 {
+            let (ca, na) = plain_send
+                .encrypt_next(b"ad", b"identical payload", &mut a)
+                .unwrap();
+            let (cb, nb) = epoch_send
+                .encrypt_next(b"ad", b"identical payload", &mut b)
+                .unwrap();
+            assert_eq!(ca, cb);
+            assert_eq!(a[..na], b[..nb]);
+        }
+
+        // Counter 4 crosses into epoch 1: the ratcheting sender rekeys, so its
+        // bytes now diverge from the plain sender's, and a plain receiver
+        // (still on the handshake key) cannot open the epoch-1 packet though
+        // it opens the plain one.
+        let (cp, np) = plain_send.encrypt_next(b"ad", b"x", &mut a).unwrap();
+        let (ce, ne) = epoch_send.encrypt_next(b"ad", b"x", &mut b).unwrap();
+        assert_eq!(cp, 4);
+        assert_eq!(ce, 4);
+        assert_ne!(a[..np], b[..ne]);
+
+        let (_, mut plain_recv) = fixed_epoch_transport().into_datagram();
+        let mut pt = [0u8; 64];
+        assert!(plain_recv.decrypt_at(4, b"ad", &a[..np], &mut pt).is_ok());
+        let err = plain_recv
+            .decrypt_at(4, b"ad", &b[..ne], &mut pt)
+            .unwrap_err();
+        assert!(matches!(err, error::HandshakeError::DecryptionFailed));
+    }
+
+    /// Seal across an epoch boundary and open both in order and reordered.
+    /// The reordered pass proves a straggler from the previous epoch opens
+    /// under the retained previous key, and that a forward commit happens on
+    /// the first future-epoch packet regardless of arrival order.
+    #[test]
+    fn datagram_epoch_boundary_roundtrip_and_reorder() {
+        let size = epoch(4);
+        let (mut send, _) = fixed_epoch_transport().into_datagram_with_epoch(size);
+
+        // Seal counters 0..=5; the boundary N = 4 opens epoch 1.
+        let mut ctbuf = [0u8; 64];
+        let mut sealed: Vec<Vec<u8>> = Vec::new();
+        for i in 0..6u64 {
+            let (c, n) = send
+                .encrypt_next(&[], format!("m{i}").as_bytes(), &mut ctbuf)
+                .unwrap();
+            assert_eq!(c, i);
+            sealed.push(ctbuf[..n].to_vec());
+        }
+
+        let mut pt = [0u8; 64];
+
+        // In order on a fresh receiver: N−1 (epoch 0), N (epoch 1 commit),
+        // N+1 (epoch 1).
+        let (_, mut ra) = fixed_epoch_transport().into_datagram_with_epoch(size);
+        for i in [3u64, 4, 5] {
+            let n = ra.decrypt_at(i, &[], &sealed[i as usize], &mut pt).unwrap();
+            assert_eq!(&pt[..n], format!("m{i}").as_bytes());
+        }
+
+        // Reordered on another fresh receiver: N+1 first (commits epoch 1,
+        // keeps epoch 0 as prev), then the N−1 straggler (opens under prev),
+        // then N.
+        let (_, mut rb) = fixed_epoch_transport().into_datagram_with_epoch(size);
+        for i in [5u64, 3, 4] {
+            let n = rb.decrypt_at(i, &[], &sealed[i as usize], &mut pt).unwrap();
+            assert_eq!(&pt[..n], format!("m{i}").as_bytes());
+        }
+    }
+
+    /// A datagram from two epochs back — older than the retained previous
+    /// key — is refused with the ordinary decrypt error, while a straggler
+    /// from the immediately-preceding epoch still opens.
+    #[test]
+    fn datagram_old_epoch_refused() {
+        let size = epoch(4);
+        let (mut send, _) = fixed_epoch_transport().into_datagram_with_epoch(size);
+
+        let mut ctbuf = [0u8; 64];
+        let mut sealed: Vec<Vec<u8>> = Vec::new();
+        for i in 0..9u64 {
+            let (c, n) = send
+                .encrypt_next(&[], format!("m{i}").as_bytes(), &mut ctbuf)
+                .unwrap();
+            assert_eq!(c, i);
+            sealed.push(ctbuf[..n].to_vec());
+        }
+
+        let (_, mut recv) = fixed_epoch_transport().into_datagram_with_epoch(size);
+        let mut pt = [0u8; 64];
+
+        // Jump straight to epoch 2 (steps = MAX_EPOCH_JUMP, allowed): commits
+        // current = epoch 2, prev = epoch 1.
+        let n = recv.decrypt_at(8, &[], &sealed[8], &mut pt).unwrap();
+        assert_eq!(&pt[..n], b"m8");
+
+        // A straggler from epoch 1 (counter 4) still opens — it is prev.
+        let n = recv.decrypt_at(4, &[], &sealed[4], &mut pt).unwrap();
+        assert_eq!(&pt[..n], b"m4");
+
+        // Epoch 0 (counter 0) is now two epochs back; its key is gone.
+        let err = recv.decrypt_at(0, &[], &sealed[0], &mut pt).unwrap_err();
+        assert!(matches!(err, error::HandshakeError::DecryptionFailed));
+    }
+
+    /// A datagram more than `MAX_EPOCH_JUMP` epochs ahead is refused before
+    /// any key is derived, even when genuine, and the committed state is left
+    /// untouched so reachable epochs still open.
+    #[test]
+    fn datagram_forward_jump_cap_refuses_without_derivation() {
+        let size = epoch(4);
+        let (mut send, _) = fixed_epoch_transport().into_datagram_with_epoch(size);
+
+        let mut ctbuf = [0u8; 64];
+        let mut sealed: Vec<Vec<u8>> = Vec::new();
+        for i in 0..13u64 {
+            let (_, n) = send
+                .encrypt_next(&[], format!("m{i}").as_bytes(), &mut ctbuf)
+                .unwrap();
+            sealed.push(ctbuf[..n].to_vec());
+        }
+
+        let (_, mut recv) = fixed_epoch_transport().into_datagram_with_epoch(size);
+        let mut pt = [0u8; 64];
+
+        // Counter 12 is epoch 3 = MAX_EPOCH_JUMP + 1 beyond the committed
+        // epoch 0. It is refused WITHOUT deriving a key (the cap check returns
+        // before any Rekey chain), even though the packet is genuine.
+        let err = recv.decrypt_at(12, &[], &sealed[12], &mut pt).unwrap_err();
+        assert!(matches!(err, error::HandshakeError::DecryptionFailed));
+
+        // Committed state is untouched: an epoch-0 packet still opens as
+        // current, and the receiver can still advance to a reachable epoch.
+        let n = recv.decrypt_at(0, &[], &sealed[0], &mut pt).unwrap();
+        assert_eq!(&pt[..n], b"m0");
+        let n = recv.decrypt_at(8, &[], &sealed[8], &mut pt).unwrap();
+        assert_eq!(&pt[..n], b"m8");
+    }
+
+    /// A forged packet claiming a valid future epoch (within the cap) opens
+    /// under a candidate key, fails the AEAD tag, and does NOT advance the
+    /// committed state — the one-packet-desync guard.
+    #[test]
+    fn datagram_forged_future_tag_does_not_advance() {
+        let size = epoch(4);
+        let (mut send, _) = fixed_epoch_transport().into_datagram_with_epoch(size);
+
+        let mut ctbuf = [0u8; 64];
+        let mut sealed: Vec<Vec<u8>> = Vec::new();
+        for i in 0..6u64 {
+            let (_, n) = send
+                .encrypt_next(&[], format!("m{i}").as_bytes(), &mut ctbuf)
+                .unwrap();
+            sealed.push(ctbuf[..n].to_vec());
+        }
+
+        let (_, mut recv) = fixed_epoch_transport().into_datagram_with_epoch(size);
+        let mut pt = [0u8; 64];
+
+        // Forge an epoch-1 packet (counter 4, within the cap) with a corrupt
+        // ciphertext. The candidate derivation runs, the tag fails, and the
+        // committed keys must stay at epoch 0.
+        let mut forged = sealed[4].clone();
+        forged[0] ^= 0xFF;
+        let err = recv.decrypt_at(4, &[], &forged, &mut pt).unwrap_err();
+        assert!(matches!(err, error::HandshakeError::DecryptionFailed));
+
+        // Proof of no advance: an epoch-0 packet still opens as current, and a
+        // genuine epoch-1 packet still triggers a fresh, successful commit.
+        let n = recv.decrypt_at(0, &[], &sealed[0], &mut pt).unwrap();
+        assert_eq!(&pt[..n], b"m0");
+        let n = recv.decrypt_at(4, &[], &sealed[4], &mut pt).unwrap();
+        assert_eq!(&pt[..n], b"m4");
+        let n = recv.decrypt_at(5, &[], &sealed[5], &mut pt).unwrap();
+        assert_eq!(&pt[..n], b"m5");
+    }
+
+    /// An epoch-ratcheting sender still refuses to seal at counter 2^64 − 1.
+    /// A huge epoch size keeps the ratchet target trivial so the shared
+    /// exhaustion guard — not the ratchet loop — is what fires.
+    #[test]
+    fn datagram_epoch_seal_refuses_nonce_exhaustion() {
+        let big = NonZeroU64::new(u64::MAX).unwrap();
+        let (mut send, _) = fixed_epoch_transport().into_datagram_with_epoch(big);
+
+        // One short of the cap: succeeds, reports u64::MAX − 1.
+        send.set_counter_for_test(u64::MAX - 1);
+        let mut ct = [0u8; 64];
+        let (c, _) = send.encrypt_next(&[], b"x", &mut ct).unwrap();
+        assert_eq!(c, u64::MAX - 1);
+
+        // Counter is now u64::MAX: the next seal must refuse and write nothing.
+        let mut ct2 = [0xABu8; 64];
+        let err = send.encrypt_next(&[], b"x", &mut ct2).unwrap_err();
+        assert!(matches!(err, error::HandshakeError::NonceOverflow));
+        assert_eq!(ct2, [0xABu8; 64]);
     }
 
     #[test]
