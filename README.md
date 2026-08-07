@@ -156,6 +156,45 @@ proves their identity, and what has to be arranged beforehand.
 | `K` | 1 | both | **both** public keys, exchanged out of band | Two peers who have already swapped keys; no identity goes on the wire at all |
 | `Kpsk0` | 1 | both, plus a shared secret | both public keys **and** a pre-shared key | `K` bound to a secret established during a ceremony |
 
+## When you get it wrong
+
+"It refuses to build" is only worth anything if the refusal tells you something. Two
+kinds of mistake are caught, both before your code runs.
+
+A slip in the pattern itself:
+
+```text
+error: token `e` appears twice in the same message
+ --> src/main.rs:3:15
+  |
+3 |         -> e, e
+  |               ^
+```
+
+And — more usefully — a pattern that parses fine but is not a sound protocol:
+
+```text
+error[E0277]: this Noise pattern never keys the cipher: it performs no DH
+              (ee/es/se/ss) and no psk token, so it provides no confidentiality
+              or authentication
+ --> src/main.rs:3:9
+  |
+3 |     pub Bad<X25519, ChaChaPoly, Blake2b> {
+  |         ^^^ pattern finalises with an unkeyed cipher
+```
+
+That second one is the point. It is not a type error dressed up — it is the compiler
+telling you your protocol is insecure, at the definition, before anything else compiles.
+The same guard rejects a Diffie–Hellman over a key that has not been transmitted yet, a
+key sent twice, and a Diffie–Hellman in a pre-message — the rules of Noise §7.3, checked
+by the type system.
+
+Both messages are pinned by tests — the first by `tests/ui/duplicate_token.stderr`, the
+second by a `compile_fail` doctest on `WellFormed` — so they are regression-locked, not
+aspirational. Reproduced here with the fixture paths replaced by a plausible `src/main.rs`,
+one over-long line wrapped, and the trait-bound detail below the second error trimmed;
+the diagnostic text itself is verbatim.
+
 ## The handshake step by step — `N` over the driver API
 
 A token-by-token tour of one *one-way* pattern, driven by the I/O driver rather than the
