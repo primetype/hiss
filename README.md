@@ -8,8 +8,9 @@ Noise's own notation; `hiss` generates the code for it, sizes every message at c
 time, and refuses to build a handshake that is malformed.
 
 > **Status: `0.1` — unstable API, not independently audited.** See
-> [Security](#security) before relying on it. Note that `0.1.0` on crates.io predates the
-> `noise!` macro described below; this README documents the unreleased tree.
+> [How this is tested](#how-this-is-tested) and [Security](#security) before relying on
+> it. Note that `0.1.0` on crates.io predates the `noise!` macro described below; this
+> README documents the unreleased tree.
 
 [noise]: https://noiseprotocol.org/
 
@@ -306,6 +307,25 @@ without touching the Noise core.
 
 The `noise!` macro needs no feature — `hiss-macros` is a required dependency and the
 macro is re-exported as `hiss::noise!`.
+
+## How this is tested
+
+No audit has happened. This is what stands in for one — every row runs in CI on each
+commit.
+
+| Check | What it establishes |
+|-------|---------------------|
+| **Interoperability with [`snow`](https://crates.io/crates/snow)** | 22 tests over P-256 and 5 over X25519 run one side of a handshake with `hiss` and the other with `snow`, then require both to derive the same handshake hash and to exchange transport messages in both directions. A one-byte disagreement between the two implementations fails the suite. |
+| **Frozen known-answer vectors** | 12 tests replay byte-for-byte expectations across all eleven patterns, with ephemerals pinned by a scripted RNG, checking every handshake ciphertext, the final handshake hash, and the transport ciphertexts. **These were generated from `snow`, not from a standards body** — P-256 is not in the Noise specification, so no third-party vectors exist for it. Treat them as a regression lock, not independent conformance. |
+| **Wycheproof** | 484 ECDSA and 355 ECDH `secp256r1` vectors from Google's Project Wycheproof, vendored verbatim at a pinned commit and run as library unit tests. Third-party and adversarial: malformed points, edge-case scalars, signature malleability. |
+| **Negative tests** | 25 tests assert the *failures*. Twenty are tamper-and-truncate sweeps covering every handshake message of every pattern; the rest reject a non-canonical ephemeral, a wrong PSK, a tampered transport record, a replay, and an out-of-order record. |
+| **Compile-fail tests** | 12 `trybuild` cases pin the compiler diagnostics for malformed patterns, so "it will not build" stays true *and* keeps saying something useful. |
+| **Coverage floor** | CI fails the build below 80% lines / 75% regions. |
+
+Alongside these, each commit is gated on `clippy` with warnings denied, a documentation
+build with warnings denied, and a build on the declared MSRV.
+
+None of that is an audit, and none of it is a substitute for one.
 
 ## Security
 
