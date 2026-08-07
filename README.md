@@ -7,8 +7,9 @@ Built on the [Noise Protocol Framework][noise]. You write the handshake you want
 Noise's own notation; `hiss` generates the code for it, sizes every message at compile
 time, and refuses to build a handshake that is malformed.
 
-> **Status: pre-release (`0.1`), not yet published.** The API is unstable and the code
-> has **not** been independently audited. See [Security](#security) before relying on it.
+> **Status: `0.1` — unstable API, not independently audited.** See
+> [Security](#security) before relying on it. Note that `0.1.0` on crates.io predates the
+> `noise!` macro described below; this README documents the unreleased tree.
 
 [noise]: https://noiseprotocol.org/
 

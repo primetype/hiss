@@ -144,10 +144,8 @@
 //! Two peers authenticate each other and exchange an encrypted message in
 //! each direction, neither knowing the other's key in advance. Four steps,
 //! each one a doctest that compiles and runs. Assembled into a single
-//! program it is [`examples/quickstart.rs`][ex] — `cargo run --example
-//! quickstart`.
-//!
-//! [ex]: https://github.com/primetype/hiss/blob/main/examples/quickstart.rs
+//! program it is the `quickstart` example in the repository —
+//! `cargo run --example quickstart`.
 //!
 //! ### 1. Describe the handshake you want
 //!
