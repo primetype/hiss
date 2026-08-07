@@ -125,6 +125,36 @@ The `fallback` modifier — and the compound protocols it enables (e.g. Noise Pi
 in the Noise spec, which presents it only as an illustrative building block, and is
 unnecessary for the targeted use cases; `snow` omits it for the same reason.
 
+## Which pattern?
+
+**If you are not sure, use `XX`** — the Quickstart's pattern. It needs nothing arranged in
+advance, authenticates both sides, and hides both identities from anyone watching the
+wire. Move off it only when a row below describes your situation better.
+
+Both sides get confidentiality and forward secrecy in every pattern; what differs is who
+proves their identity, and what has to be arranged beforehand.
+
+**Interactive — both sides talk:**
+
+| Pattern | Msgs | Whose identity is proven | Must be arranged in advance | Reach for it when |
+|---------|:----:|--------------------------|-----------------------------|-------------------|
+| **`XX`** | 3 | both | nothing | **The default.** Neither side pre-knows the other, and both identities stay hidden from a passive eavesdropper |
+| `IK` | 2 | both | initiator knows the responder's public key | You already ship the server's key inside the client — fewest round trips for mutual authentication |
+| `IKpsk1` | 2 | both, plus a shared secret | responder's public key **and** a pre-shared key | `IK` for devices enrolled in a ceremony that issued them a per-device secret |
+| `XK` | 3 | both | initiator knows the responder's public key | Like `IK`, but the initiator's identity must stay hidden from an eavesdropper — costs an extra round trip |
+| `IX` | 2 | both | nothing | Mutual authentication with nothing pre-shared, when the initiator's identity need not be private — it goes out in the clear |
+| `NK` | 2 | responder only | initiator knows the responder's public key | Anonymous client, known server, and you want a reply |
+| `NN` | 2 | **neither** | nothing | Only with authentication layered on top. An active machine-in-the-middle defeats it outright |
+
+**One-way — a single sealed message, no reply:**
+
+| Pattern | Msgs | Whose identity is proven | Must be arranged in advance | Reach for it when |
+|---------|:----:|--------------------------|-----------------------------|-------------------|
+| `N` | 1 | recipient only | sender knows the recipient's public key | Sealing something to a known public key; the sender stays anonymous |
+| `X` | 1 | both | sender knows the recipient's public key | Like `N`, but the message also proves who sent it — the sender's key travels encrypted |
+| `K` | 1 | both | **both** public keys, exchanged out of band | Two peers who have already swapped keys; no identity goes on the wire at all |
+| `Kpsk0` | 1 | both, plus a shared secret | both public keys **and** a pre-shared key | `K` bound to a secret established during a ceremony |
+
 ## The handshake step by step — `N` over the driver API
 
 A token-by-token tour of one *one-way* pattern, driven by the I/O driver rather than the
@@ -227,31 +257,16 @@ assert_eq!(&opened, quote); // "Not all those who wander are lost."
 
 With the `async-io` feature the same chain runs over `tokio::io` via `AsyncHandshake`;
 to drive a handshake with no I/O at all — fixed-size messages you transport yourself —
-use the `noise!` macro instead. The mutual-authentication patterns (`K`, `Kpsk0`, `IKpsk1`, `IK`) follow the
-same builder shape with additional pre-message setters; `NK` is interactive and
-responder-authenticated (the initiator is anonymous) and likewise pre-knows the
-responder's static key via `set_rs`. `XK` is a three-message, mutually-authenticated
-handshake with strong initiator-identity privacy: it pre-knows the responder's static
-via `set_rs`/`set_s` like `IK`, but defers the initiator's own static to an
-encrypted third flight, so the initiator's identity is hidden from a passive
-eavesdropper. `IX` is interactive and mutually authenticated
-but has **no pre-message setters** — neither side pre-knows the other's static; both
-transmit their static keys during the handshake as `s` tokens (the initiator's in the
-clear, the responder's encrypted). `NN` is the **unauthenticated** interactive pattern:
-both parties are anonymous (no static keys, no pre-message setters), so it offers
-confidentiality only against a passive eavesdropper — there is no protection against an
-active man-in-the-middle — with full forward secrecy once the ephemerals are mixed.
-`XX` is the **canonical** three-message, mutually-authenticated pattern: like `IX` it has
-**no pre-message setters** — neither side pre-knows the other's static — but unlike `IX`
-**both** statics are transmitted *encrypted* during the handshake (after `ee` keys the
-cipher), so **both identities are hidden from a passive eavesdropper**. Both parties send
-their static keys via `s` tokens; full forward secrecy follows the `ee` DH.
-`X` is a **one-way** authenticated seal: like the Quickstart's `N` it is a single message
-to a recipient whose static key the sender already pre-knows (via `set_rs`), but it
-additionally transmits the **sender's** own static key *encrypted in-band* (after `es`
-keys the cipher). The message is sender-authenticated via `ss` and the sender's identity
-stays hidden from a passive eavesdropper — `IK`'s msg1 with no reply. Compared with `K`
-(which pre-shares both statics out of band), `X` carries the sender's static on the wire.
+use the `noise!` macro instead.
+
+Every pattern follows this same builder shape. What varies is the pre-message setters
+each one requires before the token methods become available: whatever the pattern must
+know in advance (the *Must be arranged in advance* column of
+[Which pattern?](#which-pattern)) arrives through `set_rs` for the peer's public key and
+`set_s` for your own private key. Patterns with nothing arranged in advance — `XX`, `IX`,
+`NN` — have no setters at all, and send their static keys during the handshake instead.
+The compiler will not let you start a message until every setter the pattern needs has
+been called.
 
 ## Providers
 
