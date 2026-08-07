@@ -27,11 +27,19 @@ exclude = ["/demo", "/hiss-macros"]
 
 # docs.rs builds with every feature so the `async-io` driver is documented,
 # and passes `--cfg docsrs` so the `#[doc(cfg(...))]` feature/platform badges
-# (gated behind `cfg_attr(docsrs, ...)`) render. Apple-only items still only
-# appear on an Apple target; the default docs.rs (Linux) build omits them.
+# (gated behind `cfg_attr(docsrs, ...)`) render.
+#
+# Apple-only items (`AppleSecureEnclave`, the Secure Enclave provider) do not
+# exist on a Linux build, so the default docs.rs target omits them entirely.
+# Building an Apple target as well puts them in the platform selector; without
+# this the Secure Enclave support is undocumented on docs.rs no matter what the
+# source says. `default-target` is pinned explicitly so adding `targets` does
+# not silently promote the first entry to the default.
 [package.metadata.docs.rs]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
+default-target = "x86_64-unknown-linux-gnu"
+targets = ["aarch64-apple-darwin"]
 
 
 [dependencies]

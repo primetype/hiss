@@ -271,6 +271,40 @@ been called.
 
 ## Providers
 
+A *provider* holds the private keys and performs the key agreement. The default is
+software; on macOS and iOS you can move the private key into the Secure Enclave, where it
+is generated and where it stays — the process never sees the key material, only a handle
+to it.
+
+Swapping the provider is the whole change. Everything after the first two lines is
+identical to the [Quickstart](#quickstart):
+
+```rust
+use hiss::noise::{Blake2b, ChaChaPoly, P256};
+use hiss::provider::{AppleSecureEnclave, ProviderExt};
+
+hiss::noise! {
+    pub Channel<P256, ChaChaPoly, Blake2b> {
+        -> e
+        <- e, ee, s, es
+        -> s, se
+    }
+}
+
+// Generated inside the enclave, persisted to the Keychain, never extractable.
+let mut keys = AppleSecureEnclave::new("uk.co.example.app");
+let static_key = keys.generate::<P256>()?;
+
+// From here nothing is Apple-specific.
+let (msg1, hs) = Channel::initiator(keys, &[]).write_message_1()?;
+```
+
+The suite names `P256` because the Secure Enclave implements that curve and no other.
+This snippet is a compiled doctest on `AppleSecureEnclave`, marked `no_run` — running it
+needs enclave hardware and a provisioned entitlement.
+
+### Which backends can do this
+
 Standard Noise authenticates and key-agrees **only via raw ECDH** — there is no signature
 token in the handshake. A backend can therefore serve the Noise **DH (key-agreement)**
 role only if it can yield a value Noise can mix (the raw shared secret, or the result of

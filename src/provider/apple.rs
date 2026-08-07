@@ -405,6 +405,40 @@ impl P256r1PrivateKey {
 /// `namespace` is a required, caller-supplied reverse-DNS base (no
 /// default): it names the persisted slots so independent identities on a
 /// device never collide.
+///
+/// # Example
+///
+/// Swapping the provider is the whole change — every handshake call below
+/// is identical to the software backend's. The suite must name
+/// [`P256`]: the Secure Enclave implements that curve and no other.
+///
+/// ```no_run
+/// use hiss::noise::{Blake2b, ChaChaPoly, P256};
+/// use hiss::provider::{AppleSecureEnclave, ProviderExt};
+///
+/// hiss::noise! {
+///     pub Channel<P256, ChaChaPoly, Blake2b> {
+///         -> e
+///         <- e, ee, s, es
+///         -> s, se
+///     }
+/// }
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+///
+/// // Generated inside the enclave, persisted to the Keychain, never extractable.
+/// let mut keys = AppleSecureEnclave::new("uk.co.example.app");
+/// let static_key = keys.generate::<P256>()?;
+///
+/// // From here nothing is Apple-specific.
+/// let (msg1, hs) = Channel::initiator(keys, &[]).write_message_1()?;
+/// # let _ = (msg1, hs, static_key);
+/// # Ok(())
+/// # }
+/// ```
+///
+/// This is a `no_run` doctest: it is compiled on every Apple build, but
+/// executing it needs real Secure Enclave hardware and a provisioned
+/// entitlement, neither of which a CI runner has.
 #[derive(Clone)]
 pub struct AppleSecureEnclave {
     namespace: String,
