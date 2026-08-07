@@ -218,7 +218,11 @@ without touching the Noise core.
 
 | Feature | Default | Effect |
 |---------|:-------:|--------|
+| `x25519-cryptoxide` | **yes** | Backs X25519's software Diffie–Hellman with `cryptoxide`'s implementation (the faster backend). `--no-default-features` falls back to the `eccoxide` ladder; the output is byte-for-byte identical, so this only changes which dependency carries the primitive. |
 | `async-io` | no | Adds the `tokio::io` streaming handshake driver (`AsyncHandshake`), pulling in `tokio` with its I/O extension traits. The blocking `std::io` driver needs no feature and no runtime. |
+
+The `noise!` macro needs no feature — `hiss-macros` is a required dependency and the
+macro is re-exported as `hiss::noise!`.
 
 ## Security
 
