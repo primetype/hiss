@@ -27,11 +27,14 @@ Secure Enclave today), and are wiped on drop.
   `SigningProvider` for identity signing, each paired with an `…Async` refinement — lets
   the same handshake run against a software backend or a hardware-backed one (Apple Secure
   Enclave). See [Providers](#providers).
-- **Two streaming drivers.** A blocking `std::io` driver (`SyncHandshake`, always
-  available) and an optional `tokio::io` driver (`AsyncHandshake`, behind the `async-io`
-  feature). The buffer / no-syscall / one-shot case is simply passing an in-memory `Io` —
-  a `Cursor`, `Vec`, or `&mut [u8]` — to the synchronous driver; there is no separate
-  buffer API.
+- **You write the pattern; the macro writes the code.** `noise!` takes a handshake
+  pattern in the Noise specification's own notation and generates its state machine —
+  one method per message, every message a fixed-size `[u8; N]` known at compile time.
+  It performs no I/O: it hands you bytes and you move them however you already move
+  bytes. **This is the API to reach for.**
+- **I/O drivers, secondary.** `SyncHandshake` (blocking `std::io`) and `AsyncHandshake`
+  (`tokio::io`, behind the `async-io` feature) own the stream and step the handshake
+  over it — convenient when you already hold a socket.
 
 ## Supported suite
 
@@ -59,6 +62,14 @@ The `N` pattern is a one-way, sender-anonymous seal: anyone who knows a recipien
 public key can send it one confidential, authenticated message, with no reply. The whole
 exchange is the single Noise message `-> e, es`; we build it over `X25519` in five steps.
 (This mirrors the crate-level doctest, which compiles and runs each step.)
+
+The tour below is written against the **I/O driver** API, which owns the stream for you
+and so makes the smallest step-by-step walkthrough. For the `noise!` macro — the API to
+reach for in new code — see [`examples/tcp_ikpsk1_ceremony.rs`][ceremony] and the
+[crate documentation][docs].
+
+[ceremony]: examples/tcp_ikpsk1_ceremony.rs
+[docs]: https://docs.rs/hiss
 
 ### 1. The recipient's static key pair
 
@@ -146,9 +157,9 @@ opened.truncate(m);
 assert_eq!(&opened, quote); // "Not all those who wander are lost."
 ```
 
-The buffer / no-syscall case is just an in-memory `Io` (a `Cursor`, `Vec`, or
-`&mut [u8]`), as the example above shows; with the `async-io` feature the same chain runs
-over `tokio::io` via `AsyncHandshake`. The mutual-authentication patterns (`K`, `Kpsk0`, `IKpsk1`, `IK`) follow the
+With the `async-io` feature the same chain runs over `tokio::io` via `AsyncHandshake`;
+to drive a handshake with no I/O at all — fixed-size messages you transport yourself —
+use the `noise!` macro instead. The mutual-authentication patterns (`K`, `Kpsk0`, `IKpsk1`, `IK`) follow the
 same builder shape with additional pre-message setters; `NK` is interactive and
 responder-authenticated (the initiator is anonymous) and likewise pre-knows the
 responder's static key via `set_rs`. `XK` is a three-message, mutually-authenticated
