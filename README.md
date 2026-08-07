@@ -14,12 +14,17 @@ time, and refuses to build a handshake that is malformed.
 
 ## Quickstart
 
-Two peers, neither knowing the other's key in advance, ending with an encrypted message
-in each direction. This is a doctest — it compiles and runs exactly as written.
+Two peers authenticate each other and exchange an encrypted message in each direction,
+neither knowing the other's key in advance. Four steps, each one a doctest that compiles
+and runs. Assembled into a single program it is
+[`examples/quickstart.rs`](examples/quickstart.rs) — `cargo run --example quickstart`.
+
+**1. Describe the handshake you want.** You write it in the Noise specification's own
+notation and `hiss` generates the code. `Channel` here is the `XX` shape: three messages,
+both sides proving who they are along the way.
 
 ```rust
-use hiss::noise::{Blake2b, ChaChaPoly, Transport, X25519};
-use hiss::provider::{EphemeralOnly, ProviderExt};
+use hiss::noise::{Blake2b, ChaChaPoly, X25519};
 
 hiss::noise! {
     /// Mutual authentication; neither side pre-knows the other's key.
@@ -29,39 +34,54 @@ hiss::noise! {
         -> s, se
     }
 }
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // One long-term key per side. Nothing is shared beforehand.
-    let mut alice_keys = EphemeralOnly::new(rand::rng());
-    let alice_static = alice_keys.generate::<X25519>()?;
-    let mut bob_keys = EphemeralOnly::new(rand::rng());
-    let bob_static = bob_keys.generate::<X25519>()?;
-
-    // Three messages. hiss hands you bytes; moving them is your job.
-    let (msg1, alice) = Channel::initiator(alice_keys, &[]).write_message_1()?;
-    let bob = Channel::responder(bob_keys, &[]).read_message_1(&msg1)?;
-    let (msg2, bob) = bob.write_message_2(bob_static)?;
-    let (msg3, mut alice) = alice.read_message_2(&msg2)?.write_message_3(alice_static)?;
-    let mut bob = bob.read_message_3(&msg3)?;
-
-    // Encrypted, both directions.
-    let mut wire = [0u8; 32 + Transport::<Channel>::OVERHEAD];
-    let mut got = [0u8; 32];
-
-    let n = alice.send(b"ping", &mut wire)?;
-    let m = bob.receive(&wire[..n], &mut got)?;
-    assert_eq!(&got[..m], b"ping");
-
-    let n = bob.send(b"pong", &mut wire)?;
-    let m = alice.receive(&wire[..n], &mut got)?;
-    assert_eq!(&got[..m], b"pong");
-    Ok(())
-}
 ```
 
-That block is the four lines of `Channel<…>` above and five lines of handshake. Every
-message size is a compile-time constant (`Channel::MSG1_SIZE`, …), so framing is free:
-read exactly that many bytes. `hiss` never touches your socket.
+**2. Give each side a long-term key.** `Channel` authenticates both parties, so each owns
+a key pair that outlives the connection. Nothing is shared in advance — they exchange
+public halves during the handshake.
+
+```rust
+use hiss::provider::{EphemeralOnly, ProviderExt};
+
+let mut alice_keys = EphemeralOnly::new(rand::rng());
+let alice_static = alice_keys.generate::<X25519>()?;
+
+let mut bob_keys = EphemeralOnly::new(rand::rng());
+let bob_static = bob_keys.generate::<X25519>()?;
+```
+
+**3. Run the handshake.** Three messages, and this is all of it. Each call hands you the
+bytes to send; putting them on a socket, a queue, or a QR code is your business — `hiss`
+performs no I/O.
+
+```rust
+let (msg1, alice) = Channel::initiator(alice_keys, &[]).write_message_1()?;
+let bob = Channel::responder(bob_keys, &[]).read_message_1(&msg1)?;
+let (msg2, bob) = bob.write_message_2(bob_static)?;
+let (msg3, mut alice) = alice.read_message_2(&msg2)?.write_message_3(alice_static)?;
+let mut bob = bob.read_message_3(&msg3)?;
+```
+
+Every message size is a compile-time constant — `Channel::MSG1_SIZE` and friends — so
+framing the handshake is free: read exactly that many bytes.
+
+**4. Talk.** Both ends now hold a `Transport`. `OVERHEAD` is what the authentication tag
+costs you per message.
+
+```rust
+use hiss::noise::Transport;
+
+let mut wire = [0u8; 32 + Transport::<Channel>::OVERHEAD];
+let mut got = [0u8; 32];
+
+let n = alice.send(b"ping", &mut wire)?;
+let m = bob.receive(&wire[..n], &mut got)?;
+assert_eq!(&got[..m], b"ping");
+
+let n = bob.send(b"pong", &mut wire)?;
+let m = alice.receive(&wire[..n], &mut got)?;
+assert_eq!(&got[..m], b"pong");
+```
 
 ## What it offers
 
