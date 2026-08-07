@@ -139,24 +139,62 @@
 //!
 //! [noise]: https://noiseprotocol.org/
 //!
-//! # Quickstart — seal a message with the `N` pattern, step by step
+//! # Quickstart
 //!
-//! The sans-io macro API in miniature (see [`noise!`](crate::noise!) for the
-//! full DSL and generated methods):
+//! Two peers, neither knowing the other's key in advance, ending with an
+//! encrypted message in each direction. This compiles and runs exactly as
+//! written — it is a doctest.
 //!
-//! ```ignore
+//! ```rust
+//! use hiss::noise::{Blake2b, ChaChaPoly, Transport, X25519};
+//! use hiss::provider::{EphemeralOnly, ProviderExt};
+//!
 //! hiss::noise! {
+//!     /// Mutual authentication; neither side pre-knows the other's key.
 //!     pub Channel<X25519, ChaChaPoly, Blake2b> {
 //!         -> e
 //!         <- e, ee, s, es
 //!         -> s, se
 //!     }
 //! }
-//! // let (msg1, hs) = Channel::initiator(provider, prologue).write_message_1()?;
+//!
+//! fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     // One long-term key per side. Nothing is shared beforehand.
+//!     let mut alice_keys = EphemeralOnly::new(rand::rng());
+//!     let alice_static = alice_keys.generate::<X25519>()?;
+//!     let mut bob_keys = EphemeralOnly::new(rand::rng());
+//!     let bob_static = bob_keys.generate::<X25519>()?;
+//!
+//!     // Three messages. hiss hands you bytes; moving them is your job.
+//!     let (msg1, alice) = Channel::initiator(alice_keys, &[]).write_message_1()?;
+//!     let bob = Channel::responder(bob_keys, &[]).read_message_1(&msg1)?;
+//!     let (msg2, bob) = bob.write_message_2(bob_static)?;
+//!     let (msg3, mut alice) = alice.read_message_2(&msg2)?.write_message_3(alice_static)?;
+//!     let mut bob = bob.read_message_3(&msg3)?;
+//!
+//!     // Encrypted, both directions.
+//!     let mut wire = [0u8; 32 + Transport::<Channel>::OVERHEAD];
+//!     let mut got = [0u8; 32];
+//!
+//!     let n = alice.send(b"ping", &mut wire)?;
+//!     let m = bob.receive(&wire[..n], &mut got)?;
+//!     assert_eq!(&got[..m], b"ping");
+//!
+//!     let n = bob.send(b"pong", &mut wire)?;
+//!     let m = alice.receive(&wire[..n], &mut got)?;
+//!     assert_eq!(&got[..m], b"pong");
+//!     Ok(())
+//! }
 //! ```
 //!
-//! The remaining steps use the **driver API** for a fully-worked, runnable
-//! tour:
+//! Every message size is a compile-time constant (`Channel::MSG1_SIZE`, …),
+//! so framing the handshake is free: read exactly that many bytes.
+//!
+//! # The handshake step by step — the `N` pattern over the driver API
+//!
+//! A fully-worked tour of one *one-way* pattern, driven by the I/O driver
+//! rather than the macro. Useful for seeing each token's effect in isolation;
+//! for new code, prefer the macro above.
 //!
 //! [`N`](noise::pattern::N) is a one-way, sender-anonymous seal: anyone who knows a
 //! recipient's static public key can send it one confidential, authenticated
