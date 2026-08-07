@@ -1,19 +1,67 @@
 # hiss
 
-**Static Noise.** The [Noise Protocol Framework][noise], resolved at compile time.
+**Encrypted, authenticated channels between two peers you control — with the handshake
+checked by the compiler, and private keys that can stay in an Apple Secure Enclave.**
 
-A `Noise<Pattern, Curve, Cipher, Hash>` is zero-sized: the handshake pattern, curve,
-cipher, and hash are encoded as *types*, so every buffer size is a `const` and every
-protocol misuse — a token out of order, a wrong-direction message — is a **compile
-error**. Get the handshake wrong and it never builds.
-
-Secret keys live in software or behind a pluggable, hardware-backed provider (Apple
-Secure Enclave today), and are wiped on drop.
+Built on the [Noise Protocol Framework][noise]. You write the handshake you want in
+Noise's own notation; `hiss` generates the code for it, sizes every message at compile
+time, and refuses to build a handshake that is malformed.
 
 > **Status: pre-release (`0.1`), not yet published.** The API is unstable and the code
 > has **not** been independently audited. See [Security](#security) before relying on it.
 
 [noise]: https://noiseprotocol.org/
+
+## Quickstart
+
+Two peers, neither knowing the other's key in advance, ending with an encrypted message
+in each direction. This is a doctest — it compiles and runs exactly as written.
+
+```rust
+use hiss::noise::{Blake2b, ChaChaPoly, Transport, X25519};
+use hiss::provider::{EphemeralOnly, ProviderExt};
+
+hiss::noise! {
+    /// Mutual authentication; neither side pre-knows the other's key.
+    pub Channel<X25519, ChaChaPoly, Blake2b> {
+        -> e
+        <- e, ee, s, es
+        -> s, se
+    }
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // One long-term key per side. Nothing is shared beforehand.
+    let mut alice_keys = EphemeralOnly::new(rand::rng());
+    let alice_static = alice_keys.generate::<X25519>()?;
+    let mut bob_keys = EphemeralOnly::new(rand::rng());
+    let bob_static = bob_keys.generate::<X25519>()?;
+
+    // Three messages. hiss hands you bytes; moving them is your job.
+    let (msg1, alice) = Channel::initiator(alice_keys, &[]).write_message_1()?;
+    let bob = Channel::responder(bob_keys, &[]).read_message_1(&msg1)?;
+    let (msg2, bob) = bob.write_message_2(bob_static)?;
+    let (msg3, mut alice) = alice.read_message_2(&msg2)?.write_message_3(alice_static)?;
+    let mut bob = bob.read_message_3(&msg3)?;
+
+    // Encrypted, both directions.
+    let mut wire = [0u8; 32 + Transport::<Channel>::OVERHEAD];
+    let mut got = [0u8; 32];
+
+    let n = alice.send(b"ping", &mut wire)?;
+    let m = bob.receive(&wire[..n], &mut got)?;
+    assert_eq!(&got[..m], b"ping");
+
+    let n = bob.send(b"pong", &mut wire)?;
+    let m = alice.receive(&wire[..n], &mut got)?;
+    assert_eq!(&got[..m], b"pong");
+    Ok(())
+}
+```
+
+That block is the four lines of `Channel<…>` above and five lines of handshake. Every
+message size is a compile-time constant (`Channel::MSG1_SIZE`, …), so framing is free:
+read exactly that many bytes. `hiss` never touches your socket.
 
 ## What it offers
 
@@ -56,20 +104,19 @@ The `fallback` modifier — and the compound protocols it enables (e.g. Noise Pi
 in the Noise spec, which presents it only as an illustrative building block, and is
 unnecessary for the targeted use cases; `snow` omits it for the same reason.
 
-## Quickstart
+## The handshake step by step — `N` over the driver API
+
+A token-by-token tour of one *one-way* pattern, driven by the I/O driver rather than the
+macro. Useful for seeing each step's effect in isolation; for new code, prefer the
+Quickstart above. A worked macro example lives in
+[`examples/tcp_ikpsk1_ceremony.rs`][ceremony].
 
 The `N` pattern is a one-way, sender-anonymous seal: anyone who knows a recipient's static
 public key can send it one confidential, authenticated message, with no reply. The whole
 exchange is the single Noise message `-> e, es`; we build it over `X25519` in five steps.
 (This mirrors the crate-level doctest, which compiles and runs each step.)
 
-The tour below is written against the **I/O driver** API, which owns the stream for you
-and so makes the smallest step-by-step walkthrough. For the `noise!` macro — the API to
-reach for in new code — see [`examples/tcp_ikpsk1_ceremony.rs`][ceremony] and the
-[crate documentation][docs].
-
 [ceremony]: examples/tcp_ikpsk1_ceremony.rs
-[docs]: https://docs.rs/hiss
 
 ### 1. The recipient's static key pair
 
