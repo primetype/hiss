@@ -15,7 +15,13 @@ use hiss::provider::{EphemeralOnly, ProviderExt};
 use rand::{SeedableRng, rngs::StdRng};
 
 // The bare pattern markers are curve-agnostic; spell the X448 suite out.
-hiss::noise! { pub Xx448<X448, ChaChaPoly, Blake2b> { -> e <- e, ee, s, es -> s, se } }
+//
+// The declared identifier *is* the Noise pattern name: it becomes
+// `Pattern::NAME`, which goes into the protocol name mixed into the initial
+// handshake hash. So this must be `XX` — a descriptive alias like `Xx448`
+// would silently produce `Noise_Xx448_448_ChaChaPoly_BLAKE2b` and interop
+// with nothing.
+hiss::noise! { pub XX<X448, ChaChaPoly, Blake2b> { -> e <- e, ee, s, es -> s, se } }
 
 #[test]
 fn xx_round_trip_hiss_to_hiss_over_x448() {
@@ -27,8 +33,8 @@ fn xx_round_trip_hiss_to_hiss_over_x448() {
 
     // XX has no pre-messages, so both constructors are infallible and take
     // nothing but a provider and the prologue.
-    let i_hs = Xx448::initiator(EphemeralOnly::new(StdRng::from_os_rng()), &[]);
-    let r_hs = Xx448::responder(EphemeralOnly::new(StdRng::from_os_rng()), &[]);
+    let i_hs = XX::initiator(EphemeralOnly::new(StdRng::from_os_rng()), &[]);
+    let r_hs = XX::responder(EphemeralOnly::new(StdRng::from_os_rng()), &[]);
 
     // msg1: -> e (bare ephemeral, cipher never keyed)
     let (msg1, i_hs) = i_hs.write_message_1().unwrap();

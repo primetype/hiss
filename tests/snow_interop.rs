@@ -10,10 +10,15 @@
 //! 1. The handshake completes successfully
 //! 2. Both sides derive the same handshake hash
 //! 3. Transport messages can be exchanged bidirectionally
+//!
+//! Every `noise!` declaration below is named for its Noise pattern — `IK`,
+//! `XX`, `Kpsk0` — and not for what the channel is *for*. That is load
+//! bearing: the declared identifier becomes `Pattern::NAME`, which forms the
+//! protocol name (`Noise_IK_P256_ChaChaPoly_BLAKE2b`) mixed into the initial
+//! handshake hash. A descriptive alias like `Channel` yields
+//! `Noise_Channel_…`, which is self-consistent — hiss talks to hiss quite
+//! happily — and interoperates with nothing. These tests are what catches it.
 
-mod common;
-
-use common::PeerStream;
 use hiss::noise::*;
 use hiss::provider::EphemeralOnly;
 use hiss::provider::ProviderExt;
@@ -21,6 +26,15 @@ use hiss::psk::Psk;
 use rand::{SeedableRng, rngs::StdRng};
 
 const PROTOCOL: &str = "Noise_IKpsk1_P256_ChaChaPoly_BLAKE2b";
+
+/// snow writes into a `&mut [u8]` and reports how much it used; the
+/// generated readers take a fixed-size array. Narrowing here pins the wire
+/// size: if the two implementations disagreed about how long a message is,
+/// this is where it would fail — before any crypto runs.
+fn exact<const N: usize>(buf: &[u8]) -> &[u8; N] {
+    buf.try_into()
+        .expect("snow's message length matches the generated wire size")
+}
 
 // ── IKpsk1: our initiator ↔ snow responder ──────────────────────
 
@@ -51,30 +65,18 @@ fn ikpsk1_hiss_initiator_snow_responder() {
         .unwrap();
 
     // ── Our initiator setup ──────────────────────────────────
-    type Channel = Noise<pattern::IKpsk1, P256, ChaChaPoly, Blake2b>;
-
-    let stream = PeerStream::new();
-    let i_hs = SyncHandshake::<Channel, Initiator, _, _, _, _>::initiate(
-        EphemeralOnly::new(StdRng::from_os_rng()),
-        &[],
-        stream.clone(),
-    )
-    .set_rs(responder_pub);
+    hiss::noise! {
+        pub IKpsk1<P256, ChaChaPoly, Blake2b> { <- s ... -> e, es, s, ss, psk <- e, ee, se }
+    }
 
     // ── Message 1: -> e, es, s, ss, psk (our initiator sends) ──
-    let i_hs = i_hs
-        .e()
-        .unwrap()
-        .es()
-        .unwrap()
-        .s(initiator_static)
-        .unwrap()
-        .ss()
-        .unwrap()
-        .psk(&psk)
-        .unwrap();
-
-    let msg1 = stream.take_written();
+    let (msg1, i_hs) = IKpsk1::initiator(
+        EphemeralOnly::new(StdRng::from_os_rng()),
+        &[],
+        responder_pub,
+    )
+    .write_message_1(initiator_static, &psk)
+    .unwrap();
 
     // Snow responder reads msg1.
     let mut buf = [0u8; 256];
@@ -83,11 +85,9 @@ fn ikpsk1_hiss_initiator_snow_responder() {
     // ── Message 2: <- e, ee, se (snow responder sends) ──────
     let mut msg2 = [0u8; 256];
     let msg2_len = snow_responder.write_message(&[], &mut msg2).unwrap();
-    stream.feed(&msg2[..msg2_len]);
 
     // Our initiator reads msg2.
-    let (_, recv) = i_hs.recv().e().unwrap();
-    let (mut i_transport, _) = recv.ee().unwrap().se().unwrap().into_parts();
+    let mut i_transport = i_hs.read_message_2(exact(&msg2[..msg2_len])).unwrap();
 
     // Verify handshake hashes match (must check before transport mode).
     assert_eq!(
@@ -145,39 +145,32 @@ fn ikpsk1_snow_initiator_hiss_responder() {
         .unwrap();
 
     // ── Our responder setup ──────────────────────────────────
-    type Channel = Noise<pattern::IKpsk1, P256, ChaChaPoly, Blake2b>;
-
-    let stream = PeerStream::new();
-    let r_hs = SyncHandshake::<Channel, Responder, _, _, _, _>::respond(
-        EphemeralOnly::new(StdRng::from_os_rng()),
-        &[],
-        stream.clone(),
-    )
-    .set_s(responder_static)
-    .unwrap();
+    hiss::noise! {
+        pub IKpsk1<P256, ChaChaPoly, Blake2b> { <- s ... -> e, es, s, ss, psk <- e, ee, se }
+    }
 
     // ── Message 1: -> e, es, s, ss, psk (snow initiator sends) ──
     let mut msg1 = [0u8; 256];
     let msg1_len = snow_initiator.write_message(&[], &mut msg1).unwrap();
-    stream.feed(&msg1[..msg1_len]);
 
     // Our responder reads msg1.
-    let (_, recv) = r_hs.recv().e().unwrap();
-    let recv = recv.es().unwrap();
-    let (revealed_initiator_pub, recv) = recv.s().unwrap();
-    let recv = recv.ss().unwrap();
-    let r_hs = recv.psk(&psk).unwrap();
+    let r_hs = IKpsk1::responder(
+        EphemeralOnly::new(StdRng::from_os_rng()),
+        &[],
+        responder_static,
+    )
+    .unwrap()
+    .read_message_1(exact(&msg1[..msg1_len]), &psk)
+    .unwrap();
 
     // Verify revealed initiator public key matches snow's.
     assert_eq!(
-        revealed_initiator_pub.to_bytes(),
+        r_hs.remote_static().to_bytes(),
         snow_initiator_keypair.public.as_slice(),
     );
 
     // ── Message 2: <- e, ee, se (our responder sends) ───────
-    let (mut r_transport, _) = r_hs.e().unwrap().ee().unwrap().se().unwrap().into_parts();
-
-    let msg2 = stream.take_written();
+    let (msg2, mut r_transport) = r_hs.write_message_2().unwrap();
 
     // Snow initiator reads msg2.
     let mut buf = [0u8; 256];
@@ -231,20 +224,16 @@ fn n_hiss_initiator_snow_responder() {
         .unwrap();
 
     // ── Our initiator seals ──────────────────────────────────
-    type NoiseSeal = Noise<pattern::N, P256, ChaChaPoly, Blake2b>;
+    hiss::noise! { pub N<P256, ChaChaPoly, Blake2b> { <- s ... -> e, es } }
 
-    let stream = PeerStream::new();
-    let sealer = SyncHandshake::<NoiseSeal, Initiator, _, _, _, _>::initiate(
+    let (msg, mut transport) = N::initiator(
         EphemeralOnly::new(StdRng::from_os_rng()),
         &[],
-        stream.clone(),
+        responder_pub,
     )
-    .set_rs(responder_pub);
-
-    let (mut transport, _) = sealer.e().unwrap().es().unwrap().into_parts();
-
-    let msg = stream.take_written();
-    assert_eq!(msg.len(), 81); // 65 (ephemeral) + 16 (payload tag)
+    .write_message_1()
+    .unwrap();
+    assert_eq!(N::MSG1_SIZE, 81); // 65 (ephemeral) + 16 (payload tag)
 
     let mut sealed = [0u8; 64]; // 32 + 16 tag
     let sealed_len = transport.send(psk_to_seal.as_bytes(), &mut sealed).unwrap();
@@ -293,31 +282,20 @@ fn kpsk0_hiss_initiator_snow_responder() {
             .unwrap();
 
     // ── Our initiator seals ──────────────────────────────────
-    type NoiseKpsk0 = Noise<pattern::Kpsk0, P256, ChaChaPoly, Blake2b>;
+    hiss::noise! {
+        pub Kpsk0<P256, ChaChaPoly, Blake2b> { -> s <- s ... -> psk, e, es, ss }
+    }
 
-    let stream = PeerStream::new();
-    let sealer = SyncHandshake::<NoiseKpsk0, Initiator, _, _, _, _>::initiate(
+    let (msg, mut transport) = Kpsk0::initiator(
         EphemeralOnly::new(StdRng::from_os_rng()),
         &[],
-        stream.clone(),
+        alice_static,
+        bob_pub,
     )
-    .set_s(alice_static)
     .unwrap()
-    .set_rs(bob_pub);
-
-    let (mut transport, _) = sealer
-        .psk(&psk)
-        .unwrap()
-        .e()
-        .unwrap()
-        .es()
-        .unwrap()
-        .ss()
-        .unwrap()
-        .into_parts();
-
-    let msg = stream.take_written();
-    assert_eq!(msg.len(), 81); // 65 (ephemeral) + 16 (payload tag)
+    .write_message_1(&psk)
+    .unwrap();
+    assert_eq!(Kpsk0::MSG1_SIZE, 81); // 65 (ephemeral) + 16 (payload tag)
 
     let mut sealed = [0u8; 64];
     let sealed_len = transport.send(&payload, &mut sealed).unwrap();
@@ -357,18 +335,15 @@ fn n_with_prologue_hiss_initiator_snow_responder() {
         .unwrap();
 
     // ── Our initiator seals with prologue ───────────────────────
-    type NoiseSeal = Noise<pattern::N, P256, ChaChaPoly, Blake2b>;
+    hiss::noise! { pub N<P256, ChaChaPoly, Blake2b> { <- s ... -> e, es } }
 
-    let stream = PeerStream::new();
-    let sealer = SyncHandshake::<NoiseSeal, Initiator, _, _, _, _>::initiate(
+    let (msg, mut transport) = N::initiator(
         EphemeralOnly::new(StdRng::from_os_rng()),
         prologue,
-        stream.clone(),
+        responder_pub,
     )
-    .set_rs(responder_pub);
-
-    let (mut transport, _) = sealer.e().unwrap().es().unwrap().into_parts();
-    let msg = stream.take_written();
+    .write_message_1()
+    .unwrap();
 
     let payload = b"sealed with prologue";
     let mut sealed = [0u8; 64];
@@ -412,38 +387,25 @@ fn ikpsk1_with_prologue_hiss_initiator_snow_responder() {
         .build_responder()
         .unwrap();
 
-    type Channel = Noise<pattern::IKpsk1, P256, ChaChaPoly, Blake2b>;
-
-    let stream = PeerStream::new();
-    let i_hs = SyncHandshake::<Channel, Initiator, _, _, _, _>::initiate(
-        EphemeralOnly::new(StdRng::from_os_rng()),
-        prologue,
-        stream.clone(),
-    )
-    .set_rs(responder_pub);
+    hiss::noise! {
+        pub IKpsk1<P256, ChaChaPoly, Blake2b> { <- s ... -> e, es, s, ss, psk <- e, ee, se }
+    }
 
     // msg1: -> e, es, s, ss, psk
-    let i_hs = i_hs
-        .e()
-        .unwrap()
-        .es()
-        .unwrap()
-        .s(initiator_static)
-        .unwrap()
-        .ss()
-        .unwrap()
-        .psk(&psk)
-        .unwrap();
-    let msg1 = stream.take_written();
+    let (msg1, i_hs) = IKpsk1::initiator(
+        EphemeralOnly::new(StdRng::from_os_rng()),
+        prologue,
+        responder_pub,
+    )
+    .write_message_1(initiator_static, &psk)
+    .unwrap();
     let mut buf = [0u8; 256];
     snow_responder.read_message(&msg1, &mut buf).unwrap();
 
     // msg2: <- e, ee, se
     let mut msg2 = [0u8; 256];
     let msg2_len = snow_responder.write_message(&[], &mut msg2).unwrap();
-    stream.feed(&msg2[..msg2_len]);
-    let (_, recv) = i_hs.recv().e().unwrap();
-    let (mut i_transport, _) = recv.ee().unwrap().se().unwrap().into_parts();
+    let mut i_transport = i_hs.read_message_2(exact(&msg2[..msg2_len])).unwrap();
 
     // Handshake hashes must match.
     assert_eq!(
@@ -477,18 +439,15 @@ fn n_rekey_hiss_initiator_snow_responder() {
         .build_responder()
         .unwrap();
 
-    type NoiseSeal = Noise<pattern::N, P256, ChaChaPoly, Blake2b>;
+    hiss::noise! { pub N<P256, ChaChaPoly, Blake2b> { <- s ... -> e, es } }
 
-    let stream = PeerStream::new();
-    let sealer = SyncHandshake::<NoiseSeal, Initiator, _, _, _, _>::initiate(
+    let (msg, mut transport) = N::initiator(
         EphemeralOnly::new(StdRng::from_os_rng()),
         &[],
-        stream.clone(),
+        responder_pub,
     )
-    .set_rs(responder_pub);
-
-    let (mut transport, _) = sealer.e().unwrap().es().unwrap().into_parts();
-    let msg = stream.take_written();
+    .write_message_1()
+    .unwrap();
 
     let mut buf = [0u8; 256];
     snow_responder.read_message(&msg, &mut buf).unwrap();
@@ -531,39 +490,26 @@ fn ikpsk1_rekey_hiss_initiator_snow_responder() {
         .build_responder()
         .unwrap();
 
-    type Channel = Noise<pattern::IKpsk1, P256, ChaChaPoly, Blake2b>;
-
-    let stream = PeerStream::new();
-    let i_hs = SyncHandshake::<Channel, Initiator, _, _, _, _>::initiate(
-        EphemeralOnly::new(StdRng::from_os_rng()),
-        &[],
-        stream.clone(),
-    )
-    .set_rs(responder_pub);
+    hiss::noise! {
+        pub IKpsk1<P256, ChaChaPoly, Blake2b> { <- s ... -> e, es, s, ss, psk <- e, ee, se }
+    }
 
     // Complete handshake.
     // msg1: -> e, es, s, ss, psk
-    let i_hs = i_hs
-        .e()
-        .unwrap()
-        .es()
-        .unwrap()
-        .s(initiator_static)
-        .unwrap()
-        .ss()
-        .unwrap()
-        .psk(&psk)
-        .unwrap();
-    let msg1 = stream.take_written();
+    let (msg1, i_hs) = IKpsk1::initiator(
+        EphemeralOnly::new(StdRng::from_os_rng()),
+        &[],
+        responder_pub,
+    )
+    .write_message_1(initiator_static, &psk)
+    .unwrap();
     let mut buf = [0u8; 256];
     snow_responder.read_message(&msg1, &mut buf).unwrap();
 
     // msg2: <- e, ee, se
     let mut msg2 = [0u8; 256];
     let msg2_len = snow_responder.write_message(&[], &mut msg2).unwrap();
-    stream.feed(&msg2[..msg2_len]);
-    let (_, recv) = i_hs.recv().e().unwrap();
-    let (mut i_transport, _) = recv.ee().unwrap().se().unwrap().into_parts();
+    let mut i_transport = i_hs.read_message_2(exact(&msg2[..msg2_len])).unwrap();
 
     let mut snow_responder = snow_responder.into_transport_mode().unwrap();
 
@@ -619,27 +565,18 @@ fn ik_hiss_initiator_snow_responder() {
         .unwrap();
 
     // ── Our initiator setup ──────────────────────────────────
-    type Channel = Noise<pattern::IK, P256, ChaChaPoly, Blake2b>;
-
-    let stream = PeerStream::new();
-    let i_hs = SyncHandshake::<Channel, Initiator, _, _, _, _>::initiate(
-        EphemeralOnly::new(StdRng::from_os_rng()),
-        &[],
-        stream.clone(),
-    )
-    .set_rs(responder_pub);
+    hiss::noise! {
+        pub IK<P256, ChaChaPoly, Blake2b> { <- s ... -> e, es, s, ss <- e, ee, se }
+    }
 
     // msg1: -> e, es, s, ss (our initiator sends)
-    let i_hs = i_hs
-        .e()
-        .unwrap()
-        .es()
-        .unwrap()
-        .s(initiator_static)
-        .unwrap()
-        .ss()
-        .unwrap();
-    let msg1 = stream.take_written();
+    let (msg1, i_hs) = IK::initiator(
+        EphemeralOnly::new(StdRng::from_os_rng()),
+        &[],
+        responder_pub,
+    )
+    .write_message_1(initiator_static)
+    .unwrap();
 
     let mut buf = [0u8; 256];
     snow_responder.read_message(&msg1, &mut buf).unwrap();
@@ -647,9 +584,7 @@ fn ik_hiss_initiator_snow_responder() {
     // msg2: <- e, ee, se (snow responder sends)
     let mut msg2 = [0u8; 256];
     let msg2_len = snow_responder.write_message(&[], &mut msg2).unwrap();
-    stream.feed(&msg2[..msg2_len]);
-    let (_, recv) = i_hs.recv().e().unwrap();
-    let (mut i_transport, _) = recv.ee().unwrap().se().unwrap().into_parts();
+    let mut i_transport = i_hs.read_message_2(exact(&msg2[..msg2_len])).unwrap();
 
     assert_eq!(
         i_transport.session_id().as_ref(),
@@ -697,37 +632,32 @@ fn ik_snow_initiator_hiss_responder() {
         .unwrap();
 
     // ── Our responder setup ──────────────────────────────────
-    type Channel = Noise<pattern::IK, P256, ChaChaPoly, Blake2b>;
-
-    let stream = PeerStream::new();
-    let r_hs = SyncHandshake::<Channel, Responder, _, _, _, _>::respond(
-        EphemeralOnly::new(StdRng::from_os_rng()),
-        &[],
-        stream.clone(),
-    )
-    .set_s(responder_static)
-    .unwrap();
+    hiss::noise! {
+        pub IK<P256, ChaChaPoly, Blake2b> { <- s ... -> e, es, s, ss <- e, ee, se }
+    }
 
     // msg1: -> e, es, s, ss (snow initiator sends)
     let mut msg1 = [0u8; 256];
     let msg1_len = snow_initiator.write_message(&[], &mut msg1).unwrap();
-    stream.feed(&msg1[..msg1_len]);
 
     // Our responder reads msg1.
-    let (_, recv) = r_hs.recv().e().unwrap();
-    let recv = recv.es().unwrap();
-    let (revealed_initiator_pub, recv) = recv.s().unwrap();
-    let r_hs = recv.ss().unwrap();
+    let r_hs = IK::responder(
+        EphemeralOnly::new(StdRng::from_os_rng()),
+        &[],
+        responder_static,
+    )
+    .unwrap()
+    .read_message_1(exact(&msg1[..msg1_len]))
+    .unwrap();
 
     // The revealed initiator static must match snow's.
     assert_eq!(
-        revealed_initiator_pub.to_bytes(),
+        r_hs.remote_static().to_bytes(),
         snow_initiator_keypair.public.as_slice(),
     );
 
     // msg2: <- e, ee, se (our responder sends)
-    let (mut r_transport, _) = r_hs.e().unwrap().ee().unwrap().se().unwrap().into_parts();
-    let msg2 = stream.take_written();
+    let (msg2, mut r_transport) = r_hs.write_message_2().unwrap();
 
     let mut buf = [0u8; 256];
     snow_initiator.read_message(&msg2, &mut buf).unwrap();
@@ -780,22 +710,18 @@ fn k_hiss_initiator_snow_responder() {
         .unwrap();
 
     // ── Our initiator seals ──────────────────────────────────
-    type NoiseK = Noise<pattern::K, P256, ChaChaPoly, Blake2b>;
+    hiss::noise! { pub K<P256, ChaChaPoly, Blake2b> { -> s <- s ... -> e, es, ss } }
 
-    let stream = PeerStream::new();
-    let sealer = SyncHandshake::<NoiseK, Initiator, _, _, _, _>::initiate(
+    let (msg, mut transport) = K::initiator(
         EphemeralOnly::new(StdRng::from_os_rng()),
         &[],
-        stream.clone(),
+        alice_static,
+        bob_pub,
     )
-    .set_s(alice_static)
     .unwrap()
-    .set_rs(bob_pub);
-
-    let (mut transport, _) = sealer.e().unwrap().es().unwrap().ss().unwrap().into_parts();
-
-    let msg = stream.take_written();
-    assert_eq!(msg.len(), 81); // 65 (ephemeral) + 16 (payload tag)
+    .write_message_1()
+    .unwrap();
+    assert_eq!(K::MSG1_SIZE, 81); // 65 (ephemeral) + 16 (payload tag)
 
     let mut sealed = [0u8; 64];
     let sealed_len = transport.send(&payload, &mut sealed).unwrap();
@@ -833,19 +759,16 @@ fn nk_hiss_initiator_snow_responder() {
         .unwrap();
 
     // ── Our initiator setup (anonymous: no static) ───────────
-    type Channel = Noise<pattern::NK, P256, ChaChaPoly, Blake2b>;
-
-    let stream = PeerStream::new();
-    let i_hs = SyncHandshake::<Channel, Initiator, _, _, _, _>::initiate(
-        EphemeralOnly::new(StdRng::from_os_rng()),
-        &[],
-        stream.clone(),
-    )
-    .set_rs(responder_pub);
+    hiss::noise! { pub NK<P256, ChaChaPoly, Blake2b> { <- s ... -> e, es <- e, ee } }
 
     // msg1: -> e, es (our initiator sends)
-    let i_hs = i_hs.e().unwrap().es().unwrap();
-    let msg1 = stream.take_written();
+    let (msg1, i_hs) = NK::initiator(
+        EphemeralOnly::new(StdRng::from_os_rng()),
+        &[],
+        responder_pub,
+    )
+    .write_message_1()
+    .unwrap();
 
     let mut buf = [0u8; 256];
     snow_responder.read_message(&msg1, &mut buf).unwrap();
@@ -853,9 +776,7 @@ fn nk_hiss_initiator_snow_responder() {
     // msg2: <- e, ee (snow responder sends)
     let mut msg2 = [0u8; 256];
     let msg2_len = snow_responder.write_message(&[], &mut msg2).unwrap();
-    stream.feed(&msg2[..msg2_len]);
-    let (_, recv) = i_hs.recv().e().unwrap();
-    let (mut i_transport, _) = recv.ee().unwrap().into_parts();
+    let mut i_transport = i_hs.read_message_2(exact(&msg2[..msg2_len])).unwrap();
 
     assert_eq!(
         i_transport.session_id().as_ref(),
@@ -900,29 +821,24 @@ fn nk_snow_initiator_hiss_responder() {
         .unwrap();
 
     // ── Our responder setup ──────────────────────────────────
-    type Channel = Noise<pattern::NK, P256, ChaChaPoly, Blake2b>;
-
-    let stream = PeerStream::new();
-    let r_hs = SyncHandshake::<Channel, Responder, _, _, _, _>::respond(
-        EphemeralOnly::new(StdRng::from_os_rng()),
-        &[],
-        stream.clone(),
-    )
-    .set_s(responder_static)
-    .unwrap();
+    hiss::noise! { pub NK<P256, ChaChaPoly, Blake2b> { <- s ... -> e, es <- e, ee } }
 
     // msg1: -> e, es (snow initiator sends)
     let mut msg1 = [0u8; 256];
     let msg1_len = snow_initiator.write_message(&[], &mut msg1).unwrap();
-    stream.feed(&msg1[..msg1_len]);
 
     // Our responder reads msg1.
-    let (_, recv) = r_hs.recv().e().unwrap();
-    let r_hs = recv.es().unwrap();
+    let r_hs = NK::responder(
+        EphemeralOnly::new(StdRng::from_os_rng()),
+        &[],
+        responder_static,
+    )
+    .unwrap()
+    .read_message_1(exact(&msg1[..msg1_len]))
+    .unwrap();
 
     // msg2: <- e, ee (our responder sends)
-    let (mut r_transport, _) = r_hs.e().unwrap().ee().unwrap().into_parts();
-    let msg2 = stream.take_written();
+    let (msg2, mut r_transport) = r_hs.write_message_2().unwrap();
 
     let mut buf = [0u8; 256];
     snow_initiator.read_message(&msg2, &mut buf).unwrap();
@@ -971,19 +887,13 @@ fn ix_hiss_initiator_snow_responder() {
         .build_responder()
         .unwrap();
 
-    // ── Our initiator setup (no pre-message setters) ─────────
-    type Channel = Noise<pattern::IX, P256, ChaChaPoly, Blake2b>;
-
-    let stream = PeerStream::new();
-    let i_hs = SyncHandshake::<Channel, Initiator, _, _, _, _>::initiate(
-        EphemeralOnly::new(StdRng::from_os_rng()),
-        &[],
-        stream.clone(),
-    );
+    // ── Our initiator setup (no pre-messages) ────────────────
+    hiss::noise! { pub IX<P256, ChaChaPoly, Blake2b> { -> e, s <- e, ee, se, s, es } }
 
     // msg1: -> e, s (our initiator sends; its static is in the clear)
-    let i_hs = i_hs.e().unwrap().s(initiator_static).unwrap();
-    let msg1 = stream.take_written();
+    let (msg1, i_hs) = IX::initiator(EphemeralOnly::new(StdRng::from_os_rng()), &[])
+        .write_message_1(initiator_static)
+        .unwrap();
 
     let mut buf = [0u8; 256];
     snow_responder.read_message(&msg1, &mut buf).unwrap();
@@ -997,15 +907,11 @@ fn ix_hiss_initiator_snow_responder() {
     // msg2: <- e, ee, se, s, es (snow responder sends)
     let mut msg2 = [0u8; 256];
     let msg2_len = snow_responder.write_message(&[], &mut msg2).unwrap();
-    stream.feed(&msg2[..msg2_len]);
-    let (_, recv) = i_hs.recv().e().unwrap();
-    let recv = recv.ee().unwrap().se().unwrap();
-    let (revealed_responder_pub, recv) = recv.s().unwrap();
-    let (mut i_transport, _) = recv.es().unwrap().into_parts();
+    let mut i_transport = i_hs.read_message_2(exact(&msg2[..msg2_len])).unwrap();
 
     // The revealed responder static must match snow's.
     assert_eq!(
-        revealed_responder_pub.to_bytes(),
+        i_transport.remote_static().unwrap().to_bytes(),
         responder_static_pub.as_slice(),
     );
 
@@ -1052,45 +958,26 @@ fn ix_snow_initiator_hiss_responder() {
         .build_initiator()
         .unwrap();
 
-    // ── Our responder setup (no pre-message setters) ─────────
-    type Channel = Noise<pattern::IX, P256, ChaChaPoly, Blake2b>;
-
-    let stream = PeerStream::new();
-    let r_hs = SyncHandshake::<Channel, Responder, _, _, _, _>::respond(
-        EphemeralOnly::new(StdRng::from_os_rng()),
-        &[],
-        stream.clone(),
-    );
+    // ── Our responder setup (no pre-messages) ────────────────
+    hiss::noise! { pub IX<P256, ChaChaPoly, Blake2b> { -> e, s <- e, ee, se, s, es } }
 
     // msg1: -> e, s (snow initiator sends)
     let mut msg1 = [0u8; 256];
     let msg1_len = snow_initiator.write_message(&[], &mut msg1).unwrap();
-    stream.feed(&msg1[..msg1_len]);
 
     // Our responder reads msg1; the `s` token reveals the initiator static.
-    let (_, recv) = r_hs.recv().e().unwrap();
-    let (revealed_initiator_pub, recv) = recv.s().unwrap();
+    let r_hs = IX::responder(EphemeralOnly::new(StdRng::from_os_rng()), &[])
+        .read_message_1(exact(&msg1[..msg1_len]))
+        .unwrap();
 
     // The revealed initiator static must match snow's.
     assert_eq!(
-        revealed_initiator_pub.to_bytes(),
+        r_hs.remote_static().to_bytes(),
         snow_initiator_keypair.public.as_slice(),
     );
 
     // msg2: <- e, ee, se, s, es (our responder sends)
-    let (mut r_transport, _) = recv
-        .e()
-        .unwrap()
-        .ee()
-        .unwrap()
-        .se()
-        .unwrap()
-        .s(responder_static)
-        .unwrap()
-        .es()
-        .unwrap()
-        .into_parts();
-    let msg2 = stream.take_written();
+    let (msg2, mut r_transport) = r_hs.write_message_2(responder_static).unwrap();
 
     let mut buf = [0u8; 256];
     snow_initiator.read_message(&msg2, &mut buf).unwrap();
@@ -1145,20 +1032,19 @@ fn xk_hiss_initiator_snow_responder() {
         .build_responder()
         .unwrap();
 
-    // ── Our initiator setup: pre-message `<- s` via set_rs ────
-    type Channel = Noise<pattern::XK, P256, ChaChaPoly, Blake2b>;
-
-    let stream = PeerStream::new();
-    let i_hs = SyncHandshake::<Channel, Initiator, _, _, _, _>::initiate(
-        EphemeralOnly::new(StdRng::from_os_rng()),
-        &[],
-        stream.clone(),
-    )
-    .set_rs(responder_pub);
+    // ── Our initiator setup: pre-message `<- s` is a ctor arg ──
+    hiss::noise! {
+        pub XK<P256, ChaChaPoly, Blake2b> { <- s ... -> e, es <- e, ee -> s, se }
+    }
 
     // msg1: -> e, es (our initiator sends)
-    let i_hs = i_hs.e().unwrap().es().unwrap();
-    let msg1 = stream.take_written();
+    let (msg1, i_hs) = XK::initiator(
+        EphemeralOnly::new(StdRng::from_os_rng()),
+        &[],
+        responder_pub,
+    )
+    .write_message_1()
+    .unwrap();
 
     let mut buf = [0u8; 256];
     snow_responder.read_message(&msg1, &mut buf).unwrap();
@@ -1166,13 +1052,10 @@ fn xk_hiss_initiator_snow_responder() {
     // msg2: <- e, ee (snow responder sends)
     let mut msg2 = [0u8; 256];
     let msg2_len = snow_responder.write_message(&[], &mut msg2).unwrap();
-    stream.feed(&msg2[..msg2_len]);
-    let (_, recv) = i_hs.recv().e().unwrap();
-    let i_hs = recv.ee().unwrap();
+    let i_hs = i_hs.read_message_2(exact(&msg2[..msg2_len])).unwrap();
 
     // msg3: -> s, se (our initiator sends; its static is encrypted)
-    let (mut i_transport, _) = i_hs.s(initiator_static).unwrap().se().unwrap().into_parts();
-    let msg3 = stream.take_written();
+    let (msg3, mut i_transport) = i_hs.write_message_3(initiator_static).unwrap();
 
     let mut buf = [0u8; 256];
     snow_responder.read_message(&msg3, &mut buf).unwrap();
@@ -1228,30 +1111,27 @@ fn xk_snow_initiator_hiss_responder() {
         .build_initiator()
         .unwrap();
 
-    // ── Our responder setup: pre-message `<- s` via set_s ────
-    type Channel = Noise<pattern::XK, P256, ChaChaPoly, Blake2b>;
-
-    let stream = PeerStream::new();
-    let r_hs = SyncHandshake::<Channel, Responder, _, _, _, _>::respond(
-        EphemeralOnly::new(StdRng::from_os_rng()),
-        &[],
-        stream.clone(),
-    )
-    .set_s(responder_static)
-    .unwrap();
+    // ── Our responder setup: pre-message `<- s` is a ctor arg ──
+    hiss::noise! {
+        pub XK<P256, ChaChaPoly, Blake2b> { <- s ... -> e, es <- e, ee -> s, se }
+    }
 
     // msg1: -> e, es (snow initiator sends)
     let mut msg1 = [0u8; 256];
     let msg1_len = snow_initiator.write_message(&[], &mut msg1).unwrap();
-    stream.feed(&msg1[..msg1_len]);
 
     // Our responder reads msg1 (-> e, es).
-    let (_, recv) = r_hs.recv().e().unwrap();
-    let r_hs = recv.es().unwrap();
+    let r_hs = XK::responder(
+        EphemeralOnly::new(StdRng::from_os_rng()),
+        &[],
+        responder_static,
+    )
+    .unwrap()
+    .read_message_1(exact(&msg1[..msg1_len]))
+    .unwrap();
 
     // msg2: <- e, ee (our responder sends)
-    let r_hs = r_hs.e().unwrap().ee().unwrap();
-    let msg2 = stream.take_written();
+    let (msg2, r_hs) = r_hs.write_message_2().unwrap();
 
     let mut buf = [0u8; 256];
     snow_initiator.read_message(&msg2, &mut buf).unwrap();
@@ -1259,15 +1139,13 @@ fn xk_snow_initiator_hiss_responder() {
     // msg3: -> s, se (snow initiator sends; its static is encrypted)
     let mut msg3 = [0u8; 256];
     let msg3_len = snow_initiator.write_message(&[], &mut msg3).unwrap();
-    stream.feed(&msg3[..msg3_len]);
 
     // Our responder reads msg3; the `s` token reveals the initiator static.
-    let (revealed_initiator_pub, recv) = r_hs.recv().s().unwrap();
-    let (mut r_transport, _) = recv.se().unwrap().into_parts();
+    let mut r_transport = r_hs.read_message_3(exact(&msg3[..msg3_len])).unwrap();
 
     // The revealed initiator static must match snow's.
     assert_eq!(
-        revealed_initiator_pub.to_bytes(),
+        r_transport.remote_static().unwrap().to_bytes(),
         snow_initiator_keypair.public.as_slice(),
     );
 
@@ -1306,19 +1184,13 @@ fn nn_hiss_initiator_snow_responder() {
         .unwrap();
 
     // ── Our initiator setup (anonymous: no static, no pre-known peer) ──
-    type Channel = Noise<pattern::NN, P256, ChaChaPoly, Blake2b>;
+    hiss::noise! { pub NN<P256, ChaChaPoly, Blake2b> { -> e <- e, ee } }
 
-    let stream = PeerStream::new();
-    let i_hs = SyncHandshake::<Channel, Initiator, _, _, _, _>::initiate(
-        EphemeralOnly::new(StdRng::from_os_rng()),
-        &[],
-        stream.clone(),
-    );
-
-    // msg1: -> e (single-`e` send finalizer; 65 bytes, cipher never keyed)
-    let i_hs = i_hs.e().unwrap();
-    let msg1 = stream.take_written();
-    assert_eq!(msg1.len(), 65);
+    // msg1: -> e (bare ephemeral; 65 bytes, cipher never keyed)
+    let (msg1, i_hs) = NN::initiator(EphemeralOnly::new(StdRng::from_os_rng()), &[])
+        .write_message_1()
+        .unwrap();
+    assert_eq!(NN::MSG1_SIZE, 65);
 
     let mut buf = [0u8; 256];
     snow_responder.read_message(&msg1, &mut buf).unwrap();
@@ -1326,9 +1198,7 @@ fn nn_hiss_initiator_snow_responder() {
     // msg2: <- e, ee (snow responder sends)
     let mut msg2 = [0u8; 256];
     let msg2_len = snow_responder.write_message(&[], &mut msg2).unwrap();
-    stream.feed(&msg2[..msg2_len]);
-    let (_, recv) = i_hs.recv().e().unwrap();
-    let (mut i_transport, _) = recv.ee().unwrap().into_parts();
+    let mut i_transport = i_hs.read_message_2(exact(&msg2[..msg2_len])).unwrap();
 
     assert_eq!(
         i_transport.session_id().as_ref(),
@@ -1365,26 +1235,19 @@ fn nn_snow_initiator_hiss_responder() {
         .unwrap();
 
     // ── Our responder setup (anonymous: no static) ───────────
-    type Channel = Noise<pattern::NN, P256, ChaChaPoly, Blake2b>;
-
-    let stream = PeerStream::new();
-    let r_hs = SyncHandshake::<Channel, Responder, _, _, _, _>::respond(
-        EphemeralOnly::new(StdRng::from_os_rng()),
-        &[],
-        stream.clone(),
-    );
+    hiss::noise! { pub NN<P256, ChaChaPoly, Blake2b> { -> e <- e, ee } }
 
     // msg1: -> e (snow initiator sends)
     let mut msg1 = [0u8; 256];
     let msg1_len = snow_initiator.write_message(&[], &mut msg1).unwrap();
-    stream.feed(&msg1[..msg1_len]);
 
     // Our responder reads msg1.
-    let (_, recv) = r_hs.recv().e().unwrap();
+    let r_hs = NN::responder(EphemeralOnly::new(StdRng::from_os_rng()), &[])
+        .read_message_1(exact(&msg1[..msg1_len]))
+        .unwrap();
 
     // msg2: <- e, ee (our responder sends)
-    let (mut r_transport, _) = recv.e().unwrap().ee().unwrap().into_parts();
-    let msg2 = stream.take_written();
+    let (msg2, mut r_transport) = r_hs.write_message_2().unwrap();
 
     let mut buf = [0u8; 256];
     snow_initiator.read_message(&msg2, &mut buf).unwrap();
@@ -1434,19 +1297,13 @@ fn xx_hiss_initiator_snow_responder() {
         .unwrap();
 
     // ── Our initiator setup (no pre-messages: neither static pre-known) ──
-    type Channel = Noise<pattern::XX, P256, ChaChaPoly, Blake2b>;
+    hiss::noise! { pub XX<P256, ChaChaPoly, Blake2b> { -> e <- e, ee, s, es -> s, se } }
 
-    let stream = PeerStream::new();
-    let i_hs = SyncHandshake::<Channel, Initiator, _, _, _, _>::initiate(
-        EphemeralOnly::new(StdRng::from_os_rng()),
-        &[],
-        stream.clone(),
-    );
-
-    // msg1: -> e (single-`e` send finalizer; 65 bytes, cipher never keyed)
-    let i_hs = i_hs.e().unwrap();
-    let msg1 = stream.take_written();
-    assert_eq!(msg1.len(), 65);
+    // msg1: -> e (bare ephemeral; 65 bytes, cipher never keyed)
+    let (msg1, i_hs) = XX::initiator(EphemeralOnly::new(StdRng::from_os_rng()), &[])
+        .write_message_1()
+        .unwrap();
+    assert_eq!(XX::MSG1_SIZE, 65);
 
     let mut buf = [0u8; 256];
     snow_responder.read_message(&msg1, &mut buf).unwrap();
@@ -1454,20 +1311,15 @@ fn xx_hiss_initiator_snow_responder() {
     // msg2: <- e, ee, s, es (snow responder sends; its static is encrypted)
     let mut msg2 = [0u8; 256];
     let msg2_len = snow_responder.write_message(&[], &mut msg2).unwrap();
-    stream.feed(&msg2[..msg2_len]);
-    let (_, recv) = i_hs.recv().e().unwrap();
-    let recv = recv.ee().unwrap();
-    let (revealed_responder_pub, recv) = recv.s().unwrap();
+    let i_hs = i_hs.read_message_2(exact(&msg2[..msg2_len])).unwrap();
     // The static snow revealed (encrypted in msg2) must match snow's.
     assert_eq!(
-        revealed_responder_pub.to_bytes(),
+        i_hs.remote_static().to_bytes(),
         responder_static_pub.to_bytes(),
     );
-    let i_hs = recv.es().unwrap();
 
     // msg3: -> s, se (our initiator sends; its static is encrypted)
-    let (mut i_transport, _) = i_hs.s(initiator_static).unwrap().se().unwrap().into_parts();
-    let msg3 = stream.take_written();
+    let (msg3, mut i_transport) = i_hs.write_message_3(initiator_static).unwrap();
 
     let mut buf = [0u8; 256];
     snow_responder.read_message(&msg3, &mut buf).unwrap();
@@ -1522,34 +1374,19 @@ fn xx_snow_initiator_hiss_responder() {
         .unwrap();
 
     // ── Our responder setup (no pre-messages: neither static pre-known) ──
-    type Channel = Noise<pattern::XX, P256, ChaChaPoly, Blake2b>;
-
-    let stream = PeerStream::new();
-    let r_hs = SyncHandshake::<Channel, Responder, _, _, _, _>::respond(
-        EphemeralOnly::new(StdRng::from_os_rng()),
-        &[],
-        stream.clone(),
-    );
+    hiss::noise! { pub XX<P256, ChaChaPoly, Blake2b> { -> e <- e, ee, s, es -> s, se } }
 
     // msg1: -> e (snow initiator sends)
     let mut msg1 = [0u8; 256];
     let msg1_len = snow_initiator.write_message(&[], &mut msg1).unwrap();
-    stream.feed(&msg1[..msg1_len]);
 
     // Our responder reads msg1.
-    let (_, recv) = r_hs.recv().e().unwrap();
+    let r_hs = XX::responder(EphemeralOnly::new(StdRng::from_os_rng()), &[])
+        .read_message_1(exact(&msg1[..msg1_len]))
+        .unwrap();
 
     // msg2: <- e, ee, s, es (our responder sends; its static is encrypted)
-    let r_hs = recv
-        .e()
-        .unwrap()
-        .ee()
-        .unwrap()
-        .s(responder_static)
-        .unwrap()
-        .es()
-        .unwrap();
-    let msg2 = stream.take_written();
+    let (msg2, r_hs) = r_hs.write_message_2(responder_static).unwrap();
 
     let mut buf = [0u8; 256];
     snow_initiator.read_message(&msg2, &mut buf).unwrap();
@@ -1563,15 +1400,13 @@ fn xx_snow_initiator_hiss_responder() {
     // msg3: -> s, se (snow initiator sends; its static is encrypted)
     let mut msg3 = [0u8; 256];
     let msg3_len = snow_initiator.write_message(&[], &mut msg3).unwrap();
-    stream.feed(&msg3[..msg3_len]);
 
     // Our responder reads msg3; the `s` token reveals the initiator static.
-    let (revealed_initiator_pub, recv) = r_hs.recv().s().unwrap();
-    let (mut r_transport, _) = recv.se().unwrap().into_parts();
+    let mut r_transport = r_hs.read_message_3(exact(&msg3[..msg3_len])).unwrap();
 
     // The revealed initiator static must match snow's.
     assert_eq!(
-        revealed_initiator_pub.to_bytes(),
+        r_transport.remote_static().unwrap().to_bytes(),
         snow_initiator_keypair.public.as_slice(),
     );
 
@@ -1626,30 +1461,15 @@ fn x_hiss_initiator_snow_responder() {
         .unwrap();
 
     // ── Our initiator seals ──────────────────────────────────
-    type NoiseX = Noise<pattern::X, P256, ChaChaPoly, Blake2b>;
-
-    let stream = PeerStream::new();
-    let sealer = SyncHandshake::<NoiseX, Initiator, _, _, _, _>::initiate(
-        EphemeralOnly::new(StdRng::from_os_rng()),
-        &[],
-        stream.clone(),
-    )
-    .set_rs(bob_pub);
+    hiss::noise! { pub X<P256, ChaChaPoly, Blake2b> { <- s ... -> e, es, s, ss } }
 
     // msg1: -> e, es, s, ss
-    let (mut transport, _) = sealer
-        .e()
-        .unwrap()
-        .es()
-        .unwrap()
-        .s(alice_static)
-        .unwrap()
-        .ss()
-        .unwrap()
-        .into_parts();
-
-    let msg = stream.take_written();
-    assert_eq!(msg.len(), 162); // e (65) + encrypted s (81) + payload tag (16)
+    let (msg, mut transport) =
+        X::initiator(EphemeralOnly::new(StdRng::from_os_rng()), &[], bob_pub)
+            .write_message_1(alice_static)
+            .unwrap();
+    // e (65) + encrypted s (81) + payload tag (16)
+    assert_eq!(X::MSG1_SIZE, 162);
 
     let mut sealed = [0u8; 64];
     let sealed_len = transport.send(&payload, &mut sealed).unwrap();
