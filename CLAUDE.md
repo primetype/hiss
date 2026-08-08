@@ -19,10 +19,52 @@ it is fixed, not deferred to "the next patch."
 | Coverage | `cargo llvm-cov` (gated total — see `.github/workflows/coverage.yml`) | ≥ 80% lines / 75% regions |
 | Benchmarks | `cargo bench` | builds and runs clean |
 | Supply chain | `cargo deny check` | clean |
+| Downstream | `scripts/downstream-build.sh` | fresh resolve, no lockfile, builds + runs the README quickstart |
 
-These mirror the CI pipeline (`Check` → `Test` → `Coverage`). CI green on the
-release commit satisfies every gate **except benchmarks**, which CI does not run
-— validate `cargo bench` locally before releasing.
+These mirror the CI pipeline (`Check` → `Test` → `Coverage`), plus `Downstream`,
+which runs alongside `Check` rather than inside it — it is the one gate that
+also needs a `schedule:` trigger, and a cron on `Check` would drag `Test` and
+`Coverage` along with it. CI green on the release commit satisfies every gate
+**except benchmarks**, which CI does not run — validate `cargo bench` locally
+before releasing.
+
+### Why the downstream gate exists
+
+Be precise about what this gate does and does not fix, because the obvious
+story is wrong. The root `Cargo.lock` is **not** committed (`.gitignore`) and
+no CI job passes `--locked`, so CI already re-resolves from the index on every
+run. When eccoxide 0.4.3 changed `PointAffine::decompress` from `Option` to
+`CtOption` in a *patch* release that `eccoxide = "0.4"` resolved to,
+`clippy-doc`, `msrv`, `Test` and `Coverage` would every one of them have gone
+red on the next run. They stayed green only because no run happened between
+0.4.3 landing and the fix.
+
+Where a stale lockfile genuinely masks a broken requirement is **locally**: a
+working tree keeps its untracked `Cargo.lock` indefinitely, and every gate in
+the table above is run locally when cutting a release. That is the worst
+possible moment to be reading a months-old pin.
+
+So what the gate adds, concretely:
+
+1. The local release-gate run stops being masked by a stale untracked lock.
+2. hiss is consumed as an **out-of-workspace path dependency**, so its
+   dev-dependencies are absent. In-repo builds unify features across the dev
+   graph; a consumer gets none of that, and a feature that only ever arrives
+   via a dev-dependency surfaces as a build failure only here.
+3. The README quickstart is compiled *and executed* against the exact
+   dependency pairing the README advertises (`hiss` + `rand = "0.9"`).
+4. The `default-features = false` consumer is covered.
+5. On its weekly cron it catches an upstream break during an idle window,
+   rather than at the next push — which, for a quiet week, is the release
+   commit itself.
+
+Two rules follow:
+
+1. Every dependency requirement carries an explicit range, and widening one
+   needs a green `scripts/downstream-build.sh` behind it — not a lockfile.
+2. A caret bound (`"0.4"`) is not by itself protection. It already means
+   `>=0.4.0, <0.5.0`; it does nothing about a breaking change shipped *within*
+   the `0.4.x` line, which is exactly what happened.
 
 ### MSRV policy
 

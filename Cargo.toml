@@ -45,7 +45,22 @@ targets = ["aarch64-apple-darwin"]
 
 [dependencies]
 cryptoxide = { version = "0.5.1", default-features = false, features = ["chacha", "poly1305", "blake2", "sha2", "hmac", "ed25519"] }
-eccoxide = { version = "0.4", default-features = false, features = ["p256r1", "table", "x25519", "x448"] }
+# Written as an explicit range, both ends deliberate.
+#
+# Lower bound — a hard API floor, and the reason this is not still `"0.4"`.
+# eccoxide 0.4.3 changed `PointAffine::decompress` from `Option` to the
+# constant-time `CtOption`, so `src/curve/p256/mod.rs` calls `.into_option()`
+# and no longer compiles against 0.4.0–0.4.2.
+#
+# Upper bound — the same ceiling `^0.4` already implied (`<0.5.0`), spelled
+# out rather than inferred. Note what it does *not* buy: 0.4.3 was itself a
+# breaking change shipped in a patch release, so a future 0.4.x could break
+# this crate the same way. What catches that is `scripts/downstream-build.sh`
+# (a gate — see CLAUDE.md), which resolves hiss with no lockfile the way a
+# consumer does. Narrow this to `<0.4.4` if that risk should instead be borne
+# by the requirement, at the cost of needing a hiss release before consumers
+# can pick up any eccoxide 0.4.x fix.
+eccoxide = { version = ">=0.4.3, <0.5", default-features = false, features = ["p256r1", "table", "x25519", "x448"] }
 hex = "0.4"
 # The `noise!` pattern-DSL macro — the built-in patterns are defined with
 # it, so it is a required (build-time-only) dependency.

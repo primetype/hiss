@@ -176,8 +176,18 @@ impl P256r1PublicKey {
                     FieldElement::from_slice(&self.0[33..65]).ok_or(Error::InvalidFieldElement)?;
                 PointAffine::from_coordinate(&x, &y).ok_or(Error::InvalidPoint)?
             }
-            0x02 => PointAffine::decompress(&x, Sign::Positive).ok_or(Error::InvalidPoint)?,
-            0x03 => PointAffine::decompress(&x, Sign::Negative).ok_or(Error::InvalidPoint)?,
+            // `decompress` returns eccoxide's constant-time `CtOption`, whose
+            // presence bit is exactly the "x is a valid compressed
+            // x-coordinate" predicate. `into_option` leaves the constant-time
+            // domain, which is sound here: the value branched on is a peer's
+            // *public* SEC1 encoding, and `?` surfaces the failure as an error
+            // regardless.
+            0x02 => PointAffine::decompress(&x, Sign::Positive)
+                .into_option()
+                .ok_or(Error::InvalidPoint)?,
+            0x03 => PointAffine::decompress(&x, Sign::Negative)
+                .into_option()
+                .ok_or(Error::InvalidPoint)?,
             other => return Err(Error::UnknownPrefix(other)),
         };
 
@@ -245,8 +255,14 @@ impl P256r1PublicKey {
                     .ok_or(Error::InvalidFieldElement)?;
                 PointAffine::from_coordinate(&x, &y).ok_or(Error::InvalidPoint)?
             }
-            0x02 => PointAffine::decompress(&x, Sign::Positive).ok_or(Error::InvalidPoint)?,
-            0x03 => PointAffine::decompress(&x, Sign::Negative).ok_or(Error::InvalidPoint)?,
+            // See `to_point` — `into_option` collapses eccoxide's constant-time
+            // `CtOption` on a public value we already branch on via `?`.
+            0x02 => PointAffine::decompress(&x, Sign::Positive)
+                .into_option()
+                .ok_or(Error::InvalidPoint)?,
+            0x03 => PointAffine::decompress(&x, Sign::Negative)
+                .into_option()
+                .ok_or(Error::InvalidPoint)?,
             _ => unreachable!("prefix already validated above"),
         };
 
