@@ -85,6 +85,10 @@ let m = alice.receive(&wire[..n], &mut got)?;
 assert_eq!(&got[..m], b"pong");
 ```
 
+Putting those messages on a real socket — framing, a trust decision on the peer's key,
+a PSK ceremony — is worked end to end in
+[`examples/tcp_ikpsk1_ceremony.rs`](examples/tcp_ikpsk1_ceremony.rs).
+
 ## What it offers
 
 - **Compile-time protocol selection.** The pattern, curve, cipher, and hash are
@@ -101,10 +105,7 @@ assert_eq!(&got[..m], b"pong");
   pattern in the Noise specification's own notation and generates its state machine —
   one method per message, every message a fixed-size `[u8; N]` known at compile time.
   It performs no I/O: it hands you bytes and you move them however you already move
-  bytes. **This is the API to reach for.**
-- **I/O drivers, secondary.** `SyncHandshake` (blocking `std::io`) and `AsyncHandshake`
-  (`tokio::io`, behind the `async-io` feature) own the stream and step the handshake
-  over it — convenient when you already hold a socket.
+  bytes.
 
 ## Supported suite
 
@@ -195,119 +196,6 @@ aspirational. Reproduced here with the fixture paths replaced by a plausible `sr
 one over-long line wrapped, and the trait-bound detail below the second error trimmed;
 the diagnostic text itself is verbatim.
 
-## The handshake step by step — `N` over the driver API
-
-A token-by-token tour of one *one-way* pattern, driven by the I/O driver rather than the
-macro. Useful for seeing each step's effect in isolation; for new code, prefer the
-Quickstart above. A worked macro example lives in
-[`examples/tcp_ikpsk1_ceremony.rs`][ceremony].
-
-The `N` pattern is a one-way, sender-anonymous seal: anyone who knows a recipient's static
-public key can send it one confidential, authenticated message, with no reply. The whole
-exchange is the single Noise message `-> e, es`; we build it over `X25519` in five steps.
-(This mirrors the crate-level doctest, which compiles and runs each step.)
-
-[ceremony]: examples/tcp_ikpsk1_ceremony.rs
-
-### 1. The recipient's static key pair
-
-`N` authenticates the recipient, so it owns a long-term static key pair and the sender must
-already know its public half (shared out of band). `X25519` is Diffie–Hellman over
-Curve25519 (RFC 7748) — the curve Noise calls `25519`.
-
-```rust
-use hiss::provider::{EphemeralOnly, ProviderExt};
-use hiss::noise::X25519;
-
-// `EphemeralOnly` is the software backend; it wraps a CSPRNG.
-let mut recipient = EphemeralOnly::new(rand::rng());
-
-let recipient_static = recipient.generate::<X25519>()?; // secret half — never shared
-let recipient_pub = recipient.public(&recipient_static)?; // public half — the sender knows this
-```
-
-### 2. The sender begins `N` and pins the recipient's static
-
-The sender drives the `Initiator` side. `N`'s initiator is anonymous — no static key of
-its own — so the recipient learns only that the sender knew its public key. `set_rs`
-supplies that known key (`N`'s `<- s` pre-message).
-
-```rust
-use hiss::noise::{Blake2b, ChaChaPoly, Initiator, Noise, SyncHandshake, pattern};
-
-// The full protocol name: Noise_N_25519_ChaChaPoly_BLAKE2b.
-type NoiseN = Noise<pattern::N, X25519, ChaChaPoly, Blake2b>;
-
-let handshake = SyncHandshake::<NoiseN, Initiator, _, _, _, _>::initiate(
-    EphemeralOnly::new(rand::rng()), // the sender's own RNG
-    &[],                             // prologue: shared context, if any
-    Vec::<u8>::new(),                // the sink the message bytes are written to
-)
-.set_rs(recipient_pub);
-```
-
-### 3. Write the message (`-> e, es`) and seal the payload
-
-`e` writes a fresh ephemeral public key to the wire; `es` mixes
-`DH(ephemeral, recipient-static)` into the cipher key. After `es` the channel is keyed, so
-`into_parts` returns the live sender and the handshake message; the payload then rides in
-the first transport record.
-
-```rust
-let (mut sender, message) = handshake.e()?.es()?.into_parts();
-
-let quote = b"Not all those who wander are lost.";
-let mut sealed = vec![0u8; quote.len() + 16]; // +16 for the AEAD tag
-let n = sender.send(quote, &mut sealed)?;
-```
-
-### 4. The recipient receives the message
-
-The recipient drives the `Responder` side with its static private key (`set_s`) and replays
-the same tokens, recomputing the identical `es` secret without ever putting a key on the
-wire.
-
-```rust
-use hiss::noise::Responder;
-
-let handshake = SyncHandshake::<NoiseN, Responder, _, _, _, _>::respond(
-    recipient,                     // drives this side, holding the static key
-    &[],                           // the same prologue
-    std::io::Cursor::new(message), // read the sender's message
-)
-.set_s(recipient_static)?;
-
-let (_their_ephemeral, recv) = handshake.recv().e()?;
-let mut transport = recv.es()?;
-```
-
-### 5. Decrypt
-
-Both ends now hold the same transport key, so the recipient opens the sealed record —
-authenticated end to end: only someone who knew the recipient's public key could have
-produced it.
-
-```rust
-let mut opened = vec![0u8; sealed.len()];
-let m = transport.transport().receive(&sealed[..n], &mut opened)?;
-opened.truncate(m);
-
-assert_eq!(&opened, quote); // "Not all those who wander are lost."
-```
-
-With the `async-io` feature the same chain runs over `tokio::io` via `AsyncHandshake`;
-to drive a handshake with no I/O at all — fixed-size messages you transport yourself —
-use the `noise!` macro instead.
-
-Every pattern follows this same builder shape. What varies is the pre-message setters
-each one requires before the token methods become available: whatever the pattern must
-know in advance (the *Must be arranged in advance* column of
-[Which pattern?](#which-pattern)) arrives through `set_rs` for the peer's public key and
-`set_s` for your own private key. Patterns with nothing arranged in advance — `XX`, `IX`,
-`NN` — have no setters at all, and send their static keys during the handshake instead.
-The compiler will not let you start a message until every setter the pattern needs has
-been called.
-
 ## Providers
 
 A *provider* holds the private keys and performs the key agreement. The default is
@@ -366,8 +254,7 @@ without touching the Noise core.
 
 ## Platforms
 
-- **All platforms:** the software backend (`EphemeralOnly`) and the blocking
-  `std::io` handshake driver.
+- **All platforms:** the software backend (`EphemeralOnly`).
 - **macOS / iOS:** the Apple Secure Enclave backend. Its blocking Security-framework calls
   are offloaded to a Tokio blocking thread pool for the async provider path.
 
@@ -376,7 +263,7 @@ without touching the Noise core.
 | Feature | Default | Effect |
 |---------|:-------:|--------|
 | `x25519-cryptoxide` | **yes** | Backs X25519's software Diffie–Hellman with `cryptoxide`'s implementation (the faster backend). `--no-default-features` falls back to the `eccoxide` ladder; the output is byte-for-byte identical, so this only changes which dependency carries the primitive. |
-| `async-io` | no | Adds the `tokio::io` streaming handshake driver (`AsyncHandshake`), pulling in `tokio` with its I/O extension traits. The blocking `std::io` driver needs no feature and no runtime. |
+| `async-io` | no | Pulls in `tokio` for `AsyncHandshake`, part of the legacy I/O driver API that is **scheduled for removal**. New code uses `noise!` and needs no feature. |
 
 The `noise!` macro needs no feature — `hiss-macros` is a required dependency and the
 macro is re-exported as `hiss::noise!`.
