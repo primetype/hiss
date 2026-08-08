@@ -79,26 +79,33 @@
 //! Calling tokens out of order, skipping a token, or processing
 //! messages in the wrong direction is a compile error.
 //!
-//! ## 3. Pre-message type state
+//! ## 3. Pre-messages
 //!
-//! The [`Pattern::PreMessages`] Cons-list drives the prologue. The
-//! handshake starts with the full pre-message list as a type
-//! parameter. Each call to `set_s()` or `set_rs()` consumes one
-//! pre-message entry, advancing the list toward [`Nil`]. The
-//! direction of the pre-message combined with the [`Role`]
-//! determines which method is available:
+//! A pre-message is a static key both parties already hold when the
+//! handshake begins. [`noise!`](crate::noise!) reads the pattern's
+//! pre-message lines at expansion time and turns each one into a
+//! **parameter of the role's constructor**, after `provider` and
+//! `prologue` and in pattern order — so every key the pattern requires
+//! up front is supplied in the one call that starts the handshake, and
+//! omitting one is a missing argument, not a runtime error. Which key
+//! a role supplies depends on whether the pre-message travels in that
+//! role's own sending direction:
 //!
-//! | Pre-message | Role          | Method     | Meaning                      |
-//! |-------------|---------------|------------|------------------------------|
-//! | `← s`       | [`Initiator`] | `set_rs()` | Remote party's static known  |
-//! | `← s`       | [`Responder`] | `set_s()`  | Our own static is known      |
-//! | `→ s`       | [`Initiator`] | `set_s()`  | Our own static is known      |
-//! | `→ s`       | [`Responder`] | `set_rs()` | Remote party's static known  |
+//! | Pre-message | Role          | Parameter       | What you supply              |
+//! |-------------|---------------|-----------------|------------------------------|
+//! | `← s`       | [`Initiator`] | `remote_static` | The peer's static public key |
+//! | `← s`       | [`Responder`] | `static_key`    | Our own static private key   |
+//! | `→ s`       | [`Initiator`] | `static_key`    | Our own static private key   |
+//! | `→ s`       | [`Responder`] | `remote_static` | The peer's static public key |
 //!
-//! The compiler rejects calling the wrong method for the role. The
-//! handshake message processing methods (`e()`, `read()`, etc.) are
-//! only available once the pre-message list reaches [`Nil`] — all
-//! required keys must be provided first.
+//! A constructor taking a `static_key` returns `Result`, because
+//! deriving its public half goes through the provider and can fail; one
+//! taking only a `remote_static` — or no pre-message at all — is
+//! infallible.
+//!
+//! The [`Pattern::PreMessages`] Cons-list is the type-level record of
+//! the same pre-messages: [`WellFormed`] walks it ahead of the message
+//! list to check the pattern against Noise §7.3 at compile time.
 //!
 //! ## 4. The generated state machine
 //!

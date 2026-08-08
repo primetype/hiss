@@ -29,11 +29,17 @@
 //! in this crate can arrange that for you; get it wrong and the calls
 //! fail at run time.
 //!
-//! * **The key is stored in the Data Protection Keychain.** Apple's
-//!   technote TN3137 requires it: a key held in the Secure Enclave must
-//!   use that keychain. Both the generate and the load path select it,
-//!   and both pin `kSecAttrTokenIDSecureEnclave`, so a software key can
-//!   never be substituted for the hardware one.
+//! * **The key is generated into the Data Protection Keychain.**
+//!   Apple's technote TN3137 requires it: a key held in the Secure
+//!   Enclave must use that keychain, and a `SecItem` call targets the
+//!   older file-based keychain unless `kSecUseDataProtectionKeychain`
+//!   or `kSecAttrSynchronizable` is set. The generate path sets it; the
+//!   load path does not — it pins `kSecAttrTokenIDSecureEnclave`, so a
+//!   software key can never be substituted for the hardware one, but it
+//!   sets no data-protection selector, leaving the query targeting the
+//!   file-based keychain. No test covers the persistent path — it needs
+//!   the entitlement below and real hardware — so its behaviour on
+//!   device is unverified.
 //! * **On macOS, reaching that keychain needs an entitlement.** The
 //!   binary must carry a team-prefixed `keychain-access-groups`
 //!   entitlement, authorised by a provisioning profile embedded in the
@@ -231,13 +237,16 @@ impl P256r1PrivateKey {
     /// [`generate_secure_enclave`](Self::generate_secure_enclave)). Returns `None`
     /// if no key is found.
     ///
-    /// The query targets the Data Protection Keychain and pins
-    /// `kSecAttrTokenIDSecureEnclave`, matching exactly what
-    /// [`generate_secure_enclave`](Self::generate_secure_enclave) wrote:
-    /// a software key can never be returned in place of the hardware
-    /// one. It therefore needs the same entitlement the generate path
-    /// does — see "What a persistent enclave key requires" in the
-    /// [module documentation](self).
+    /// The query pins `kSecAttrTokenIDSecureEnclave`, so a software key
+    /// can never be returned in place of the hardware one. Unlike
+    /// [`generate_secure_enclave`](Self::generate_secure_enclave) it
+    /// sets no `kSecUseDataProtectionKeychain` selector, and by Apple's
+    /// TN3137 a `SecItem` call without one targets the file-based
+    /// keychain rather than the Data Protection Keychain the key was
+    /// written to. No test covers this path — it needs real hardware
+    /// plus the entitlement described under "What a persistent enclave
+    /// key requires" in the [module documentation](self) — so its
+    /// behaviour on device is unverified.
     pub fn load_from_keychain(label: &str) -> Result<Option<Self>, Error> {
         use core_foundation::base::TCFType as _;
         use core_foundation::boolean::CFBoolean;

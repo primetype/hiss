@@ -26,10 +26,13 @@
 //! [Transport ciphertext — 48 bytes: encrypted payload (32) + AEAD tag (16)]
 //! ```
 //!
-//! The layout is stable and self-describing. Each seal operation uses
-//! a fresh ephemeral key, providing forward secrecy per write. The
-//! envelope is stored verbatim in the Keychain, so the byte layout is
-//! frozen (see the `seal_format_pin` test).
+//! The layout is stable and self-describing. Each seal operation uses a
+//! fresh ephemeral key, so — as for `N` generally — forward secrecy is
+//! **sender-side only**: that ephemeral protects a captured envelope
+//! against later compromise of the sender's keys, but the recipient's
+//! private key still opens it. The envelope is stored verbatim in the
+//! Keychain, so the byte layout is frozen (see the `seal_format_pin`
+//! test).
 //!
 //! # Cryptographic invariant
 //!
@@ -82,9 +85,10 @@ pub(crate) enum SealError {
 /// Seal a 32-byte payload to `recipient_pub` using
 /// `Noise_N_P256_ChaChaPoly_BLAKE2b`.
 ///
-/// Each call generates a fresh ephemeral key (forward secrecy per
-/// write). The returned 129-byte envelope is opaque to anyone without
-/// the recipient's P-256 private key.
+/// Each call generates a fresh ephemeral key, so forward secrecy is
+/// sender-side only — the recipient's private key opens a captured
+/// envelope whenever it is compromised. The returned 129-byte envelope
+/// is opaque to anyone without that key.
 ///
 /// Runs the Noise-N initiator message (`e, es`) directly over the
 /// shared crypto free functions — no type-state, no state machine.

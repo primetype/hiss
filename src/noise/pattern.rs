@@ -56,8 +56,10 @@ hiss_macros::noise! {
     ///
     /// Used for encrypting data at rest to a known public key (e.g.
     /// sealing per-pair PSKs to the device's own Secure Enclave key).
-    /// Each seal operation uses a fresh ephemeral key, providing
-    /// forward secrecy per write.
+    /// With no `ee`, forward secrecy is **sender-side only**: the fresh
+    /// per-write ephemeral protects a captured message against later
+    /// compromise of the sender's keys, but the recipient's static
+    /// private key still decrypts it.
     pub N {
         <- s
         ...
@@ -70,8 +72,11 @@ hiss_macros::noise! {
     /// before the handshake. The sender is authenticated via `ss`.
     ///
     /// Used for sealed envelopes between two peers who have already
-    /// completed a trust ceremony — the message is confidential,
-    /// sender-authenticated, and forward-secret.
+    /// completed a trust ceremony — the message is confidential and
+    /// sender-authenticated. With no `ee`, forward secrecy is
+    /// **sender-side only**: the fresh per-write ephemeral protects a
+    /// captured message against later compromise of the sender's keys,
+    /// but the recipient's static private key still decrypts it.
     pub K {
         -> s
         <- s
@@ -84,6 +89,11 @@ hiss_macros::noise! {
     /// `Kpsk0` — one-way authenticated pattern with PSK at position 0.
     /// Both static keys are known; the PSK is mixed before the ephemeral
     /// key, binding the entire message to the ceremony-established trust.
+    ///
+    /// With no `ee`, forward secrecy is **sender-side only**: the fresh
+    /// per-write ephemeral protects a captured message against later
+    /// compromise of the sender's keys, but the recipient's static
+    /// private key **and** the PSK together still decrypt it.
     pub Kpsk0 {
         -> s
         <- s
@@ -241,8 +251,11 @@ hiss_macros::noise! {
     /// carries the sender's static **encrypted in-band** (after `es` keys the
     /// cipher), so the sender's identity is hidden from a passive
     /// eavesdropper. Its single message is the same token sequence as
-    /// [`IK`]'s msg1, without the responder's reply — confidential,
-    /// sender-authenticated, and forward-secret per write.
+    /// [`IK`]'s msg1, without the responder's reply — confidential and
+    /// sender-authenticated. With no `ee`, forward secrecy is
+    /// **sender-side only**: the fresh per-write ephemeral protects a
+    /// captured message against later compromise of the sender's keys,
+    /// but the recipient's static private key still decrypts it.
     pub X {
         <- s
         ...
