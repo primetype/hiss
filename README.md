@@ -263,10 +263,11 @@ without touching the Noise core.
 | Feature | Default | Effect |
 |---------|:-------:|--------|
 | `x25519-cryptoxide` | **yes** | Backs X25519's software Diffie–Hellman with `cryptoxide`'s implementation (the faster backend). `--no-default-features` falls back to the `eccoxide` ladder; the output is byte-for-byte identical, so this only changes which dependency carries the primitive. |
-| `async-io` | no | Pulls in `tokio` for `AsyncHandshake`, part of the legacy I/O driver API that is **scheduled for removal**. New code uses `noise!` and needs no feature. |
 
-The `noise!` macro needs no feature — `hiss-macros` is a required dependency and the
-macro is re-exported as `hiss::noise!`.
+`hiss` has one feature, and it only picks a backend for a primitive. There is no
+feature that turns the library's API on or off: `noise!` needs none, because
+`hiss-macros` is a required dependency and the macro is re-exported as
+`hiss::noise!`.
 
 ## How this is tested
 
@@ -276,10 +277,10 @@ commit.
 | Check | What it establishes |
 |-------|---------------------|
 | **Interoperability with [`snow`](https://crates.io/crates/snow)** | 22 tests over P-256 and 5 over X25519 run one side of a handshake with `hiss` and the other with `snow`, then require both to derive the same handshake hash and to exchange transport messages in both directions. A one-byte disagreement between the two implementations fails the suite. |
-| **Frozen known-answer vectors** | 12 tests replay byte-for-byte expectations across all eleven patterns, with ephemerals pinned by a scripted RNG, checking every handshake ciphertext, the final handshake hash, and the transport ciphertexts. **These were generated from `snow`, not from a standards body** — P-256 is not in the Noise specification, so no third-party vectors exist for it. Treat them as a regression lock, not independent conformance. |
+| **Frozen known-answer vectors** | 11 tests replay byte-for-byte expectations across all eleven patterns, with ephemerals pinned by a scripted RNG, checking every handshake ciphertext, the final handshake hash, and the transport ciphertexts. **These were generated from `snow`, not from a standards body** — P-256 is not in the Noise specification, so no third-party vectors exist for it. Treat them as a regression lock, not independent conformance. |
 | **Wycheproof** | 484 ECDSA and 355 ECDH `secp256r1` vectors from Google's Project Wycheproof, vendored verbatim at a pinned commit and run as library unit tests. Third-party and adversarial: malformed points, edge-case scalars, signature malleability. |
-| **Negative tests** | 25 tests assert the *failures*. Twenty are tamper-and-truncate sweeps covering every handshake message of every pattern; the rest reject a non-canonical ephemeral, a wrong PSK, a tampered transport record, a replay, and an out-of-order record. |
-| **Compile-fail tests** | 12 `trybuild` cases pin the compiler diagnostics for malformed patterns, so "it will not build" stays true *and* keeps saying something useful. |
+| **Negative tests** | 26 tests assert the *failures*. Twenty-one are tamper sweeps — every byte of every handshake message of every pattern, plus every byte of a transport record; the rest reject a non-canonical ephemeral, a wrong PSK, a replay, and an out-of-order record, and pin all twenty on-wire message sizes. There is deliberately no truncation sweep: a wrong-length message is a compile error, not a runtime rejection, so that case is pinned by a `compile_fail` doctest instead. |
+| **Compile-fail tests** | 12 `trybuild` cases pin the compiler diagnostics for malformed patterns, so "it will not build" stays true *and* keeps saying something useful. Separate `compile_fail` doctests cover the §7.3 pattern guard and the wrong-length message case. |
 | **Coverage floor** | CI fails the build below 80% lines / 75% regions. |
 
 Alongside these, each commit is gated on `clippy` with warnings denied, a documentation

@@ -46,12 +46,12 @@
 //!   that read, and a tamper only surfaces at the next authenticated
 //!   token (msg2's tag).
 //!
-//! Beyond the macro↔macro round trips (T2), `n_macro_initiator_interops_with_
-//! classic_responder` drives the macro `N` initiator against the classic
-//! `SyncHandshake` responder: session-id (transcript-hash) equality proves the
-//! two implementations produced byte-identical handshakes. The final three
-//! tests (T6) confirm tampered messages, a wrong PSK, and a prologue mismatch
-//! all surface as `HandshakeError::DecryptionFailed`.
+//! This file used to also drive the macro `N` initiator against the classic
+//! `SyncHandshake` responder, as a bridge between the two implementations.
+//! The driver is gone and the bridge with it; cross-implementation agreement
+//! now lives in `snow_interop*.rs` and `noise_kat.rs`. The final three tests
+//! (T6) confirm tampered messages, a wrong PSK, and a prologue mismatch all
+//! surface as `HandshakeError::DecryptionFailed`.
 
 mod common;
 

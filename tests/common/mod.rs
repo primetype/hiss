@@ -95,9 +95,8 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
 
-/// A single in-memory `Read + Write` endpoint for driving the blocking
-/// [`SyncHandshake`](hiss::noise::SyncHandshake) against an out-of-band
-/// peer (e.g. `snow`, or replayed frozen vectors).
+/// A single in-memory `Read + Write` endpoint, retained for any test that
+/// needs to stream bytes against an out-of-band peer by hand.
 ///
 /// Writes accumulate into a capture buffer drained per outgoing message
 /// by [`take_written`](PeerStream::take_written); reads pull from an

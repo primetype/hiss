@@ -212,9 +212,9 @@
 //!
 //! # Feature flags
 //!
-//! * `async-io` — pulls in `tokio` for `AsyncHandshake`, part of the legacy
-//!   I/O driver API that is **scheduled for removal**. New code uses
-//!   [`noise!`](crate::noise!) and needs no feature.
+//! There is one, and it only picks a backend for a primitive — no feature
+//! turns any of this crate's API on or off.
+//!
 //! * `x25519-cryptoxide` (**default**) — back X25519's software DH with
 //!   `cryptoxide`'s `x25519` (the faster backend). Build with
 //!   `--no-default-features` to fall back to the `eccoxide` ladder; output

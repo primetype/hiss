@@ -131,8 +131,8 @@ pub trait CryptoKeyProviderAsync<C: Curve>: CryptoKeyProvider<C> {
 /// The canonical DH surface, for backends whose operations run to
 /// completion on the calling thread — pure software (`eccoxide` /
 /// `cryptoxide`) and the Apple Secure Enclave (whose Security-framework
-/// calls are synchronous, blocking C functions). It is what the blocking
-/// `std::io` handshake (`hiss::noise::SyncHandshake`) is generic over.
+/// calls are synchronous, blocking C functions). It is what the state
+/// machines [`noise!`](crate::noise!) generates are generic over.
 ///
 /// Key generation lives on the [`CryptoKeyProvider`] base, not here, so DH
 /// and generation are independent capabilities. Signing is a separate

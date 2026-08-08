@@ -278,8 +278,8 @@ where
     Ok(revealed)
 }
 
-// `do_es_*` are consumed by the async driver AND the Apple seal helpers, so
-// gate them to the union of those callers (not just async-io).
+// `do_es_*` are consumed by the Apple seal helpers only, now that the async
+// driver is gone; `test` keeps them reachable off-platform.
 #[cfg(any(target_os = "macos", target_os = "ios", test))]
 pub(crate) async fn do_es_initiator<Cu, Ci, H, CP>(
     inner: &mut HandshakeInner<Cu, Ci, H, CP>,
