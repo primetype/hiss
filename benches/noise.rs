@@ -6,12 +6,11 @@
 //! Each handshake benchmark drives a *complete* handshake (all messages,
 //! both parties) to transport-ready state. Everything that is not
 //! per-handshake crypto is built in the **unmeasured** `iter_batched` setup:
-//! the long-lived static keys, the two providers (so RNG seeding —
-//! `StdRng::from_os_rng()`, a kernel-entropy syscall — is *not* timed), and
-//! the in-memory I/O endpoints. The measured routine is therefore the
-//! handshake itself: ephemeral key generation, the Diffie–Hellman
-//! operations, and the symmetric ratchet. The bulk-transport benchmark is
-//! separate.
+//! the long-lived static keys and the two providers, so RNG seeding —
+//! `StdRng::from_os_rng()`, a kernel-entropy syscall — is *not* timed. The
+//! measured routine is therefore the handshake itself: ephemeral key
+//! generation, the Diffie–Hellman operations, and the symmetric ratchet. The
+//! bulk-transport benchmark is separate.
 //!
 //! # Matrix
 //!
@@ -25,20 +24,20 @@
 //! `Init(GetDhImpl)`. X448 is therefore hiss-only: there is no snow row to
 //! compare against.
 //!
-//! # Two caveats on the hiss-vs-snow comparison
+//! # One caveat on the hiss-vs-snow comparison
 //!
 //! * **RNG strategy.** hiss draws ephemeral randomness from a `StdRng`
 //!   (a ChaCha PRNG) seeded *once* in setup, so its measured region performs
 //!   no OS-entropy syscalls. snow uses its internal `OsRng` per ephemeral,
 //!   which *is* in its measured region — a small, inherent difference in the
 //!   two libraries' default RNG handling, slightly in hiss's favour.
-//! * **I/O model.** hiss is driven through its *real* blocking
-//!   `SyncHandshake` driver, which frames messages and reads/writes them over
-//!   an in-memory endpoint ([`Vec`]/[`Cursor`] for one-way N, a bidirectional
-//!   [`BenchPipe`] for IK/XX). snow writes/reads messages straight into flat
-//!   byte buffers. The in-memory framing is on the order of nanoseconds for
-//!   the ~100–200-byte handshake messages, negligible beside the
-//!   tens-to-hundreds of microseconds of elliptic-curve work.
+//!
+//! There used to be a second caveat here, about hiss being driven through a
+//! streaming I/O driver while snow wrote into flat buffers. It no longer
+//! applies: the `noise!` handshakes below return each message as a
+//! fixed-size array and perform no I/O, so both implementations are now
+//! measured writing into plain memory. Numbers from before that change are
+//! not comparable with numbers after it.
 
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
@@ -47,10 +46,6 @@ use hiss::noise::*;
 use hiss::provider::EphemeralOnly;
 use hiss::provider::ProviderExt;
 use rand::{SeedableRng, rngs::StdRng};
-use std::cell::RefCell;
-use std::collections::VecDeque;
-use std::io::Cursor;
-use std::rc::Rc;
 
 /// A fresh software provider seeded from OS entropy. Built in unmeasured
 /// setup so the `from_os_rng()` syscall never lands in a timed routine.
@@ -58,70 +53,28 @@ fn provider() -> EphemeralOnly<StdRng> {
     EphemeralOnly::new(StdRng::from_os_rng())
 }
 
-// ── In-memory pipe for multi-message handshakes ─────────────────
-
-/// A linked in-memory `Read + Write` endpoint pair; `a`'s writes are `b`'s
-/// reads and vice versa. Lets a multi-message hiss↔hiss handshake run
-/// interleaved on one thread over the blocking driver. Allocated in setup,
-/// so only the reads/writes — not the `Rc`/`RefCell`/`VecDeque` setup — are
-/// timed.
-#[derive(Clone)]
-struct BenchPipe {
-    inbound: Rc<RefCell<VecDeque<u8>>>,
-    outbound: Rc<RefCell<VecDeque<u8>>>,
-}
-
-impl BenchPipe {
-    fn pair() -> (BenchPipe, BenchPipe) {
-        let l = Rc::new(RefCell::new(VecDeque::new()));
-        let r = Rc::new(RefCell::new(VecDeque::new()));
-        (
-            BenchPipe {
-                inbound: r.clone(),
-                outbound: l.clone(),
-            },
-            BenchPipe {
-                inbound: l,
-                outbound: r,
-            },
-        )
-    }
-}
-
-impl std::io::Read for BenchPipe {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let mut q = self.inbound.borrow_mut();
-        let n = q.len().min(buf.len());
-        // Bulk-drain rather than per-byte pop_front.
-        for (slot, byte) in buf.iter_mut().zip(q.drain(..n)) {
-            *slot = byte;
-        }
-        Ok(n)
-    }
-}
-
-impl std::io::Write for BenchPipe {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.outbound.borrow_mut().extend(buf.iter().copied());
-        Ok(buf.len())
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
 // ── hiss handshake drivers (one macro per pattern, generic over curve) ──
 //
-// Each expands to a grouped benchmark for one (pattern, curve). Static keys,
-// providers, and I/O endpoints are minted in `iter_batched` setup
-// (unmeasured); the routine drives the full handshake to transport-ready and
-// black-boxes the two transports.
+// Each expands to a grouped benchmark for one (pattern, curve). Static keys
+// and providers are minted in `iter_batched` setup (unmeasured); the routine
+// drives the full handshake to transport-ready and black-boxes the two
+// transports.
+//
+// The curve is an `ident` rather than a `ty` because `noise!` parses the
+// suite as a `syn::Path`: a `$curve:ty` metavariable arrives as one opaque
+// token and will not parse there.
+//
+// Each `noise!` sits inside its own `bench_function` closure, so the three
+// curve instantiations of a pattern do not collide despite sharing a name —
+// and the name has to be the canonical pattern name regardless, since it
+// becomes the Noise protocol name.
 
-/// N — `-> e, es`. The initiator seals msg1 into a `Vec`; the responder opens
-/// it from a `Cursor`. Only the responder has a (pre-known) static.
+/// N — `-> e, es`. One message, which is also the last, so writing it yields
+/// the transport directly. Only the responder has a (pre-known) static.
 macro_rules! bench_n_hiss {
-    ($group:expr, $curve:ty, $label:expr) => {
+    ($group:expr, $curve:ident, $label:expr) => {
         $group.bench_function(BenchmarkId::new("hiss", $label), |b| {
+            hiss::noise! { pub N<$curve, ChaChaPoly, Blake2b> { <- s ... -> e, es } }
             b.iter_batched(
                 || {
                     let mut p = provider();
@@ -130,24 +83,13 @@ macro_rules! bench_n_hiss {
                     (r_static, r_pub, provider(), provider())
                 },
                 |(r_static, r_pub, i_provider, r_provider)| {
-                    type Proto = Noise<pattern::N, $curve, ChaChaPoly, Blake2b>;
-                    let sealer = SyncHandshake::<Proto, Initiator, _, _, _, _>::initiate(
-                        i_provider,
-                        &[],
-                        Vec::new(),
-                    )
-                    .set_rs(r_pub);
-                    let (i_t, wire) = sealer.e().unwrap().es().unwrap().into_parts();
-
-                    let opener = SyncHandshake::<Proto, Responder, _, _, _, _>::respond(
-                        r_provider,
-                        &[],
-                        Cursor::new(wire),
-                    )
-                    .set_s(r_static)
-                    .unwrap();
-                    let (_, recv) = opener.recv().e().unwrap();
-                    let (r_t, _) = recv.es().unwrap().into_parts();
+                    let (msg1, i_t) = N::initiator(i_provider, &[], r_pub)
+                        .write_message_1()
+                        .unwrap();
+                    let r_t = N::responder(r_provider, &[], r_static)
+                        .unwrap()
+                        .read_message_1(&msg1)
+                        .unwrap();
                     black_box((i_t, r_t))
                 },
                 BatchSize::SmallInput,
@@ -159,60 +101,32 @@ macro_rules! bench_n_hiss {
 /// IK — msg1 `-> e, es, s, ss`, msg2 `<- e, ee, se`. Both parties hold a
 /// static; the initiator knows the responder's up front.
 macro_rules! bench_ik_hiss {
-    ($group:expr, $curve:ty, $label:expr) => {
+    ($group:expr, $curve:ident, $label:expr) => {
         $group.bench_function(BenchmarkId::new("hiss", $label), |b| {
+            hiss::noise! {
+                pub IK<$curve, ChaChaPoly, Blake2b> { <- s ... -> e, es, s, ss <- e, ee, se }
+            }
             b.iter_batched(
                 || {
                     let mut p = provider();
                     let i_static = p.generate::<$curve>().unwrap();
                     let r_static = p.generate::<$curve>().unwrap();
                     let r_pub = p.public(&r_static).unwrap();
-                    let (i_pipe, r_pipe) = BenchPipe::pair();
-                    (
-                        i_static,
-                        r_static,
-                        r_pub,
-                        provider(),
-                        provider(),
-                        i_pipe,
-                        r_pipe,
-                    )
+                    (i_static, r_static, r_pub, provider(), provider())
                 },
-                |(i_static, r_static, r_pub, i_provider, r_provider, i_pipe, r_pipe)| {
-                    type Proto = Noise<pattern::IK, $curve, ChaChaPoly, Blake2b>;
-                    let i_hs = SyncHandshake::<Proto, Initiator, _, _, _, _>::initiate(
-                        i_provider,
-                        &[],
-                        i_pipe,
-                    )
-                    .set_rs(r_pub);
-                    let r_hs = SyncHandshake::<Proto, Responder, _, _, _, _>::respond(
-                        r_provider,
-                        &[],
-                        r_pipe,
-                    )
-                    .set_s(r_static)
-                    .unwrap();
-
+                |(i_static, r_static, r_pub, i_provider, r_provider)| {
                     // msg1: -> e, es, s, ss
-                    let i_hs = i_hs
-                        .e()
-                        .unwrap()
-                        .es()
-                        .unwrap()
-                        .s(i_static)
-                        .unwrap()
-                        .ss()
+                    let (msg1, i_hs) = IK::initiator(i_provider, &[], r_pub)
+                        .write_message_1(i_static)
                         .unwrap();
-                    let (_, recv) = r_hs.recv().e().unwrap();
-                    let recv = recv.es().unwrap();
-                    let (_, recv) = recv.s().unwrap();
-                    let r_hs = recv.ss().unwrap();
+                    let r_hs = IK::responder(r_provider, &[], r_static)
+                        .unwrap()
+                        .read_message_1(&msg1)
+                        .unwrap();
 
                     // msg2: <- e, ee, se
-                    let (r_t, _) = r_hs.e().unwrap().ee().unwrap().se().unwrap().into_parts();
-                    let (_, recv) = i_hs.recv().e().unwrap();
-                    let (i_t, _) = recv.ee().unwrap().se().unwrap().into_parts();
+                    let (msg2, r_t) = r_hs.write_message_2().unwrap();
+                    let i_t = i_hs.read_message_2(&msg2).unwrap();
                     black_box((i_t, r_t))
                 },
                 BatchSize::SmallInput,
@@ -224,52 +138,30 @@ macro_rules! bench_ik_hiss {
 /// XX — msg1 `-> e`, msg2 `<- e, ee, s, es`, msg3 `-> s, se`. Neither static
 /// is pre-known; both are sent encrypted in-band.
 macro_rules! bench_xx_hiss {
-    ($group:expr, $curve:ty, $label:expr) => {
+    ($group:expr, $curve:ident, $label:expr) => {
         $group.bench_function(BenchmarkId::new("hiss", $label), |b| {
+            hiss::noise! { pub XX<$curve, ChaChaPoly, Blake2b> { -> e <- e, ee, s, es -> s, se } }
             b.iter_batched(
                 || {
                     let mut p = provider();
                     let i_static = p.generate::<$curve>().unwrap();
                     let r_static = p.generate::<$curve>().unwrap();
-                    let (i_pipe, r_pipe) = BenchPipe::pair();
-                    (i_static, r_static, provider(), provider(), i_pipe, r_pipe)
+                    (i_static, r_static, provider(), provider())
                 },
-                |(i_static, r_static, i_provider, r_provider, i_pipe, r_pipe)| {
-                    type Proto = Noise<pattern::XX, $curve, ChaChaPoly, Blake2b>;
-                    let i_hs = SyncHandshake::<Proto, Initiator, _, _, _, _>::initiate(
-                        i_provider,
-                        &[],
-                        i_pipe,
-                    );
-                    let r_hs = SyncHandshake::<Proto, Responder, _, _, _, _>::respond(
-                        r_provider,
-                        &[],
-                        r_pipe,
-                    );
-
+                |(i_static, r_static, i_provider, r_provider)| {
                     // msg1: -> e
-                    let i_hs = i_hs.e().unwrap();
-                    let (_, recv) = r_hs.recv().e().unwrap();
+                    let (msg1, i_hs) = XX::initiator(i_provider, &[]).write_message_1().unwrap();
+                    let r_hs = XX::responder(r_provider, &[])
+                        .read_message_1(&msg1)
+                        .unwrap();
 
                     // msg2: <- e, ee, s, es
-                    let r_hs = recv
-                        .e()
-                        .unwrap()
-                        .ee()
-                        .unwrap()
-                        .s(r_static)
-                        .unwrap()
-                        .es()
-                        .unwrap();
-                    let (_, recv) = i_hs.recv().e().unwrap();
-                    let recv = recv.ee().unwrap();
-                    let (_, recv) = recv.s().unwrap();
-                    let i_hs = recv.es().unwrap();
+                    let (msg2, r_hs) = r_hs.write_message_2(r_static).unwrap();
+                    let i_hs = i_hs.read_message_2(&msg2).unwrap();
 
                     // msg3: -> s, se
-                    let (i_t, _) = i_hs.s(i_static).unwrap().se().unwrap().into_parts();
-                    let (_, recv) = r_hs.recv().s().unwrap();
-                    let (r_t, _) = recv.se().unwrap().into_parts();
+                    let (msg3, i_t) = i_hs.write_message_3(i_static).unwrap();
+                    let r_t = r_hs.read_message_3(&msg3).unwrap();
                     black_box((i_t, r_t))
                 },
                 BatchSize::SmallInput,
@@ -445,20 +337,14 @@ fn transport(c: &mut Criterion) {
         let mut p = provider();
         let r_static = p.generate::<P256>().unwrap();
         let r_pub = p.public(&r_static).unwrap();
-        type Proto = Noise<pattern::N, P256, ChaChaPoly, Blake2b>;
-        let sealer =
-            SyncHandshake::<Proto, Initiator, _, _, _, _>::initiate(provider(), &[], Vec::new())
-                .set_rs(r_pub);
-        let (i_t, wire) = sealer.e().unwrap().es().unwrap().into_parts();
-        let opener = SyncHandshake::<Proto, Responder, _, _, _, _>::respond(
-            provider(),
-            &[],
-            Cursor::new(wire),
-        )
-        .set_s(r_static)
-        .unwrap();
-        let (_, recv) = opener.recv().e().unwrap();
-        let (r_t, _) = recv.es().unwrap().into_parts();
+        hiss::noise! { pub N<P256, ChaChaPoly, Blake2b> { <- s ... -> e, es } }
+        let (msg1, i_t) = N::initiator(provider(), &[], r_pub)
+            .write_message_1()
+            .unwrap();
+        let r_t = N::responder(provider(), &[], r_static)
+            .unwrap()
+            .read_message_1(&msg1)
+            .unwrap();
         (i_t, r_t)
     };
 
