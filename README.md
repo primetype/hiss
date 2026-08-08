@@ -22,15 +22,16 @@ and runs. Assembled into a single program it is
 [`examples/quickstart.rs`](examples/quickstart.rs) — `cargo run --example quickstart`.
 
 **1. Describe the handshake you want.** You write it in the Noise specification's own
-notation and `hiss` generates the code. `Channel` here is the `XX` shape: three messages,
-both sides proving who they are along the way.
+notation and `hiss` generates the code. This one is `XX`: three messages, both sides
+proving who they are along the way. Name the type after its pattern — the name you write
+goes on the wire as part of the protocol identity.
 
 ```rust
 use hiss::noise::{Blake2b, ChaChaPoly, X25519};
 
 hiss::noise! {
     /// Mutual authentication; neither side pre-knows the other's key.
-    pub Channel<X25519, ChaChaPoly, Blake2b> {
+    pub XX<X25519, ChaChaPoly, Blake2b> {
         -> e
         <- e, ee, s, es
         -> s, se
@@ -38,7 +39,7 @@ hiss::noise! {
 }
 ```
 
-**2. Give each side a long-term key.** `Channel` authenticates both parties, so each owns
+**2. Give each side a long-term key.** `XX` authenticates both parties, so each owns
 a key pair that outlives the connection. Nothing is shared in advance — they exchange
 public halves during the handshake.
 
@@ -57,14 +58,14 @@ bytes to send; putting them on a socket, a queue, or a QR code is your business 
 performs no I/O.
 
 ```rust
-let (msg1, alice) = Channel::initiator(alice_keys, &[]).write_message_1()?;
-let bob = Channel::responder(bob_keys, &[]).read_message_1(&msg1)?;
+let (msg1, alice) = XX::initiator(alice_keys, &[]).write_message_1()?;
+let bob = XX::responder(bob_keys, &[]).read_message_1(&msg1)?;
 let (msg2, bob) = bob.write_message_2(bob_static)?;
 let (msg3, mut alice) = alice.read_message_2(&msg2)?.write_message_3(alice_static)?;
 let mut bob = bob.read_message_3(&msg3)?;
 ```
 
-Every message size is a compile-time constant — `Channel::MSG1_SIZE` and friends — so
+Every message size is a compile-time constant — `XX::MSG1_SIZE` and friends — so
 framing the handshake is free: read exactly that many bytes.
 
 **4. Talk.** Both ends now hold a `Transport`. `OVERHEAD` is what the authentication tag
@@ -73,7 +74,7 @@ costs you per message.
 ```rust
 use hiss::noise::Transport;
 
-let mut wire = [0u8; 32 + Transport::<Channel>::OVERHEAD];
+let mut wire = [0u8; 32 + Transport::<XX>::OVERHEAD];
 let mut got = [0u8; 32];
 
 let n = alice.send(b"ping", &mut wire)?;
@@ -211,7 +212,7 @@ use hiss::noise::{Blake2b, ChaChaPoly, P256};
 use hiss::provider::{AppleSecureEnclave, ProviderExt};
 
 hiss::noise! {
-    pub Channel<P256, ChaChaPoly, Blake2b> {
+    pub XX<P256, ChaChaPoly, Blake2b> {
         -> e
         <- e, ee, s, es
         -> s, se
@@ -223,7 +224,7 @@ let mut keys = AppleSecureEnclave::new("uk.co.example.app");
 let static_key = keys.generate::<P256>()?;
 
 // From here nothing is Apple-specific.
-let (msg1, hs) = Channel::initiator(keys, &[]).write_message_1()?;
+let (msg1, hs) = XX::initiator(keys, &[]).write_message_1()?;
 ```
 
 The suite names `P256` because the Secure Enclave implements that curve and no other.

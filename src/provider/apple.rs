@@ -417,7 +417,7 @@ impl P256r1PrivateKey {
 /// use hiss::provider::{AppleSecureEnclave, ProviderExt};
 ///
 /// hiss::noise! {
-///     pub Channel<P256, ChaChaPoly, Blake2b> {
+///     pub XX<P256, ChaChaPoly, Blake2b> {
 ///         -> e
 ///         <- e, ee, s, es
 ///         -> s, se
@@ -430,7 +430,7 @@ impl P256r1PrivateKey {
 /// let static_key = keys.generate::<P256>()?;
 ///
 /// // From here nothing is Apple-specific.
-/// let (msg1, hs) = Channel::initiator(keys, &[]).write_message_1()?;
+/// let (msg1, hs) = XX::initiator(keys, &[]).write_message_1()?;
 /// # let _ = (msg1, hs, static_key);
 /// # Ok(())
 /// # }

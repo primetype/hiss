@@ -20,7 +20,7 @@ use hiss::provider::{EphemeralOnly, ProviderExt};
 
 hiss::noise! {
     /// Mutual authentication; neither side pre-knows the other's key.
-    pub Channel<X25519, ChaChaPoly, Blake2b> {
+    pub XX<X25519, ChaChaPoly, Blake2b> {
         -> e
         <- e, ee, s, es
         -> s, se
@@ -35,14 +35,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bob_static = bob_keys.generate::<X25519>()?;
 
     // Three messages. hiss hands you bytes; moving them is your job.
-    let (msg1, alice) = Channel::initiator(alice_keys, &[]).write_message_1()?;
-    let bob = Channel::responder(bob_keys, &[]).read_message_1(&msg1)?;
+    let (msg1, alice) = XX::initiator(alice_keys, &[]).write_message_1()?;
+    let bob = XX::responder(bob_keys, &[]).read_message_1(&msg1)?;
     let (msg2, bob) = bob.write_message_2(bob_static)?;
     let (msg3, mut alice) = alice.read_message_2(&msg2)?.write_message_3(alice_static)?;
     let mut bob = bob.read_message_3(&msg3)?;
 
     // Encrypted, both directions.
-    let mut wire = [0u8; 32 + Transport::<Channel>::OVERHEAD];
+    let mut wire = [0u8; 32 + Transport::<XX>::OVERHEAD];
     let mut got = [0u8; 32];
 
     let n = alice.send(b"ping", &mut wire)?;

@@ -55,9 +55,15 @@ are gone.
   name seeding the initial handshake hash, so
   `noise! { pub Channel<X25519, ChaChaPoly, Blake2b> { … } }` produces
   `Noise_Channel_25519_ChaChaPoly_BLAKE2b` — self-consistent, and
-  interoperable with nothing. The crate's own example previously demonstrated
-  this mistake; it now names the type for its pattern and puts the
-  descriptive name on a type alias.
+  interoperable with nothing.
+
+  Every copy-paste surface in the crate previously demonstrated that mistake
+  and now names the type for its pattern: the README and crate-level
+  Quickstarts and `examples/quickstart.rs` declare `pub XX`, the
+  `AppleSecureEnclave` doctest declares `pub XX`, and
+  `examples/tcp_ikpsk1_ceremony.rs` declares `pub IKpsk1` with the
+  descriptive name on a `type Ceremony = IKpsk1` alias. The Quickstart's
+  declaration is now exactly the one the `snow` interop tests drive.
 
 - The README leads with the Quickstart, and the crate docs do too — it was
   the seventh of eight sections on docs.rs, so a reader passed six sections

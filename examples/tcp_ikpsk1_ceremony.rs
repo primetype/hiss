@@ -13,14 +13,17 @@
 //! # The pattern
 //!
 //! The macro takes the pattern in the Noise specification's own notation.
-//! We name it `Ceremony`: the name is part of the protocol identity
-//! (`Noise_Ceremony_25519_ChaChaPoly_BLAKE2b` seeds every transcript), so
-//! only peers speaking *exactly* this protocol — same name, same suite,
-//! same tokens — can complete the handshake. The token sequence is
-//! IKpsk1's:
+//! We name the type `IKpsk1`, after the pattern it spells, because the name
+//! is part of the protocol identity: it becomes
+//! `Noise_IKpsk1_25519_ChaChaPoly_BLAKE2b`, which seeds every transcript,
+//! so only peers speaking *exactly* this protocol — same name, same suite,
+//! same tokens — can complete the handshake. Naming it anything else would
+//! still work between two hiss peers and interoperate with nothing. The
+//! role the channel plays in this example goes on a `type Ceremony`
+//! alias, which is what the code below reads from. The token sequence:
 //!
 //! ```text
-//! Ceremony:
+//! IKpsk1:
 //!   <- s                      (the device already knows the server's static key)
 //!   ...
 //!   -> e, es, s, ss, psk      (msg1: the device proves who it is, under PSK)
@@ -47,14 +50,18 @@ use rand::rngs::StdRng;
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
 hiss::noise! {
-    /// The enrolment ceremony channel: IKpsk1 under our own protocol name.
-    pub Ceremony<X25519, ChaChaPoly, Blake2b> {
+    /// `IKpsk1` over X25519 / ChaChaPoly / BLAKE2b.
+    pub IKpsk1<X25519, ChaChaPoly, Blake2b> {
         <- s
         ...
         -> e, es, s, ss, psk
         <- e, ee, se
     }
 }
+
+/// What the channel is *for* in this example. The protocol name on the
+/// wire stays `IKpsk1`; the role lives on the alias.
+type Ceremony = IKpsk1;
 
 /// The software crypto backend both sides run on in this example.
 type Provider = EphemeralOnly<StdRng>;
