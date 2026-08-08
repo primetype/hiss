@@ -15,9 +15,35 @@ use crate::curve::Curve;
 /// cost, allowing consumers to name the transport using their protocol
 /// type alias:
 ///
-/// ```ignore
+/// ```rust
+/// # use hiss::noise::{Blake2b, ChaChaPoly, Transport, X25519};
+/// # use hiss::provider::{EphemeralOnly, ProviderExt};
+/// # use hiss::psk::Psk;
+/// hiss::noise! {
+///     pub IKpsk1<X25519, ChaChaPoly, Blake2b> {
+///         <- s
+///         ...
+///         -> e, es, s, ss, psk
+///         <- e, ee, se
+///     }
+/// }
+///
 /// type MyProtocol = IKpsk1;
-/// let transport: Transport<MyProtocol> = /* handshake */;
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # let psk = Psk::generate(rand::rng());
+/// # let mut alice_keys = EphemeralOnly::new(rand::rng());
+/// # let alice_static = alice_keys.generate::<X25519>()?;
+/// # let mut bob_keys = EphemeralOnly::new(rand::rng());
+/// # let bob_static = bob_keys.generate::<X25519>()?;
+/// # let bob_pub = bob_keys.public(&bob_static)?;
+/// # let (msg1, alice) = MyProtocol::initiator(alice_keys, &[], bob_pub)
+/// #     .write_message_1(alice_static, &psk)?;
+/// # let bob = MyProtocol::responder(bob_keys, &[], bob_static)?
+/// #     .read_message_1(&msg1, &psk)?;
+/// # let (msg2, _bob) = bob.write_message_2()?;
+/// let transport: Transport<MyProtocol> = alice.read_message_2(&msg2)?;
+/// # Ok(())
+/// # }
 /// ```
 ///
 /// After the handshake finishes, all further communication uses two

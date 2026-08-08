@@ -19,7 +19,7 @@ it is fixed, not deferred to "the next patch."
 | Coverage | `cargo llvm-cov` (gated total — see `.github/workflows/coverage.yml`) | ≥ 80% lines / 75% regions |
 | Benchmarks | `cargo bench` | builds and runs clean |
 | Supply chain | `cargo deny check` | clean |
-| Downstream | `scripts/downstream-build.sh` | fresh resolve, no lockfile, builds + runs the README quickstart |
+| Downstream | `scripts/downstream-build.sh` | fresh resolve, no lockfile, builds + runs the README quickstart, compiles the doctests `noise!` emits |
 
 These mirror the CI pipeline (`Check` → `Test` → `Coverage`), plus `Downstream`,
 which runs alongside `Check` rather than inside it — it is the one gate that
@@ -53,8 +53,17 @@ So what the gate adds, concretely:
    via a dev-dependency surfaces as a build failure only here.
 3. The README quickstart is compiled *and executed* against the exact
    dependency pairing the README advertises (`hiss` + `rand = "0.9"`).
-4. The `default-features = false` consumer is covered.
-5. On its weekly cron it catches an upstream break during an idle window,
+4. The `# Usage` doctests `noise!` emits are compiled — over four
+   patterns chosen to reach every arm of the generator, not just one
+   shape: pre-message keys (local and remote), a plain PSK and a
+   per-peer lookup, declared payloads on a sent and a received message,
+   the identity hook on a read that reveals `s`, and a one-way role that
+   only writes. Nothing else compiles them: doctests do not run for
+   binaries, and hiss's own `noise!` invocations are marker-mode, which
+   emits no walkthrough. Sabotage one arm and every other gate stays
+   green while this one goes red — which is the point.
+5. The `default-features = false` consumer is covered.
+6. On its weekly cron it catches an upstream break during an idle window,
    rather than at the next push — which, for a quiet week, is the release
    commit itself.
 

@@ -37,7 +37,16 @@
 #      against the advertised dependency set.
 #   3. Resolves and builds it WITHOUT `--offline`, so Cargo picks the newest
 #      semver-compatible release of every dependency, then runs it.
-#   4. Repeats with `default-features = false`, which swaps the X25519
+#   4. Builds a lib target — the README's `hiss::noise!` invocation plus
+#      three more patterns chosen to reach every arm of the walkthrough (see
+#      section 1b) — and runs `cargo test --doc` over it. `noise!` emits a
+#      `# Usage` walkthrough onto every pattern type it generates, as a
+#      doctest, and that doctest is compiled *nowhere else*: doctests do not
+#      run for binaries, and hiss's own `noise!` invocations are marker-mode,
+#      which emits no walkthrough. Without this step the macro could start
+#      emitting a walkthrough that does not compile and every gate would stay
+#      green.
+#   5. Repeats with `default-features = false`, which swaps the X25519
 #      backend from cryptoxide to eccoxide — a path the rest of CI treats as
 #      first-class.
 #
@@ -121,6 +130,65 @@ main_rs="$work/main.rs"
     echo '}'
 } > "$main_rs"
 
+# ── 1b. The lib target the emitted doctests need ─────────────────────
+#
+# `noise!` writes a `# Usage` walkthrough onto every pattern type it
+# generates, as a doctest — and the shape of that walkthrough varies with the
+# pattern: pre-message keys, a PSK (plain, or a per-peer lookup), declared
+# payloads, an identity hook on a read that reveals `s`, a role that only
+# writes. The README's `XX` reaches none of those arms, so on its own this
+# gate would let a walkthrough that does not compile ship to every consumer
+# of every other pattern. These four cover the generator:
+#
+#   XX      (from the README) — verify hook, no pre-messages, no PSK
+#   IKpsk1  — pre-messages, `s` ahead of `psk` (per-peer lookup), payloads
+#             on both a sent and a received message
+#   IKpsk0  — `psk` ahead of `s`: a read taking a plain PSK *and* a
+#             verification closure
+#   K       — one-way: a role that only writes, a role that only reads, and
+#             a local static in both constructors (the fallible arm)
+lib_rs="$work/lib.rs"
+{
+    cat "$blocks/block1"
+    cat <<'RS'
+
+/// Patterns picked to reach every arm of the walkthrough `noise!` emits.
+pub mod arms {
+    use hiss::noise::{Blake2b, ChaChaPoly, X25519};
+
+    hiss::noise! {
+        /// Pre-messages, a per-peer PSK lookup, and declared payloads.
+        pub IKpsk1<X25519, ChaChaPoly, Blake2b> {
+            <- s
+            ...
+            -> e, es, s, ss, psk [12]
+            <- e, ee, se [4]
+        }
+    }
+
+    hiss::noise! {
+        /// `psk` ahead of the `s` it protects.
+        pub IKpsk0<X25519, ChaChaPoly, Blake2b> {
+            <- s
+            ...
+            -> psk, e, es, s, ss
+            <- e, ee, se
+        }
+    }
+
+    hiss::noise! {
+        /// One-way, with both statics known in advance.
+        pub K<X25519, ChaChaPoly, Blake2b> {
+            -> s
+            <- s
+            ...
+            -> e, es, ss
+        }
+    }
+}
+RS
+} > "$lib_rs"
+
 # ── 2. Build it as a downstream crate ───────────────────────────────
 
 # $1 = crate name, $2 = the `hiss` dependency line
@@ -130,6 +198,9 @@ build_downstream() {
 
     mkdir -p "$dir/src"
     cp "$main_rs" "$dir/src/main.rs"
+    # A lib target is what the emitted `# Usage` doctests need: rustdoc does
+    # not collect doctests from a binary.
+    cp "$lib_rs" "$dir/src/lib.rs"
 
     # `[workspace]` keeps the crate from being absorbed into an ancestor
     # workspace. No Cargo.lock is created or copied: Cargo resolves from
@@ -157,6 +228,12 @@ EOF
     # semver-compatible release of every requirement, exactly as a real
     # downstream crate would.
     ( cd "$dir" && cargo run --quiet )
+
+    # The `# Usage` walkthroughs `noise!` emitted onto the quickstart's `XX`
+    # type, compiled in a consumer — where they are read and where nothing
+    # else ever compiles them.
+    echo "── $name: compiling the doctests \`noise!\` emitted ──"
+    ( cd "$dir" && cargo test --doc --quiet )
     echo "── $name: OK ──"
 }
 

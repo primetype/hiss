@@ -379,4 +379,75 @@ pub mod zeroize;
 ///         .read_message_1(&truncated);
 /// }
 /// ```
+///
+/// # Example: an `IKpsk1` ceremony, both roles
+///
+/// The whole generated API in one program: the two constructors, one
+/// method per handshake message, and the identity hook where the hub
+/// decides whether it knows the device that just named itself. Only the
+/// sockets are missing — `msg1` and `msg2` are the bytes you would put on
+/// the wire. `read_message_1_with` is IKpsk1's signature move: the `s`
+/// token reveals the device *before* the `psk` token needs a key, so the
+/// PSK parameter becomes a lookup over the identity just revealed, and an
+/// `Err` from it aborts before any `Transport` exists.
+///
+/// ```rust
+/// use hiss::noise::{Blake2b, ChaChaPoly, HandshakeError, Transport, X25519};
+/// use hiss::provider::{EphemeralOnly, ProviderExt};
+/// use hiss::psk::Psk;
+///
+/// hiss::noise! {
+///     /// Ceremony channel between two enrolled devices.
+///     pub IKpsk1<X25519, ChaChaPoly, Blake2b> {
+///         <- s
+///         ...
+///         -> e, es, s, ss, psk
+///         <- e, ee, se
+///     }
+/// }
+///
+/// const PROLOGUE: &[u8] = b"ceremony v1";
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// // Enrolment, done out of band: the device holds the hub's static public
+/// // key and a PSK the hub can find again from the device's identity.
+/// let mut hub_keys = EphemeralOnly::new(rand::rng());
+/// let hub_static = hub_keys.generate::<X25519>()?;
+/// let hub_public = hub_keys.public(&hub_static)?;
+/// let mut device_keys = EphemeralOnly::new(rand::rng());
+/// let device_static = device_keys.generate::<X25519>()?;
+/// let device_public = device_keys.public(&device_static)?;
+/// let psk = Psk::generate(rand::rng());
+/// let enrolment = [(device_public, psk.clone())];
+///
+/// // The device — initiator. It knows `hub_public` up front (`<- s`).
+/// let device = IKpsk1::initiator(device_keys, PROLOGUE, hub_public);
+/// let (msg1, device) = device.write_message_1(device_static, &psk)?;
+///
+/// // The hub — responder. The closure runs the moment msg1's `s` token
+/// // decrypts, and picks the PSK for that device (or refuses it).
+/// let hub = IKpsk1::responder(hub_keys, PROLOGUE, hub_static)?;
+/// let hub = hub.read_message_1_with(&msg1, |device| {
+///     enrolment
+///         .iter()
+///         .find(|(enrolled, _)| enrolled == device)
+///         .map(|(_, psk)| psk.clone())
+///         .ok_or_else(|| HandshakeError::PeerRejected {
+///             reason: "device not enrolled".into(),
+///         })
+/// })?;
+/// assert_eq!(hub.remote_static(), &device_public);
+///
+/// // Last message: both sides come out holding a `Transport`.
+/// let (msg2, mut hub) = hub.write_message_2()?;
+/// let mut device = device.read_message_2(&msg2)?;
+///
+/// let mut wire = [0u8; 5 + Transport::<IKpsk1>::OVERHEAD];
+/// let mut got = [0u8; 5];
+/// let n = device.send(b"hello", &mut wire)?;
+/// let m = hub.receive(&wire[..n], &mut got)?;
+/// assert_eq!(&got[..m], b"hello");
+/// # Ok(())
+/// # }
+/// ```
 pub use hiss_macros::noise;
