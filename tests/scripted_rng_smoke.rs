@@ -8,11 +8,11 @@
 mod common;
 use common::ScriptedRng;
 
-use hiss::noise::*;
+use hiss::noise::{Blake2b, ChaChaPoly, P256};
 use hiss::provider::{EphemeralOnly, ProviderExt};
 use rand::{SeedableRng, rngs::StdRng};
 
-type NoiseN = Noise<pattern::N, P256, ChaChaPoly, Blake2b>;
+hiss::noise! { pub NoiseN<P256, ChaChaPoly, Blake2b> { <- s ... -> e, es } }
 
 /// A fixed, valid P-256 scalar (`0x1111…11` is nonzero and far below the
 /// curve order `n`), used as the injected ephemeral private key.
@@ -22,22 +22,20 @@ const EPHEMERAL: [u8; 32] = [0x11; 32];
 /// responder static is derived from a fixed seed so the whole transcript is
 /// determined by constants.
 ///
-/// Driven over the blocking [`SyncHandshake`] driver with an in-memory `Vec`
-/// sink: `EphemeralOnly` implements the synchronous `DhProvider`, so the
-/// whole `N` initiator message (`e, es`) runs without an executor and the
-/// captured `Vec` is exactly msg1.
-fn seal_n_msg1() -> Vec<u8> {
+/// `N`'s single message is also its last, so `write_message_1` hands back
+/// the finished message and the transport together. The message is a
+/// `[u8; NoiseN::MSG1_SIZE]` — no I/O, no sink, and the length is fixed at
+/// compile time rather than being whatever the writer happened to emit.
+fn seal_n_msg1() -> [u8; NoiseN::MSG1_SIZE] {
     let mut responder = EphemeralOnly::new(StdRng::seed_from_u64(7));
     let responder_static = responder.generate::<P256>().unwrap();
     let responder_pub = responder.public(&responder_static).unwrap();
 
     let initiator = EphemeralOnly::new(ScriptedRng::new(&[&EPHEMERAL]));
-    let hs = SyncHandshake::<NoiseN, Initiator, _, _, _, _>::initiate(initiator, &[], Vec::new())
-        .set_rs(responder_pub);
-
-    let done = hs.e().unwrap().es().unwrap();
-    let (_transport, wire) = done.into_parts();
-    wire
+    let (msg1, _transport) = NoiseN::initiator(initiator, &[], responder_pub)
+        .write_message_1()
+        .unwrap();
+    msg1
 }
 
 #[test]
@@ -50,7 +48,7 @@ fn scripted_ephemeral_is_byte_reproducible() {
         "identical inputs (seeded static + scripted ephemeral) must yield identical wire bytes"
     );
     assert_eq!(
-        a.len(),
+        NoiseN::MSG1_SIZE,
         81,
         "N msg1 = 65-byte ephemeral pubkey + 16-byte tag"
     );

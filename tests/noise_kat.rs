@@ -20,29 +20,26 @@
 mod common;
 use common::{ScriptedRng, private_key, public_key};
 
-use hiss::noise::*;
+use hiss::noise::{Blake2b, ChaChaPoly, P256};
 use hiss::provider::EphemeralOnly;
 use hiss::psk::Psk;
 use serde::{Deserialize, Serialize};
-use std::cell::RefCell;
-use std::io::{Read, Write};
-use std::rc::Rc;
 
-// Each case below exercises one Noise pattern over the crate's default suite.
-// The public API has no suite-bound aliases — `N`, `XX`, … are *patterns*
-// (under `noise::pattern`), not whole `Noise<P, Cu, Ci, H>` protocols — so the
-// full protocol is bound locally, one per pattern, named for the pattern tested.
-type N = Noise<pattern::N, P256, ChaChaPoly, Blake2b>;
-type K = Noise<pattern::K, P256, ChaChaPoly, Blake2b>;
-type Kpsk0 = Noise<pattern::Kpsk0, P256, ChaChaPoly, Blake2b>;
-type IKpsk1 = Noise<pattern::IKpsk1, P256, ChaChaPoly, Blake2b>;
-type IK = Noise<pattern::IK, P256, ChaChaPoly, Blake2b>;
-type NK = Noise<pattern::NK, P256, ChaChaPoly, Blake2b>;
-type IX = Noise<pattern::IX, P256, ChaChaPoly, Blake2b>;
-type XK = Noise<pattern::XK, P256, ChaChaPoly, Blake2b>;
-type NN = Noise<pattern::NN, P256, ChaChaPoly, Blake2b>;
-type XX = Noise<pattern::XX, P256, ChaChaPoly, Blake2b>;
-type X = Noise<pattern::X, P256, ChaChaPoly, Blake2b>;
+// One `noise!` declaration per pattern, in the Noise specification's own
+// notation — the same token sequences as `src/noise/pattern.rs`, bound here
+// to a concrete suite so every handshake message is a fixed-size array whose
+// length is a compile-time constant.
+hiss::noise! { pub N<P256, ChaChaPoly, Blake2b>      { <- s ... -> e, es } }
+hiss::noise! { pub K<P256, ChaChaPoly, Blake2b>      { -> s <- s ... -> e, es, ss } }
+hiss::noise! { pub Kpsk0<P256, ChaChaPoly, Blake2b>  { -> s <- s ... -> psk, e, es, ss } }
+hiss::noise! { pub IKpsk1<P256, ChaChaPoly, Blake2b> { <- s ... -> e, es, s, ss, psk <- e, ee, se } }
+hiss::noise! { pub IK<P256, ChaChaPoly, Blake2b>     { <- s ... -> e, es, s, ss <- e, ee, se } }
+hiss::noise! { pub NK<P256, ChaChaPoly, Blake2b>     { <- s ... -> e, es <- e, ee } }
+hiss::noise! { pub IX<P256, ChaChaPoly, Blake2b>     { -> e, s <- e, ee, se, s, es } }
+hiss::noise! { pub XK<P256, ChaChaPoly, Blake2b>     { <- s ... -> e, es <- e, ee -> s, se } }
+hiss::noise! { pub NN<P256, ChaChaPoly, Blake2b>     { -> e <- e, ee } }
+hiss::noise! { pub XX<P256, ChaChaPoly, Blake2b>     { -> e <- e, ee, s, es -> s, se } }
+hiss::noise! { pub X<P256, ChaChaPoly, Blake2b>      { <- s ... -> e, es, s, ss } }
 
 // ── Fixed inputs (frozen) ────────────────────────────────────────
 
@@ -121,45 +118,23 @@ fn decode(hex_str: &str) -> Vec<u8> {
     hex::decode(hex_str).expect("hex")
 }
 
-/// An in-memory `Read + Write` stream for replaying frozen vectors through
-/// the synchronous streaming driver: outgoing handshake bytes accumulate in
-/// `written` (drained with [`take_written`](KatStream::take_written) and
-/// compared to the frozen ciphertext), while the frozen responder messages
-/// are pre-loaded into `inbound` for the driver's `recv()` to consume.
-#[derive(Clone)]
-struct KatStream {
-    written: Rc<RefCell<Vec<u8>>>,
-    inbound: Rc<RefCell<std::collections::VecDeque<u8>>>,
+/// A frozen responder message, as the fixed-size array the generated reader
+/// takes.
+///
+/// The conversion is itself an assertion: the generated `read_message_N`
+/// accepts only `&[u8; MSGn_SIZE]`, so a vector whose length disagrees with
+/// the compile-time wire size cannot be replayed at all. Under the old
+/// streaming driver a wrong length was a runtime read error; here it is a
+/// panic at the boundary, before any crypto runs.
+fn frozen<const N: usize>(hex_str: &str) -> [u8; N] {
+    decode(hex_str)
+        .try_into()
+        .expect("frozen message length matches the generated wire size")
 }
-impl KatStream {
-    fn new(inbound: &[u8]) -> Self {
-        KatStream {
-            written: Rc::new(RefCell::new(Vec::new())),
-            inbound: Rc::new(RefCell::new(inbound.iter().copied().collect())),
-        }
-    }
-    fn take_written(&self) -> Vec<u8> {
-        std::mem::take(&mut *self.written.borrow_mut())
-    }
-}
-impl Read for KatStream {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let mut q = self.inbound.borrow_mut();
-        let n = q.len().min(buf.len());
-        for slot in buf.iter_mut().take(n) {
-            *slot = q.pop_front().unwrap();
-        }
-        Ok(n)
-    }
-}
-impl Write for KatStream {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.written.borrow_mut().extend_from_slice(buf);
-        Ok(buf.len())
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
+
+/// Compare a generated handshake message against its frozen ciphertext.
+fn assert_wire<const N: usize>(got: &[u8; N], want_hex: &str, label: &str) {
+    assert_eq!(got.as_slice(), decode(want_hex).as_slice(), "{label}");
 }
 
 // ── Replay tests (drive this crate's initiator) ──────────────────
@@ -170,18 +145,13 @@ fn noise_kat_n() {
     let v = vector(&file, "Noise_N_P256_ChaChaPoly_BLAKE2b");
 
     let provider = EphemeralOnly::new(ScriptedRng::new(&[&INIT_EPHEMERAL]));
-    let stream = KatStream::new(&[]);
-    let hs = SyncHandshake::<N, Initiator, _, _, _, _>::initiate(provider, &[], stream.clone())
-        .set_rs(public_key(&RESP_STATIC));
+    // N's one message is also its last, so the writer yields the `Transport`
+    // directly rather than a further handshake state.
+    let (msg1, mut transport) = N::initiator(provider, &[], public_key(&RESP_STATIC))
+        .write_message_1()
+        .unwrap();
+    assert_wire(&msg1, &v.messages[0].ciphertext, "N msg1");
 
-    let chain = hs.e().unwrap().es().unwrap();
-    assert_eq!(
-        stream.take_written(),
-        decode(&v.messages[0].ciphertext),
-        "N msg1"
-    );
-
-    let (mut transport, _) = chain.into_parts();
     assert_eq!(
         transport.session_id().as_ref(),
         decode(&v.handshake_hash),
@@ -203,20 +173,19 @@ fn noise_kat_k() {
     let v = vector(&file, "Noise_K_P256_ChaChaPoly_BLAKE2b");
 
     let provider = EphemeralOnly::new(ScriptedRng::new(&[&INIT_EPHEMERAL]));
-    let stream = KatStream::new(&[]);
-    let hs = SyncHandshake::<K, Initiator, _, _, _, _>::initiate(provider, &[], stream.clone())
-        .set_s(private_key(&INIT_STATIC))
-        .unwrap()
-        .set_rs(public_key(&RESP_STATIC));
+    // Both statics are pre-messages, so they are constructor arguments in
+    // pattern order: `-> s` (ours) then `<- s` (theirs).
+    let (msg1, mut transport) = K::initiator(
+        provider,
+        &[],
+        private_key(&INIT_STATIC),
+        public_key(&RESP_STATIC),
+    )
+    .unwrap()
+    .write_message_1()
+    .unwrap();
+    assert_wire(&msg1, &v.messages[0].ciphertext, "K msg1");
 
-    let chain = hs.e().unwrap().es().unwrap().ss().unwrap();
-    assert_eq!(
-        stream.take_written(),
-        decode(&v.messages[0].ciphertext),
-        "K msg1"
-    );
-
-    let (mut transport, _) = chain.into_parts();
     assert_eq!(
         transport.session_id().as_ref(),
         decode(&v.handshake_hash),
@@ -239,28 +208,19 @@ fn noise_kat_kpsk0() {
 
     let psk = Psk::from_bytes(PSK_BYTES);
     let provider = EphemeralOnly::new(ScriptedRng::new(&[&INIT_EPHEMERAL]));
-    let stream = KatStream::new(&[]);
-    let hs = SyncHandshake::<Kpsk0, Initiator, _, _, _, _>::initiate(provider, &[], stream.clone())
-        .set_s(private_key(&INIT_STATIC))
-        .unwrap()
-        .set_rs(public_key(&RESP_STATIC));
+    // Same pre-messages as K; `psk` is a message token, so it is a writer
+    // argument rather than a constructor one.
+    let (msg1, mut transport) = Kpsk0::initiator(
+        provider,
+        &[],
+        private_key(&INIT_STATIC),
+        public_key(&RESP_STATIC),
+    )
+    .unwrap()
+    .write_message_1(&psk)
+    .unwrap();
+    assert_wire(&msg1, &v.messages[0].ciphertext, "Kpsk0 msg1");
 
-    let chain = hs
-        .psk(&psk)
-        .unwrap()
-        .e()
-        .unwrap()
-        .es()
-        .unwrap()
-        .ss()
-        .unwrap();
-    assert_eq!(
-        stream.take_written(),
-        decode(&v.messages[0].ciphertext),
-        "Kpsk0 msg1"
-    );
-
-    let (mut transport, _) = chain.into_parts();
     assert_eq!(
         transport.session_id().as_ref(),
         decode(&v.handshake_hash),
@@ -283,34 +243,19 @@ fn noise_kat_ikpsk1() {
 
     let psk = Psk::from_bytes(PSK_BYTES);
     let provider = EphemeralOnly::new(ScriptedRng::new(&[&INIT_EPHEMERAL]));
-    let stream = KatStream::new(&decode(&v.messages[1].ciphertext));
-    let hs =
-        SyncHandshake::<IKpsk1, Initiator, _, _, _, _>::initiate(provider, &[], stream.clone())
-            .set_rs(public_key(&RESP_STATIC));
 
-    // msg1: -> e, es, s, ss, psk
-    let hs = hs
-        .e()
-        .unwrap()
-        .es()
-        .unwrap()
-        .s(private_key(&INIT_STATIC))
-        .unwrap()
-        .ss()
-        .unwrap()
-        .psk(&psk)
+    // msg1: -> e, es, s, ss, psk — the `s` token makes our static a writer
+    // argument, and the `psk` token follows it.
+    let (msg1, hs) = IKpsk1::initiator(provider, &[], public_key(&RESP_STATIC))
+        .write_message_1(private_key(&INIT_STATIC), &psk)
         .unwrap();
-    assert_eq!(
-        stream.take_written(),
-        decode(&v.messages[0].ciphertext),
-        "IKpsk1 msg1"
-    );
+    assert_wire(&msg1, &v.messages[0].ciphertext, "IKpsk1 msg1");
 
-    // msg2: <- e, ee, se (read the frozen responder message)
-    let (_, recv) = hs.recv().e().unwrap();
-    let chain = recv.ee().unwrap().se().unwrap();
+    // msg2: <- e, ee, se — replay the frozen responder message; it is final,
+    // so the reader yields the `Transport`.
+    let msg2 = frozen(&v.messages[1].ciphertext);
+    let mut transport = hs.read_message_2(&msg2).unwrap();
 
-    let (mut transport, _) = chain.into_parts();
     assert_eq!(
         transport.session_id().as_ref(),
         decode(&v.handshake_hash),
@@ -339,31 +284,17 @@ fn noise_kat_ik() {
     let v = vector(&file, "Noise_IK_P256_ChaChaPoly_BLAKE2b");
 
     let provider = EphemeralOnly::new(ScriptedRng::new(&[&INIT_EPHEMERAL]));
-    let stream = KatStream::new(&decode(&v.messages[1].ciphertext));
-    let hs = SyncHandshake::<IK, Initiator, _, _, _, _>::initiate(provider, &[], stream.clone())
-        .set_rs(public_key(&RESP_STATIC));
 
     // msg1: -> e, es, s, ss
-    let hs = hs
-        .e()
-        .unwrap()
-        .es()
-        .unwrap()
-        .s(private_key(&INIT_STATIC))
-        .unwrap()
-        .ss()
+    let (msg1, hs) = IK::initiator(provider, &[], public_key(&RESP_STATIC))
+        .write_message_1(private_key(&INIT_STATIC))
         .unwrap();
-    assert_eq!(
-        stream.take_written(),
-        decode(&v.messages[0].ciphertext),
-        "IK msg1"
-    );
+    assert_wire(&msg1, &v.messages[0].ciphertext, "IK msg1");
 
     // msg2: <- e, ee, se (read the frozen responder message)
-    let (_, recv) = hs.recv().e().unwrap();
-    let chain = recv.ee().unwrap().se().unwrap();
+    let msg2 = frozen(&v.messages[1].ciphertext);
+    let mut transport = hs.read_message_2(&msg2).unwrap();
 
-    let (mut transport, _) = chain.into_parts();
     assert_eq!(
         transport.session_id().as_ref(),
         decode(&v.handshake_hash),
@@ -392,25 +323,17 @@ fn noise_kat_nk() {
     let v = vector(&file, "Noise_NK_P256_ChaChaPoly_BLAKE2b");
 
     let provider = EphemeralOnly::new(ScriptedRng::new(&[&INIT_EPHEMERAL]));
-    let stream = KatStream::new(&decode(&v.messages[1].ciphertext));
-    // NK initiator is anonymous: no static, only the responder's
-    // static key is pre-known.
-    let hs = SyncHandshake::<NK, Initiator, _, _, _, _>::initiate(provider, &[], stream.clone())
-        .set_rs(public_key(&RESP_STATIC));
-
-    // msg1: -> e, es
-    let hs = hs.e().unwrap().es().unwrap();
-    assert_eq!(
-        stream.take_written(),
-        decode(&v.messages[0].ciphertext),
-        "NK msg1"
-    );
+    // NK's initiator is anonymous: it has no static of its own, only the
+    // responder's public key as a pre-message.
+    let (msg1, hs) = NK::initiator(provider, &[], public_key(&RESP_STATIC))
+        .write_message_1()
+        .unwrap();
+    assert_wire(&msg1, &v.messages[0].ciphertext, "NK msg1");
 
     // msg2: <- e, ee (read the frozen responder message)
-    let (_, recv) = hs.recv().e().unwrap();
-    let chain = recv.ee().unwrap();
+    let msg2 = frozen(&v.messages[1].ciphertext);
+    let mut transport = hs.read_message_2(&msg2).unwrap();
 
-    let (mut transport, _) = chain.into_parts();
     assert_eq!(
         transport.session_id().as_ref(),
         decode(&v.handshake_hash),
@@ -439,32 +362,23 @@ fn noise_kat_ix() {
     let v = vector(&file, "Noise_IX_P256_ChaChaPoly_BLAKE2b");
 
     let provider = EphemeralOnly::new(ScriptedRng::new(&[&INIT_EPHEMERAL]));
-    let stream = KatStream::new(&decode(&v.messages[1].ciphertext));
-    // IX has no pre-messages: neither static is pre-known. The
-    // initiator transmits its static in-handshake via the `s` token.
-    let hs = SyncHandshake::<IX, Initiator, _, _, _, _>::initiate(provider, &[], stream.clone());
+    // IX has no pre-messages, so the constructor takes none and is
+    // infallible; the initiator transmits its static in msg1's `s` token.
+    let (msg1, hs) = IX::initiator(provider, &[])
+        .write_message_1(private_key(&INIT_STATIC))
+        .unwrap();
+    assert_wire(&msg1, &v.messages[0].ciphertext, "IX msg1");
 
-    // msg1: -> e, s
-    let hs = hs.e().unwrap().s(private_key(&INIT_STATIC)).unwrap();
+    // msg2: <- e, ee, se, s, es — final, and its `s` token reveals the
+    // responder's static, which survives onto the transport.
+    let msg2 = frozen(&v.messages[1].ciphertext);
+    let mut transport = hs.read_message_2(&msg2).unwrap();
     assert_eq!(
-        stream.take_written(),
-        decode(&v.messages[0].ciphertext),
-        "IX msg1"
-    );
-
-    // msg2: <- e, ee, se, s, es (read the frozen responder message). The
-    // `s` token reveals the responder's static key.
-    let (_, recv) = hs.recv().e().unwrap();
-    let recv = recv.ee().unwrap().se().unwrap();
-    let (revealed_resp_pub, recv) = recv.s().unwrap();
-    assert_eq!(
-        revealed_resp_pub.to_bytes(),
+        transport.remote_static().unwrap().to_bytes(),
         public_key(&RESP_STATIC).to_bytes(),
         "IX revealed responder static"
     );
-    let chain = recv.es().unwrap();
 
-    let (mut transport, _) = chain.into_parts();
     assert_eq!(
         transport.session_id().as_ref(),
         decode(&v.handshake_hash),
@@ -493,32 +407,20 @@ fn noise_kat_xk() {
     let v = vector(&file, "Noise_XK_P256_ChaChaPoly_BLAKE2b");
 
     let provider = EphemeralOnly::new(ScriptedRng::new(&[&INIT_EPHEMERAL]));
-    let stream = KatStream::new(&decode(&v.messages[1].ciphertext));
     // XK pre-message `<- s`: the initiator pre-knows the responder static.
-    let hs = SyncHandshake::<XK, Initiator, _, _, _, _>::initiate(provider, &[], stream.clone())
-        .set_rs(public_key(&RESP_STATIC));
-
-    // msg1: -> e, es
-    let hs = hs.e().unwrap().es().unwrap();
-    assert_eq!(
-        stream.take_written(),
-        decode(&v.messages[0].ciphertext),
-        "XK msg1"
-    );
+    let (msg1, hs) = XK::initiator(provider, &[], public_key(&RESP_STATIC))
+        .write_message_1()
+        .unwrap();
+    assert_wire(&msg1, &v.messages[0].ciphertext, "XK msg1");
 
     // msg2: <- e, ee (read the frozen responder message)
-    let (_, recv) = hs.recv().e().unwrap();
-    let hs = recv.ee().unwrap();
+    let msg2 = frozen(&v.messages[1].ciphertext);
+    let hs = hs.read_message_2(&msg2).unwrap();
 
-    // msg3: -> s, se — the initiator's static is sent encrypted (after ee).
-    let chain = hs.s(private_key(&INIT_STATIC)).unwrap().se().unwrap();
-    assert_eq!(
-        stream.take_written(),
-        decode(&v.messages[2].ciphertext),
-        "XK msg3"
-    );
+    // msg3: -> s, se — the initiator's static goes out encrypted (after ee).
+    let (msg3, mut transport) = hs.write_message_3(private_key(&INIT_STATIC)).unwrap();
+    assert_wire(&msg3, &v.messages[2].ciphertext, "XK msg3");
 
-    let (mut transport, _) = chain.into_parts();
     assert_eq!(
         transport.session_id().as_ref(),
         decode(&v.handshake_hash),
@@ -547,23 +449,14 @@ fn noise_kat_nn() {
     let v = vector(&file, "Noise_NN_P256_ChaChaPoly_BLAKE2b");
 
     let provider = EphemeralOnly::new(ScriptedRng::new(&[&INIT_EPHEMERAL]));
-    let stream = KatStream::new(&decode(&v.messages[1].ciphertext));
     // NN: both parties anonymous — no static keys, no pre-messages.
-    let hs = SyncHandshake::<NN, Initiator, _, _, _, _>::initiate(provider, &[], stream.clone());
-
-    // msg1: -> e (single-`e` send finalizer; cipher never keyed → 65 bytes)
-    let hs = hs.e().unwrap();
-    assert_eq!(
-        stream.take_written(),
-        decode(&v.messages[0].ciphertext),
-        "NN msg1"
-    );
+    let (msg1, hs) = NN::initiator(provider, &[]).write_message_1().unwrap();
+    assert_wire(&msg1, &v.messages[0].ciphertext, "NN msg1");
 
     // msg2: <- e, ee (read the frozen responder message)
-    let (_, recv) = hs.recv().e().unwrap();
-    let chain = recv.ee().unwrap();
+    let msg2 = frozen(&v.messages[1].ciphertext);
+    let mut transport = hs.read_message_2(&msg2).unwrap();
 
-    let (mut transport, _) = chain.into_parts();
     assert_eq!(
         transport.session_id().as_ref(),
         decode(&v.handshake_hash),
@@ -592,40 +485,24 @@ fn noise_kat_xx() {
     let v = vector(&file, "Noise_XX_P256_ChaChaPoly_BLAKE2b");
 
     let provider = EphemeralOnly::new(ScriptedRng::new(&[&INIT_EPHEMERAL]));
-    let stream = KatStream::new(&decode(&v.messages[1].ciphertext));
-    // XX has no pre-messages: neither static is pre-known. Both parties
-    // transmit their statics in-handshake (encrypted, after `ee`).
-    let hs = SyncHandshake::<XX, Initiator, _, _, _, _>::initiate(provider, &[], stream.clone());
+    // XX has no pre-messages: both parties transmit their statics
+    // in-handshake, encrypted, after `ee`.
+    let (msg1, hs) = XX::initiator(provider, &[]).write_message_1().unwrap();
+    assert_wire(&msg1, &v.messages[0].ciphertext, "XX msg1");
 
-    // msg1: -> e (single-`e` send finalizer; cipher never keyed → 65 bytes)
-    let hs = hs.e().unwrap();
+    // msg2: <- e, ee, s, es — the `s` token reveals the responder's static.
+    let msg2 = frozen(&v.messages[1].ciphertext);
+    let hs = hs.read_message_2(&msg2).unwrap();
     assert_eq!(
-        stream.take_written(),
-        decode(&v.messages[0].ciphertext),
-        "XX msg1"
-    );
-
-    // msg2: <- e, ee, s, es (read the frozen responder message). The `s`
-    // token reveals the responder's static key (sent encrypted after ee).
-    let (_, recv) = hs.recv().e().unwrap();
-    let recv = recv.ee().unwrap();
-    let (revealed_resp_pub, recv) = recv.s().unwrap();
-    assert_eq!(
-        revealed_resp_pub.to_bytes(),
+        hs.remote_static().to_bytes(),
         public_key(&RESP_STATIC).to_bytes(),
         "XX revealed responder static"
     );
-    let hs = recv.es().unwrap();
 
-    // msg3: -> s, se — the initiator's static is sent encrypted (after ee).
-    let chain = hs.s(private_key(&INIT_STATIC)).unwrap().se().unwrap();
-    assert_eq!(
-        stream.take_written(),
-        decode(&v.messages[2].ciphertext),
-        "XX msg3"
-    );
+    // msg3: -> s, se — the initiator's static goes out encrypted (after ee).
+    let (msg3, mut transport) = hs.write_message_3(private_key(&INIT_STATIC)).unwrap();
+    assert_wire(&msg3, &v.messages[2].ciphertext, "XX msg3");
 
-    let (mut transport, _) = chain.into_parts();
     assert_eq!(
         transport.session_id().as_ref(),
         decode(&v.handshake_hash),
@@ -654,30 +531,13 @@ fn noise_kat_x() {
     let v = vector(&file, "Noise_X_P256_ChaChaPoly_BLAKE2b");
 
     let provider = EphemeralOnly::new(ScriptedRng::new(&[&INIT_EPHEMERAL]));
-    let stream = KatStream::new(&[]);
-    // X pre-message `<- s`: the initiator pre-knows the responder static. Its
-    // own static is transmitted in msg1 (encrypted, after `es`) via the `s`
-    // token — the same msg1 token sequence as IK, with no responder reply.
-    let hs = SyncHandshake::<X, Initiator, _, _, _, _>::initiate(provider, &[], stream.clone())
-        .set_rs(public_key(&RESP_STATIC));
-
-    // msg1: -> e, es, s, ss
-    let chain = hs
-        .e()
-        .unwrap()
-        .es()
-        .unwrap()
-        .s(private_key(&INIT_STATIC))
-        .unwrap()
-        .ss()
+    // X pre-message `<- s`: the initiator pre-knows the responder static and
+    // transmits its own in msg1's `s` token — IK's msg1 with no reply.
+    let (msg1, mut transport) = X::initiator(provider, &[], public_key(&RESP_STATIC))
+        .write_message_1(private_key(&INIT_STATIC))
         .unwrap();
-    assert_eq!(
-        stream.take_written(),
-        decode(&v.messages[0].ciphertext),
-        "X msg1"
-    );
+    assert_wire(&msg1, &v.messages[0].ciphertext, "X msg1");
 
-    let (mut transport, _) = chain.into_parts();
     assert_eq!(
         transport.session_id().as_ref(),
         decode(&v.handshake_hash),
