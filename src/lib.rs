@@ -30,6 +30,15 @@
 //! already move bytes. See the [`noise!`](crate::noise!) docs for the DSL
 //! and the full generated API.
 //!
+//! You need two crates. `hiss` never picks a random-number generator for
+//! you, so the CSPRNG is a dependency you choose and hand in:
+//!
+//! ```toml
+//! [dependencies]
+//! hiss = "0.2"
+//! rand = "0.9"
+//! ```
+//!
 //! ### 1. Describe the handshake you want
 //!
 //! You write it in the Noise specification's own notation and `hiss`
@@ -159,8 +168,10 @@
 //!
 //! The default suite is **P-256 / ChaCha20-Poly1305 / BLAKE2b** —
 //! [`P256`](noise::P256), [`ChaChaPoly`](noise::ChaChaPoly), and
-//! [`Blake2b`](noise::Blake2b). Eleven fundamental patterns are provided as
-//! markers in [`noise::pattern`], each combined with a suite
+//! [`Blake2b`](noise::Blake2b). Eleven patterns are provided as markers in
+//! [`noise::pattern`] — nine of Noise's fifteen fundamental patterns plus
+//! two PSK variants; `NX`, `XN`, `KN`, `KK`, `KX` and `IN` are not
+//! implemented. Each is combined with a suite
 //! through [`Noise<P, Cu, Ci, H>`](noise::Noise):
 //! [`N`](noise::pattern::N), [`K`](noise::pattern::K),
 //! [`Kpsk0`](noise::pattern::Kpsk0), [`IKpsk1`](noise::pattern::IKpsk1),

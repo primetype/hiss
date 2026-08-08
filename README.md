@@ -7,10 +7,9 @@ Built on the [Noise Protocol Framework][noise]. You write the handshake you want
 Noise's own notation; `hiss` generates the code for it, sizes every message at compile
 time, and refuses to build a handshake that is malformed.
 
-> **Status: `0.1` — unstable API, not independently audited.** See
-> [How this is tested](#how-this-is-tested) and [Security](#security) before relying on
-> it. Note that `0.1.0` on crates.io predates the `noise!` macro described below; this
-> README documents the unreleased tree.
+> **Status: `0.2`, unreleased — unstable API, not independently audited.** See
+> [How this is tested](#how-this-is-tested) and [Security](#security) before relying on it.
+> The `0.1.0` currently on crates.io predates the `noise!` macro this README describes.
 
 [noise]: https://noiseprotocol.org/
 
@@ -20,6 +19,15 @@ Two peers authenticate each other and exchange an encrypted message in each dire
 neither knowing the other's key in advance. Four steps, each one a doctest that compiles
 and runs. Assembled into a single program it is
 [`examples/quickstart.rs`](examples/quickstart.rs) — `cargo run --example quickstart`.
+
+You need two crates. `hiss` never picks a random-number generator for you, so the CSPRNG
+is a dependency you choose and hand in:
+
+```toml
+[dependencies]
+hiss = "0.2"
+rand = "0.9"
+```
 
 **1. Describe the handshake you want.** You write it in the Noise specification's own
 notation and `hiss` generates the code. This one is `XX`: three messages, both sides
@@ -90,27 +98,39 @@ Putting those messages on a real socket — framing, a trust decision on the pee
 a PSK ceremony — is worked end to end in
 [`examples/tcp_ikpsk1_ceremony.rs`](examples/tcp_ikpsk1_ceremony.rs).
 
-## What it offers
+## Why this and not `snow`
 
-- **Compile-time protocol selection.** The pattern, curve, cipher, and hash are
-  zero-sized type parameters; message sizes are associated constants. Misuse is rejected
-  by the type system rather than at runtime.
-- **A small, deliberate crypto core.** Production cryptography is `cryptoxide` +
-  `eccoxide` only — no sprawling dependency surface.
-- **Pluggable crypto providers.** A trait family — `CryptoKeyProvider<C>` (keygen) at the
-  base, with `DhProvider<C>` adding the ECDH the handshake actually consumes and
-  `SigningProvider` for identity signing, each paired with an `…Async` refinement — lets
-  the same handshake run against a software backend or a hardware-backed one (Apple Secure
-  Enclave). See [Providers](#providers).
-- **You write the pattern; the macro writes the code.** `noise!` takes a handshake
-  pattern in the Noise specification's own notation and generates its state machine —
-  one method per message, every message a fixed-size `[u8; N]` known at compile time.
-  It performs no I/O: it hands you bytes and you move them however you already move
-  bytes.
+[`snow`](https://crates.io/crates/snow) is the established Rust Noise implementation, and
+this README leans on it: the interop suite runs `hiss` against it, and the frozen vectors
+were generated from it. Neither crate has been audited — snow says so on its own front
+page. Three things differ.
+
+**The pattern is a type, not a string.** snow parses `"Noise_XX_25519_ChaChaPoly_BLAKE2s"`
+at runtime and hands back one `HandshakeState` whose `read_message` / `write_message` take
+`&mut self` and may be called in any order. `hiss` compiles the pattern into a state
+machine: each message is its own method, and it consumes the state before it. Wrong order,
+skipped message, or using the channel before the handshake finishes are compile errors —
+as is [a pattern that never keys the cipher](#when-you-get-it-wrong).
+
+**Message sizes are constants.** snow's own example opens `let mut buf = [0u8; 65535]`,
+because the length isn't known until the message arrives. `XX::MSG1_SIZE` is a
+compile-time `usize`, so framing a handshake is a `read_exact` into `[u8; N]` — no length
+prefix, no scratch buffer.
+
+**Private keys can stay in hardware.** snow's builder takes the private key as bytes. On
+macOS and iOS, `hiss` can generate the static key inside the Apple Secure Enclave and
+leave it there; your process only ever holds a handle. See [Providers](#providers).
+
+**Choose snow** if you need more of Noise than this covers — it has all fifteen
+fundamental patterns to hiss's nine, more ciphers and hashes, and swappable crypto
+backends including `ring` — or if you need something on crates.io today.
+
+One choice that isn't a comparison: production cryptography here is `cryptoxide` and
+`eccoxide`, nothing else.
 
 ## Supported suite
 
-This `0.1` targets one cipher suite and a fixed set of patterns:
+This release targets one cipher suite and a fixed set of patterns:
 
 | Axis    | Supported |
 |---------|-----------|
@@ -119,9 +139,10 @@ This `0.1` targets one cipher suite and a fixed set of patterns:
 | Cipher  | **ChaCha20-Poly1305** |
 | Hash    | **BLAKE2b** |
 
-Conformance is anchored against [`snow`](https://crates.io/crates/snow) via an interop
-test suite. All eleven fundamental patterns are present; additional hashes and ciphers
-(AES-GCM) are planned for `0.2+`.
+That pattern row is nine of Noise's fifteen fundamental patterns plus two PSK variants;
+`NX`, `XN`, `KN`, `KK`, `KX` and `IN` are not implemented. Conformance is anchored against
+[`snow`](https://crates.io/crates/snow) via an interop test suite. Additional hashes and
+ciphers (AES-GCM) are planned.
 
 The `fallback` modifier — and the compound protocols it enables (e.g. Noise Pipes /
 0-RTT-with-retry) — is an **intentional non-goal**, not a missing feature. It is optional
@@ -243,9 +264,9 @@ identity/attestation layer **around** the channel, not inside it.
 |---------|:------------------:|:------------------:|--------|
 | Software (`eccoxide`)        | ✅ | ✅ | **implemented** |
 | Apple Secure Enclave (macOS/iOS) | ✅ | ✅ | **implemented** |
-| Android Keystore / StrongBox | ✅ | ✅ | planned (`0.2+`) |
-| Linux TPM2                   | ✅ (policy-permitting) | ✅ | planned (`0.2+`) |
-| AWS KMS                      | ✅ (`DeriveSharedSecret`) | ✅ | planned (`0.2+`) |
+| Android Keystore / StrongBox | ✅ | ✅ | planned |
+| Linux TPM2                   | ✅ (policy-permitting) | ✅ | planned |
+| AWS KMS                      | ✅ (`DeriveSharedSecret`) | ✅ | planned |
 | Windows CNG / Azure / GCP KMS | ❌ (no raw ECDH) | ✅ | identity role only |
 | PKCS#11 HSM, YubiKey, Ledger | ❌ (no raw ECDH export) | — | out of scope |
 
