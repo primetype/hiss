@@ -2,9 +2,9 @@
 //!
 //! These provider-driven free functions perform the Noise per-token
 //! cryptography on the runtime [`HandshakeInner`] state. The async
-//! driver (`AsyncHandshake` (feature `async-io`)) and the
+//! Apple seal path and the
 //! internal seal helpers ([`seal`](super::seal)) call them directly; the
-//! blocking driver ([`SyncHandshake`](super::io_sync::SyncHandshake))
+//! generated state machines
 //! reuses the provider-free helpers here (`recv_e`/`recv_s`/`send_s`/
 //! `send_payload`/`recv_payload`/`do_psk`/`recv_to_transport`) and has
 //! its own synchronous mirrors of the DH/ephemeral steps that call the
@@ -39,10 +39,10 @@ use super::transport::Transport;
 use crate::curve::Curve;
 // `DhCurve`/`DhProviderAsync` are used only by the DH free functions below,
 // which are gated to the async driver and/or the Apple seal helpers.
-#[cfg(any(feature = "async-io", target_os = "macos", target_os = "ios", test))]
+#[cfg(any(target_os = "macos", target_os = "ios", test))]
 use crate::curve::DhCurve;
 use crate::provider::CryptoKeyProvider;
-#[cfg(any(feature = "async-io", target_os = "macos", target_os = "ios", test))]
+#[cfg(any(target_os = "macos", target_os = "ios", test))]
 use crate::provider::DhProviderAsync;
 
 // ═══════════════════════════════════════════════════════════════
@@ -144,10 +144,10 @@ where
 //  Shared token logic
 // ═══════════════════════════════════════════════════════════════
 
-// `send_e` is consumed by the async driver (`io_async`) and the Apple seal
+// `send_e` is consumed by the Apple seal
 // helpers (`seal`); the sync driver has its own `sync_send_e`. Gate it to the
 // union of those callers so a default non-Apple build carries no dead code.
-#[cfg(any(feature = "async-io", target_os = "macos", target_os = "ios", test))]
+#[cfg(any(target_os = "macos", target_os = "ios", test))]
 pub(crate) async fn send_e<Cu, Ci, H, CP>(
     inner: &mut HandshakeInner<Cu, Ci, H, CP>,
     buffer: &mut SendBuffer<'_>,
@@ -278,41 +278,9 @@ where
     Ok(revealed)
 }
 
-// `do_ee` / `do_se_*` / `do_ss` are consumed only by the async driver
-// (`io_async`); the sync driver mirrors the DH steps itself. Gate them to the
-// async-io feature so a default build does not carry dead code. (`do_es_*`
-// below get a wider gate — the seal helpers use them too.)
-#[cfg(feature = "async-io")]
-pub(crate) async fn do_ee<Cu, Ci, H, CP>(
-    inner: &mut HandshakeInner<Cu, Ci, H, CP>,
-) -> Result<(), HandshakeError>
-where
-    Cu: DhCurve,
-    Cu::SharedSecret: AsRef<[u8]>,
-    Ci: Cipher,
-    H: Hash,
-    CP: DhProviderAsync<Cu>,
-{
-    let e = inner
-        .e
-        .as_ref()
-        .ok_or(HandshakeError::MissingEphemeralKey)?;
-    let re = inner
-        .re
-        .as_ref()
-        .ok_or(HandshakeError::MissingRemoteEphemeral)?;
-    let ss = inner
-        .provider
-        .dh_async(e, re)
-        .await
-        .map_err(|e| HandshakeError::Crypto(Box::new(e)))?;
-    inner.symmetric.mix_key(ss.as_ref());
-    Ok(())
-}
-
 // `do_es_*` are consumed by the async driver AND the Apple seal helpers, so
 // gate them to the union of those callers (not just async-io).
-#[cfg(any(feature = "async-io", target_os = "macos", target_os = "ios", test))]
+#[cfg(any(target_os = "macos", target_os = "ios", test))]
 pub(crate) async fn do_es_initiator<Cu, Ci, H, CP>(
     inner: &mut HandshakeInner<Cu, Ci, H, CP>,
 ) -> Result<(), HandshakeError>
@@ -340,7 +308,7 @@ where
     Ok(())
 }
 
-#[cfg(any(feature = "async-io", target_os = "macos", target_os = "ios", test))]
+#[cfg(any(target_os = "macos", target_os = "ios", test))]
 pub(crate) async fn do_es_responder<Cu, Ci, H, CP>(
     inner: &mut HandshakeInner<Cu, Ci, H, CP>,
 ) -> Result<(), HandshakeError>
@@ -359,84 +327,6 @@ where
     let ss = inner
         .provider
         .dh_async(s, re)
-        .await
-        .map_err(|e| HandshakeError::Crypto(Box::new(e)))?;
-    inner.symmetric.mix_key(ss.as_ref());
-    Ok(())
-}
-
-#[cfg(feature = "async-io")]
-pub(crate) async fn do_se_initiator<Cu, Ci, H, CP>(
-    inner: &mut HandshakeInner<Cu, Ci, H, CP>,
-) -> Result<(), HandshakeError>
-where
-    Cu: DhCurve,
-    Cu::SharedSecret: AsRef<[u8]>,
-    Ci: Cipher,
-    H: Hash,
-    CP: DhProviderAsync<Cu>,
-{
-    let s = inner.s.as_ref().ok_or(HandshakeError::MissingStaticKey)?;
-    let re = inner
-        .re
-        .as_ref()
-        .ok_or(HandshakeError::MissingRemoteEphemeral)?;
-    let ss = inner
-        .provider
-        .dh_async(s, re)
-        .await
-        .map_err(|e| HandshakeError::Crypto(Box::new(e)))?;
-    inner.symmetric.mix_key(ss.as_ref());
-    Ok(())
-}
-
-#[cfg(feature = "async-io")]
-pub(crate) async fn do_se_responder<Cu, Ci, H, CP>(
-    inner: &mut HandshakeInner<Cu, Ci, H, CP>,
-) -> Result<(), HandshakeError>
-where
-    Cu: DhCurve,
-    Cu::SharedSecret: AsRef<[u8]>,
-    Ci: Cipher,
-    H: Hash,
-    CP: DhProviderAsync<Cu>,
-{
-    let e = inner
-        .e
-        .as_ref()
-        .ok_or(HandshakeError::MissingEphemeralKey)?;
-    let rs = inner
-        .rs
-        .as_ref()
-        .ok_or(HandshakeError::MissingRemoteStatic)?;
-    let ss = inner
-        .provider
-        .dh_async(e, rs)
-        .await
-        .map_err(|e| HandshakeError::Crypto(Box::new(e)))?;
-    inner.symmetric.mix_key(ss.as_ref());
-    Ok(())
-}
-
-#[cfg(feature = "async-io")]
-pub(crate) async fn do_ss<Cu, Ci, H, CP>(
-    inner: &mut HandshakeInner<Cu, Ci, H, CP>,
-) -> Result<(), HandshakeError>
-where
-    Cu: DhCurve,
-    Cu::SharedSecret: AsRef<[u8]>,
-    Ci: Cipher,
-    H: Hash,
-    CP: DhProviderAsync<Cu>,
-{
-    let s = inner.s.as_ref().ok_or(HandshakeError::MissingStaticKey)?;
-    let rs = inner
-        .rs
-        .as_ref()
-        .ok_or(HandshakeError::MissingRemoteStatic)?;
-    let ss = inner
-        .provider
-        .dh_async(s, rs)
         .await
         .map_err(|e| HandshakeError::Crypto(Box::new(e)))?;
     inner.symmetric.mix_key(ss.as_ref());

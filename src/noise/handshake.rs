@@ -1,8 +1,7 @@
 //! Runtime handshake state shared by the I/O drivers.
 //!
 //! The type-state plumbing for the handshake lives in the two drivers —
-//! [`SyncHandshake`](super::io_sync::SyncHandshake) (blocking
-//! [`std::io`]) and [`AsyncHandshake`](super::io_async::AsyncHandshake)
+//! the state machines [`noise!`](crate::noise!) generates
 //! (async I/O). Both thread the same runtime data, [`HandshakeInner`],
 //! through their token chains; the per-token crypto operating on it is
 //! shared via [`process`](super::process).
@@ -74,8 +73,8 @@ where
     /// provider, mixing the prologue into the handshake hash.
     ///
     /// This is the single source of the protocol-name + `mix_hash`
-    /// initialisation shared by every driver (`SyncHandshake`,
-    /// `AsyncHandshake`, and the internal seal helpers). The protocol
+    /// initialisation shared by every generated state machine and by the
+    /// internal seal helpers. The protocol
     /// descriptor `Proto` supplies the pattern/curve/cipher/hash names.
     pub(crate) fn new<Proto>(provider: CP, prologue: &[u8]) -> Self
     where

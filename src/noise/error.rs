@@ -81,11 +81,12 @@ pub enum HandshakeError {
     },
 
     /// An I/O error occurred while reading or writing the handshake
-    /// transcript. This variant is always present: the blocking
-    /// [`SyncHandshake`](super::io_sync::SyncHandshake) driver surfaces
-    /// [`std::io`] failures through it,
-    /// and the `AsyncHandshake` driver (feature `async-io`) surfaces
-    /// `tokio::io` failures through it.
+    /// transcript.
+    ///
+    /// The generated state machine performs no I/O, so nothing in the
+    /// handshake itself produces this today. It is retained because
+    /// callers moving their own `std::io` failures through a
+    /// [`HandshakeError`](Self) have somewhere to put them.
     #[error("handshake I/O error: {0}")]
     Io(#[from] std::io::Error),
 }

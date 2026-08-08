@@ -58,12 +58,8 @@ mod common;
 use std::cell::Cell;
 use std::rc::Rc;
 
-use common::PeerStream;
 use hiss::curve::{Curve, DhCurve};
-use hiss::noise::{
-    Blake2b, ChaChaPoly, HandshakeError, Noise, Responder, SyncHandshake, Transport, X25519,
-    pattern,
-};
+use hiss::noise::{Blake2b, ChaChaPoly, HandshakeError, Transport, X25519};
 use hiss::provider::{CryptoKeyProvider, DhProvider, EphemeralOnly, ProviderExt};
 use hiss::psk::Psk;
 use rand::SeedableRng;
@@ -679,42 +675,6 @@ fn ik_payload_verify_fires_after_es_and_before_ss() {
 }
 
 // ── T2: byte-level interop against the classic io_sync driver ─────
-
-/// The classic type-state protocol the interop test drives against.
-type ClassicN = Noise<pattern::N, X25519, ChaChaPoly, Blake2b>;
-
-#[test]
-fn n_macro_initiator_interops_with_classic_responder() {
-    let ip = provider(111);
-    let mut rp = provider(222);
-    let r_static = rp.generate::<X25519>().unwrap();
-    let r_pub = rp.public(&r_static).unwrap();
-
-    // Macro initiator produces msg1 as a fixed array.
-    let (msg1, mut i_t) = N::initiator(ip, PROLOGUE, r_pub).write_message_1().unwrap();
-
-    // Classic io-driver responder consumes it off an in-memory stream.
-    let stream = PeerStream::new();
-    stream.feed(&msg1);
-    let r_hs =
-        SyncHandshake::<ClassicN, Responder, _, _, _, _>::respond(rp, PROLOGUE, stream.clone())
-            .set_s(r_static)
-            .unwrap();
-    let (_re, recv) = r_hs.recv().e().unwrap();
-    let mut r_t = recv.es().unwrap(); // `es` is N's final token -> completion
-    assert_eq!(stream.remaining(), 0, "classic responder must drain msg1");
-
-    // Session-id equality proves the transcripts are byte-identical.
-    assert_eq!(i_t.session_id(), r_t.transport().session_id());
-
-    // Ciphertext crosses the implementation boundary.
-    let word = b"interop-n";
-    let mut sealed = vec![0u8; word.len() + Transport::<N>::OVERHEAD];
-    let n = i_t.send(word, &mut sealed).unwrap();
-    let mut opened = vec![0u8; n];
-    let m = r_t.transport().receive(&sealed[..n], &mut opened).unwrap();
-    assert_eq!(&opened[..m], word);
-}
 
 // ── T6: negative paths ───────────────────────────────────────────
 

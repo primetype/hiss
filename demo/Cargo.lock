@@ -580,12 +580,22 @@ dependencies = [
  "cryptoxide",
  "eccoxide",
  "hex",
+ "hiss-macros",
  "packtool",
  "rand_core",
  "security-framework",
  "security-framework-sys",
  "thiserror 2.0.18",
  "tokio",
+]
+
+[[package]]
+name = "hiss-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -997,9 +1007,9 @@ checksum = "8c04f5d74368e4d0dfe06c45c8627c81bd7c317d52762d118fb9b3076f6420fd"
 
 [[package]]
 name = "packtool"
-version = "0.4.0"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "57d445b2217cc0317cb13ddf7af2cba23d39322ad1bd0cd62dfad1fadf849e06"
+checksum = "8f5d2976d58afa232de6a59ccf9aaa088bbcfbcb054dc686476e0af155c7a789"
 dependencies = [
  "hex",
  "packtool-macro",
@@ -1008,9 +1018,9 @@ dependencies = [
 
 [[package]]
 name = "packtool-macro"
-version = "0.4.0"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5fea3282536456d514dff20322e9629801eaf6b37ed76a55a7a1ad6209614e7b"
+checksum = "8a91a925570213595713cefe17cafc55026430f3a25bb9a969e847f006851df3"
 dependencies = [
  "proc-macro2",
  "quote",
