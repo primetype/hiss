@@ -285,15 +285,60 @@ pub mod zeroize;
 /// fixed-size messages; omitting it defines a suite-generic pattern
 /// marker (how [`noise::pattern`]'s built-ins are defined).
 ///
-/// ```ignore
+/// # The name you choose is the protocol name
+///
+/// The identifier becomes the pattern's `NAME`, and that is what goes into
+/// the Noise protocol name — `Noise_<name>_<curve>_<cipher>_<hash>` — which
+/// seeds the initial handshake hash. So declaring `pub Ceremony<…>` over an
+/// `IKpsk1` token sequence yields `Noise_Ceremony_25519_ChaChaPoly_BLAKE2b`.
+/// That is perfectly self-consistent: two peers both built this way will
+/// talk to each other, and every round-trip test will pass. It will not
+/// interoperate with any other Noise implementation.
+///
+/// **Name the type for its pattern.** If you want a name describing what the
+/// channel is *for*, make it a type alias.
+///
+/// ```rust
+/// use hiss::noise::{Blake2b, ChaChaPoly, X25519};
+///
 /// hiss::noise! {
 ///     /// Ceremony channel between two enrolled devices.
-///     pub Ceremony<X25519, ChaChaPoly, Blake2b> {
+///     pub IKpsk1<X25519, ChaChaPoly, Blake2b> {
 ///         <- s
 ///         ...
 ///         -> e, es, s, ss, psk
 ///         <- e, ee, se
 ///     }
+/// }
+///
+/// // Noise_IKpsk1_25519_ChaChaPoly_BLAKE2b — say what it is for over here.
+/// type Ceremony = IKpsk1;
+///
+/// # fn main() {
+/// assert_eq!(<Ceremony as hiss::noise::Pattern>::NAME, "IKpsk1");
+/// # }
+/// ```
+///
+/// # Message sizes are types, not lengths
+///
+/// `read_message_N` takes `&[u8; MSGn_SIZE]`, so a buffer of the wrong
+/// length is rejected by the compiler rather than at run time — there is no
+/// short-read or trailing-garbage case to handle, because neither can be
+/// constructed:
+///
+/// ```compile_fail
+/// use hiss::noise::{Blake2b, ChaChaPoly, X25519};
+/// use hiss::provider::EphemeralOnly;
+///
+/// hiss::noise! {
+///     pub NN<X25519, ChaChaPoly, Blake2b> { -> e <- e, ee }
+/// }
+///
+/// fn main() {
+///     let truncated = [0u8; 8];
+///     // error[E0308]: mismatched types — expected `&[u8; 32]`, found `&[u8; 8]`
+///     let _ = NN::responder(EphemeralOnly::new(rand::rng()), &[])
+///         .read_message_1(&truncated);
 /// }
 /// ```
 pub use hiss_macros::noise;
