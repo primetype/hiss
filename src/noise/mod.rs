@@ -113,11 +113,6 @@
 //! decided by the pattern at expansion time — the compiler picks the
 //! right one, with no `match`, no `if`, and no runtime check.
 //!
-//! The **buffer / no-syscall** use case is just an in-memory `Io`: hand
-//! the driver a [`std::io::Cursor`], a `Vec`, or `&mut [u8]` and the
-//! whole handshake runs without any actual I/O (this is how the seal
-//! helpers and most tests drive it).
-//!
 //! # Compile-time message sizes
 //!
 //! Because every component size is a `const` — public key size from
@@ -133,15 +128,15 @@
 //!
 //! # Pluggable crypto provider
 //!
-//! The drivers are generic over the crypto provider, so the per-token DH
-//! and key generation can use any backend:
+//! The generated state machine is generic over the crypto provider, so
+//! the per-token DH and key generation can use any backend:
 //!
 //! - **Software** (`eccoxide`/`cryptoxide`) — resolves immediately.
 //! - **Secure Enclave** (Apple Security framework) — the blocking
 //!   Security-framework calls run on the calling thread; may prompt for
 //!   biometric authentication.
 //!
-//! The generated state machine takes a synchronous
+//! It takes a synchronous
 //! [`DhProvider`](crate::provider::DhProvider); the
 //! [`DhProviderAsync`](crate::provider::DhProviderAsync) refinement
 //! exists for backends whose work is awaitable.
@@ -922,9 +917,9 @@ mod tests {
 
     #[test]
     fn expected_message_size_reports_correctly() {
-        // The streaming driver removed the runtime `expected_message_size`
-        // query; the same value is available at compile time from the
-        // message-size macro. msg1 (-> e, es, s, ss, psk):
+        // There is no runtime `expected_message_size` query any more; the
+        // same value is available at compile time from the message-size
+        // macro. msg1 (-> e, es, s, ss, psk):
         // 65 (ephemeral) + 65 (encrypted static) + 16 (tag) + 16 (payload tag) = 162
         assert_eq!(
             noise_message_size!(curve: P256, cipher: ChaChaPoly, has_psk: true, keyed: false, tokens: [E, Es, S, Ss, Psk],),

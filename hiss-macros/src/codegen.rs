@@ -27,7 +27,7 @@
 //! Outgoing messages are returned as fixed `[u8; MSGn_SIZE]` arrays;
 //! incoming messages are borrowed for the duration of the `read_message`
 //! call. All runtime behaviour bottoms out in `hiss::noise::support` —
-//! the same per-token engine the crate's own drivers use.
+//! the same per-token engine `hiss` uses internally.
 //!
 //! A message declared with a `[N]` payload suffix carries an N-byte
 //! application payload in its tail: the writer takes `payload: &[u8; N]`

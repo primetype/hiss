@@ -15,15 +15,37 @@
 //! * [`P256r1PrivateKey::generate_secure_enclave_ephemeral`] —
 //!   hardware-backed, no per-use biometric prompt, not persisted.
 //!
-//! * [`P256r1PrivateKey::generate_secure_enclave`] — hardware-backed,
-//!   persisted to the Data Protection Keychain (Phase 18.1 Option B,
-//!   `2026/05/12`, D-20-restored). Authorisation for the team-prefixed
-//!   `keychain-access-groups` entitlement comes from the embedded macOS
-//!   Development provisioning profile placed alongside the binary by
-//!   the host application's build script (D-27.c). The Secure
-//!   Enclave binding is preserved via `Token::SecureEnclave` and
-//!   `kSecAttrTokenIDSecureEnclave` — D-23 invariant. iOS continues to
-//!   use its single (data-protection) keychain as before.
+//! * [`P256r1PrivateKey::generate_secure_enclave`] — hardware-backed and
+//!   persisted, so the key outlives the process and is recovered later
+//!   with [`P256r1PrivateKey::load_from_keychain`]. This is the mode a
+//!   long-term Noise static key uses, and the one with setup
+//!   requirements — see below.
+//!
+//! # What a persistent enclave key requires
+//!
+//! [`generate_secure_enclave`](P256r1PrivateKey::generate_secure_enclave)
+//! and [`load_from_keychain`](P256r1PrivateKey::load_from_keychain) only
+//! succeed inside an application that has been set up for them. Nothing
+//! in this crate can arrange that for you; get it wrong and the calls
+//! fail at run time.
+//!
+//! * **The key is stored in the Data Protection Keychain.** Apple's
+//!   technote TN3137 requires it: a key held in the Secure Enclave must
+//!   use that keychain. Both the generate and the load path select it,
+//!   and both pin `kSecAttrTokenIDSecureEnclave`, so a software key can
+//!   never be substituted for the hardware one.
+//! * **On macOS, reaching that keychain needs an entitlement.** The
+//!   binary must carry a team-prefixed `keychain-access-groups`
+//!   entitlement, authorised by a provisioning profile embedded in the
+//!   application — the host application's build script places the
+//!   profile alongside the binary and signs with it. An unsigned
+//!   `cargo run` does not have this. On iOS the same entitlement comes
+//!   from ordinary app signing.
+//! * **The device must have been unlocked at least once since boot.**
+//!   Keys are created `AccessibleAfterFirstUnlockThisDeviceOnly`, so
+//!   they are unavailable before first unlock, never leave the device,
+//!   and are not in any backup or iCloud Keychain copy. A lost device
+//!   is a lost key; plan re-enrolment, not recovery.
 
 use crate::curve::SharedSecret;
 use crate::curve::ed25519::{
@@ -165,6 +187,10 @@ impl P256r1PrivateKey {
     /// prompt. The app-level lock screen provides the authentication gate.
     /// `AccessibleAfterFirstUnlockThisDeviceOnly` ensures the key is
     /// available once the device has been unlocked after boot.
+    ///
+    /// The key goes into the Data Protection Keychain, which the host
+    /// application must be entitled to reach — see "What a persistent
+    /// enclave key requires" in the [module documentation](self).
     pub fn generate_secure_enclave(label: &str) -> Result<Self, Error> {
         let mut attributes = GenerateKeyOptions::default();
         attributes
@@ -205,12 +231,13 @@ impl P256r1PrivateKey {
     /// [`generate_secure_enclave`](Self::generate_secure_enclave)). Returns `None`
     /// if no key is found.
     ///
-    /// Phase 18.1 (`2026/05/12`): the data-protection Keychain selector
-    /// is RESTORED (D-20-restored) per Apple TN3137 ("Keys stored in the
-    /// Secure Enclave _must_ use this keychain"). The lookup targets DPK;
-    /// authorisation lives in the embedded provisioning profile bundled
-    /// by the host application's build script (Option B, CONTEXT.md
-    /// Amendment 2026/05/12).
+    /// The query targets the Data Protection Keychain and pins
+    /// `kSecAttrTokenIDSecureEnclave`, matching exactly what
+    /// [`generate_secure_enclave`](Self::generate_secure_enclave) wrote:
+    /// a software key can never be returned in place of the hardware
+    /// one. It therefore needs the same entitlement the generate path
+    /// does — see "What a persistent enclave key requires" in the
+    /// [module documentation](self).
     pub fn load_from_keychain(label: &str) -> Result<Option<Self>, Error> {
         use core_foundation::base::TCFType as _;
         use core_foundation::boolean::CFBoolean;
@@ -408,8 +435,10 @@ impl P256r1PrivateKey {
 ///
 /// # Example
 ///
-/// Swapping the provider is the whole change — every handshake call below
-/// is identical to the software backend's. The suite must name
+/// Swapping the provider is the whole change *in your code* — every
+/// handshake call below is identical to the software backend's. The
+/// enclave setup is not free, though: see "What a persistent enclave key
+/// requires" in the [module documentation](self). The suite must name
 /// [`P256`]: the Secure Enclave implements that curve and no other.
 ///
 /// ```no_run

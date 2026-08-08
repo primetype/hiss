@@ -9,8 +9,8 @@
 //! These helpers are **internal** ([`pub(crate)`]) and Apple-scoped:
 //! the sole consumer is [`crate::provider::apple`]. They are written
 //! directly over the shared per-token crypto free functions in
-//! [`super::process`] in fixed Noise-N order (`e, es`) — there is no
-//! type-state driver and no I/O stream involved.
+//! [`super::process`] in fixed Noise-N order (`e, es`) — no generated
+//! state machine and no type-state involved.
 //!
 //! Async by construction: matches the existing `DhProviderAsync<P256>`
 //! async-trait pattern in [`crate::curve::p256`]. Callers `.await`
@@ -87,7 +87,7 @@ pub(crate) enum SealError {
 /// the recipient's P-256 private key.
 ///
 /// Runs the Noise-N initiator message (`e, es`) directly over the
-/// shared crypto free functions — no type-state, no I/O driver.
+/// shared crypto free functions — no type-state, no state machine.
 pub(crate) async fn seal_32<P>(
     provider: P,
     recipient_pub: &P256r1PublicKey,
@@ -138,7 +138,7 @@ where
 /// (non-exportable).
 ///
 /// Runs the Noise-N responder message (`e, es`) directly over the
-/// shared crypto free functions — no type-state, no I/O driver.
+/// shared crypto free functions — no type-state, no state machine.
 pub(crate) async fn open_32<P>(
     provider: P,
     recipient_key: P::PrivateKey,

@@ -41,11 +41,10 @@
 //!
 //! ### 1. Describe the handshake you want
 //!
-//! You write it in the Noise specification's own notation and `hiss`
-//! generates the code. This one is `XX`: three messages, both sides
-//! proving who they are along the way. Name the type after its pattern —
-//! the name you write goes on the wire as part of the protocol identity,
-//! as [`noise!`](crate::noise!) spells out.
+//! This one is `XX`: three messages, both sides proving who they are
+//! along the way. Name the type after its pattern — the name you write
+//! goes on the wire as part of the protocol identity, as
+//! [`noise!`](crate::noise!) spells out.
 //!
 //! ```rust
 //! use hiss::noise::{Blake2b, ChaChaPoly, X25519};
@@ -64,8 +63,9 @@
 //! ### 2. Give each side a long-term key
 //!
 //! `XX` authenticates both parties, so each owns a key pair that
-//! outlives the connection. Nothing is shared in advance — they exchange
-//! public halves during the handshake.
+//! outlives the connection; nothing is shared in advance. Keep the
+//! public halves — step 3 is where each side checks the other against
+//! one.
 //!
 //! ```rust
 //! # use hiss::noise::{Blake2b, ChaChaPoly, X25519};
@@ -81,19 +81,27 @@
 //!
 //! let mut alice_keys = EphemeralOnly::new(rand::rng());
 //! let alice_static = alice_keys.generate::<X25519>()?;
+//! let alice_pub = alice_keys.public(&alice_static)?;
 //!
 //! let mut bob_keys = EphemeralOnly::new(rand::rng());
 //! let bob_static = bob_keys.generate::<X25519>()?;
+//! let bob_pub = bob_keys.public(&bob_static)?;
 //! # let _ = (&alice_static, &bob_static, &alice_keys, &bob_keys);
+//! # let _ = (&alice_pub, &bob_pub);
 //! # Ok(())
 //! # }
 //! ```
 //!
-//! ### 3. Run the handshake
+//! ### 3. Run the handshake — and decide whether to trust the peer
 //!
-//! Three messages, and this is all of it. Each call hands you the bytes to
-//! send; putting them on a socket, a queue, or a QR code is your business —
-//! `hiss` performs no I/O.
+//! Each call hands you the bytes to send; moving them — socket, queue,
+//! QR code — is yours, because `hiss` does no I/O.
+//!
+//! Completing `XX` proves the peer holds *a* static private key, never
+//! that it is one you trust. `read_message_N_with` is where that
+//! decision goes: the closure sees the peer's key as it decrypts, and an
+//! `Err` aborts before any [`Transport`](noise::Transport) exists. Leave
+//! it out and you have an encrypted channel to a stranger.
 //!
 //! ```rust
 //! # use hiss::noise::{Blake2b, ChaChaPoly, X25519};
@@ -108,20 +116,30 @@
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! # let mut alice_keys = EphemeralOnly::new(rand::rng());
 //! # let alice_static = alice_keys.generate::<X25519>()?;
+//! # let alice_pub = alice_keys.public(&alice_static)?;
 //! # let mut bob_keys = EphemeralOnly::new(rand::rng());
 //! # let bob_static = bob_keys.generate::<X25519>()?;
+//! # let bob_pub = bob_keys.public(&bob_static)?;
+//! use hiss::noise::HandshakeError;
+//!
+//! // Your trust policy: a pin, an enrolment record, an allow-list. Here, the key we expect.
+//! let accept = |ok: bool| match ok {
+//!     true => Ok(()),
+//!     false => Err(HandshakeError::PeerRejected {
+//!         reason: "unknown peer".into(),
+//!     }),
+//! };
+//!
 //! let (msg1, alice) = XX::initiator(alice_keys, &[]).write_message_1()?;
 //! let bob = XX::responder(bob_keys, &[]).read_message_1(&msg1)?;
 //! let (msg2, bob) = bob.write_message_2(bob_static)?;
-//! let (msg3, mut alice) = alice.read_message_2(&msg2)?.write_message_3(alice_static)?;
-//! let mut bob = bob.read_message_3(&msg3)?;
-//! # let _ = (&mut alice, &mut bob);
+//! let alice = alice.read_message_2_with(&msg2, |peer| accept(peer == &bob_pub))?;
+//! let (msg3, mut alice) = alice.write_message_3(alice_static)?;
+//! let mut bob = bob.read_message_3_with(&msg3, |peer| accept(peer == &alice_pub))?;
+//! # let _ = (&mut alice, &mut bob, &msg3);
 //! # Ok(())
 //! # }
 //! ```
-//!
-//! Every message size is a compile-time constant — `XX::MSG1_SIZE` and
-//! friends — so framing the handshake is free: read exactly that many bytes.
 //!
 //! ### 4. Talk
 //!
@@ -139,15 +157,22 @@
 //! # }
 //! # use hiss::provider::{EphemeralOnly, ProviderExt};
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # use hiss::noise::HandshakeError;
 //! # let mut alice_keys = EphemeralOnly::new(rand::rng());
 //! # let alice_static = alice_keys.generate::<X25519>()?;
+//! # let alice_pub = alice_keys.public(&alice_static)?;
 //! # let mut bob_keys = EphemeralOnly::new(rand::rng());
 //! # let bob_static = bob_keys.generate::<X25519>()?;
+//! # let bob_pub = bob_keys.public(&bob_static)?;
+//! # let accept = |ok: bool| if ok { Ok(()) } else {
+//! #     Err(HandshakeError::PeerRejected { reason: "unknown peer".into() })
+//! # };
 //! # let (msg1, alice) = XX::initiator(alice_keys, &[]).write_message_1()?;
 //! # let bob = XX::responder(bob_keys, &[]).read_message_1(&msg1)?;
 //! # let (msg2, bob) = bob.write_message_2(bob_static)?;
-//! # let (msg3, mut alice) = alice.read_message_2(&msg2)?.write_message_3(alice_static)?;
-//! # let mut bob = bob.read_message_3(&msg3)?;
+//! # let alice = alice.read_message_2_with(&msg2, |peer| accept(peer == &bob_pub))?;
+//! # let (msg3, mut alice) = alice.write_message_3(alice_static)?;
+//! # let mut bob = bob.read_message_3_with(&msg3, |peer| accept(peer == &alice_pub))?;
 //! use hiss::noise::Transport;
 //!
 //! let mut wire = [0u8; 32 + Transport::<XX>::OVERHEAD];

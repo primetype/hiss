@@ -3,9 +3,8 @@
 **Encrypted, authenticated channels between two peers you control — with the handshake
 checked by the compiler, and private keys that can stay in an Apple Secure Enclave.**
 
-Built on the [Noise Protocol Framework][noise]. You write the handshake you want in
-Noise's own notation; `hiss` generates the code for it, sizes every message at compile
-time, and refuses to build a handshake that is malformed.
+Built on the [Noise Protocol Framework][noise]: you write the handshake in Noise's own
+notation; `hiss` generates it, sizes every message at compile time, and rejects malformed ones.
 
 > **Status: `0.2`, unreleased — unstable API, not independently audited.** See
 > [How this is tested](#how-this-is-tested) and [Security](#security) before relying on it.
@@ -16,12 +15,10 @@ time, and refuses to build a handshake that is malformed.
 ## Quickstart
 
 Two peers authenticate each other and exchange an encrypted message in each direction,
-neither knowing the other's key in advance. Four steps, each one a doctest that compiles
-and runs. Assembled into a single program it is
-[`examples/quickstart.rs`](examples/quickstart.rs) — `cargo run --example quickstart`.
+neither knowing the other's key in advance. Four steps, each a doctest that compiles and
+runs; assembled, they are [`examples/quickstart.rs`](examples/quickstart.rs).
 
-You need two crates. `hiss` never picks a random-number generator for you, so the CSPRNG
-is a dependency you choose and hand in:
+`hiss` never picks a random-number generator for you, so the CSPRNG is yours to choose:
 
 ```toml
 [dependencies]
@@ -29,8 +26,7 @@ hiss = "0.2"
 rand = "0.9"
 ```
 
-**1. Describe the handshake you want.** You write it in the Noise specification's own
-notation and `hiss` generates the code. This one is `XX`: three messages, both sides
+**1. Describe the handshake you want.** This one is `XX`: three messages, both sides
 proving who they are along the way. Name the type after its pattern — the name you write
 goes on the wire as part of the protocol identity.
 
@@ -48,33 +44,47 @@ hiss::noise! {
 ```
 
 **2. Give each side a long-term key.** `XX` authenticates both parties, so each owns
-a key pair that outlives the connection. Nothing is shared in advance — they exchange
-public halves during the handshake.
+a key pair that outlives the connection; nothing is shared in advance. Keep the public
+halves — step 3 is where each side checks the other against one.
 
 ```rust
 use hiss::provider::{EphemeralOnly, ProviderExt};
 
 let mut alice_keys = EphemeralOnly::new(rand::rng());
 let alice_static = alice_keys.generate::<X25519>()?;
+let alice_pub = alice_keys.public(&alice_static)?;
 
 let mut bob_keys = EphemeralOnly::new(rand::rng());
 let bob_static = bob_keys.generate::<X25519>()?;
+let bob_pub = bob_keys.public(&bob_static)?;
 ```
 
-**3. Run the handshake.** Three messages, and this is all of it. Each call hands you the
-bytes to send; putting them on a socket, a queue, or a QR code is your business — `hiss`
-performs no I/O.
+**3. Run the handshake — and decide whether to trust the peer.** Each call hands you the
+bytes to send; moving them — socket, queue, QR code — is yours, because `hiss` does no I/O.
+
+Completing `XX` proves the peer holds *a* static private key, never that it is one you
+trust. `read_message_N_with` is where that decision goes: the closure sees the peer's key
+as it decrypts, and an `Err` aborts before any `Transport` exists. Leave it out and you
+have an encrypted channel to a stranger.
 
 ```rust
+use hiss::noise::HandshakeError;
+
+// Your trust policy: a pin, an enrolment record, an allow-list. Here, the key we expect.
+let accept = |ok: bool| match ok {
+    true => Ok(()),
+    false => Err(HandshakeError::PeerRejected {
+        reason: "unknown peer".into(),
+    }),
+};
+
 let (msg1, alice) = XX::initiator(alice_keys, &[]).write_message_1()?;
 let bob = XX::responder(bob_keys, &[]).read_message_1(&msg1)?;
 let (msg2, bob) = bob.write_message_2(bob_static)?;
-let (msg3, mut alice) = alice.read_message_2(&msg2)?.write_message_3(alice_static)?;
-let mut bob = bob.read_message_3(&msg3)?;
+let alice = alice.read_message_2_with(&msg2, |peer| accept(peer == &bob_pub))?;
+let (msg3, mut alice) = alice.write_message_3(alice_static)?;
+let mut bob = bob.read_message_3_with(&msg3, |peer| accept(peer == &alice_pub))?;
 ```
-
-Every message size is a compile-time constant — `XX::MSG1_SIZE` and friends — so
-framing the handshake is free: read exactly that many bytes.
 
 **4. Talk.** Both ends now hold a `Transport`. `OVERHEAD` is what the authentication tag
 costs you per message.
@@ -94,9 +104,8 @@ let m = alice.receive(&wire[..n], &mut got)?;
 assert_eq!(&got[..m], b"pong");
 ```
 
-Putting those messages on a real socket — framing, a trust decision on the peer's key,
-a PSK ceremony — is worked end to end in
-[`examples/tcp_ikpsk1_ceremony.rs`](examples/tcp_ikpsk1_ceremony.rs).
+Framed on a real socket, same trust check: [`tcp_xx_channel.rs`](examples/tcp_xx_channel.rs);
+plus a PSK ceremony: [`tcp_ikpsk1_ceremony.rs`](examples/tcp_ikpsk1_ceremony.rs).
 
 ## Why this and not `snow`
 
@@ -155,10 +164,9 @@ unnecessary for the targeted use cases; `snow` omits it for the same reason.
 advance, authenticates both sides, and hides both identities from anyone watching the
 wire. Move off it only when a row below describes your situation better.
 
-Both sides get confidentiality and forward secrecy in every pattern; what differs is who
-proves their identity, and what has to be arranged beforehand.
-
-**Interactive — both sides talk:**
+**Interactive — both sides talk.** Every one of these mixes both ephemerals (`ee`), so
+once that token lands the session has full forward secrecy. What differs is who proves
+their identity, and what has to be arranged beforehand.
 
 | Pattern | Msgs | Whose identity is proven | Must be arranged in advance | Reach for it when |
 |---------|:----:|--------------------------|-----------------------------|-------------------|
@@ -170,7 +178,10 @@ proves their identity, and what has to be arranged beforehand.
 | `NK` | 2 | responder only | initiator knows the responder's public key | Anonymous client, known server, and you want a reply |
 | `NN` | 2 | **neither** | nothing | Only with authentication layered on top. An active machine-in-the-middle defeats it outright |
 
-**One-way — a single sealed message, no reply:**
+**One-way — a single sealed message, no reply.** There is no `ee` here, so forward
+secrecy is one-sided: the fresh ephemeral per message protects a captured message against
+later compromise of the *sender's* keys, but whoever compromises the recipient's static
+private key — plus the pre-shared key, for `Kpsk0` — can still decrypt it.
 
 | Pattern | Msgs | Whose identity is proven | Must be arranged in advance | Reach for it when |
 |---------|:----:|--------------------------|-----------------------------|-------------------|
@@ -225,8 +236,10 @@ software; on macOS and iOS you can move the private key into the Secure Enclave,
 is generated and where it stays — the process never sees the key material, only a handle
 to it.
 
-Swapping the provider is the whole change. Everything after the first two lines is
-identical to the [Quickstart](#quickstart):
+Swapping the provider is the whole change *in your code* — the enclave itself still needs
+setting up, which on macOS means a team-prefixed keychain entitlement carried by an
+embedded provisioning profile (the `hiss::provider::apple` module docs list what it
+takes). Everything after the first two lines is identical to the [Quickstart](#quickstart):
 
 ```rust
 use hiss::noise::{Blake2b, ChaChaPoly, P256};
