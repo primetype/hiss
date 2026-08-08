@@ -24,19 +24,22 @@ jobs:
       # Apple Secure Enclave backend, macOS compiles it. Features: X25519's
       # software backend is feature-selected — the `x25519-cryptoxide`
       # default feature picks cryptoxide, `--no-default-features` falls back
-      # to eccoxide — so cover every backend, with and without `async-io`,
-      # to keep both paths from rotting and prove byte-for-byte interop.
+      # to eccoxide — so cover both backends to keep either from rotting and
+      # to prove they agree byte for byte.
+      #
+      # `x25519-cryptoxide` is the only feature the crate has, so
+      # `--all-features` is today the same build as the default. It is kept
+      # as its own leg because the gate table names `cargo test --all-features`
+      # explicitly, and because it stays correct if a second feature is added.
       matrix:
         os: [ubuntu-latest, macos-latest]
         features:
           - label: "default (cryptoxide X25519)"
             flags: ""
-          - label: "all features (cryptoxide X25519 + async-io)"
+          - label: "all features"
             flags: "--all-features"
           - label: "no default features (eccoxide X25519)"
             flags: "--no-default-features"
-          - label: "eccoxide X25519 + async-io"
-            flags: "--no-default-features --features async-io"
     steps:
       - uses: actions/checkout@v4
         with:
