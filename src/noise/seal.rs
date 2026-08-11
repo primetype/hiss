@@ -12,10 +12,10 @@
 //! [`super::process`] in fixed Noise-N order (`e, es`) — no generated
 //! state machine and no type-state involved.
 //!
-//! Async by construction: matches the existing `DhProviderAsync<P256>`
-//! async-trait pattern in [`crate::curve::p256`]. Callers `.await`
-//! directly. NO `block_on` / `Handle::try_current` is used — those
-//! would panic when invoked from inside a Tokio worker.
+//! Async by construction: matches the `DhProviderAsync<P256>` async-trait
+//! pattern, so callers `.await` directly. No `block_on` or executor
+//! handle is used anywhere — this crate depends on no async runtime, and
+//! these futures run wherever the caller polls them.
 //!
 //! # Wire format
 //!

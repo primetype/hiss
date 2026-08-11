@@ -1,9 +1,7 @@
-//! Ed25519 signing and key exchange.
+//! Ed25519 signing.
 //!
 //! Ed25519 is used for signing message headers — where the signature
-//! can double as a `message_id` — and, via the birational equivalence
-//! between Edwards and Montgomery forms, for Diffie–Hellman key
-//! exchange.
+//! can double as a `message_id`.
 //!
 //! This module implements the [`Curve`] trait for Ed25519; the provider
 //! backends that perform its operations live in [`crate::provider`].
@@ -30,20 +28,24 @@
 //! because `message_id = signature`, so non-deterministic signatures
 //! would produce non-reproducible message identifiers.
 //!
-//! # Key exchange
+//! # No key exchange
 //!
-//! DH is performed by converting Ed25519 keys to their Curve25519
-//! (Montgomery) equivalents via `cryptoxide::ed25519::exchange`.
-//! The shared secret is 32 bytes — the x-coordinate of the shared
-//! point on Curve25519.
+//! Ed25519 is a **signing** curve here and nothing else: it implements
+//! [`Curve`] and [`SigningCurve`], not [`DhCurve`](super::DhCurve), so
+//! `noise! { pub XX<Ed25519, …> }` is a compile error rather than a
+//! `Noise_XX_Ed25519_…` protocol name that appears in no Noise registry
+//! and interoperates with nothing.
 //!
-//! This Ed25519 DH is a **standalone** capability over Ed25519 keys; it
-//! is **not** the Noise `25519` DH function. A Noise handshake that wants
-//! Curve25519 key agreement must use [`X25519`](super::x25519::X25519),
-//! whose public keys are bare Montgomery u-coordinates and interoperate
-//! byte-for-byte with other Noise implementations. The two are **not**
-//! wire-compatible — an Edwards-point encoding here versus a Montgomery
-//! u-coordinate there.
+//! The agreement that a DH over Ed25519 keys would perform — mapping them
+//! to their Curve25519 (Montgomery) equivalents across the birational
+//! equivalence between the two forms — is one hiss deliberately does not
+//! expose here. It already ships under its **registered** Noise name as
+//! [`X25519`](super::x25519::X25519), whose public keys are bare
+//! Montgomery u-coordinates and interoperate byte-for-byte with other
+//! Noise implementations. Note the two encodings are **not**
+//! wire-compatible: an Edwards point here, a Montgomery u-coordinate
+//! there — so an Ed25519 seed is not an X25519 private scalar and keys do
+//! not carry across.
 
 use std::fmt;
 
@@ -51,11 +53,11 @@ use cryptoxide::ed25519 as ed;
 use packtool::Packed;
 use rand_core::{CryptoRng, RngCore};
 
-use super::{Curve, DhCurve, SharedSecret, SigningCurve};
+use super::{Curve, SigningCurve};
 
 // ── Errors ─────────────────────────────────────────────────────
 
-/// Errors produced by the Ed25519 signing and DH curve.
+/// Errors produced by the Ed25519 signing curve.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
@@ -77,10 +79,14 @@ pub enum Error {
 
 /// Ed25519 curve marker.
 ///
-/// Zero-sized type implementing [`Curve`] that ties together the
-/// concrete [`Ed25519PublicKey`], [`Ed25519Signature`], and
-/// [`SharedSecret`] types. Used as a type parameter for
-/// [`DhProviderAsync`](crate::provider::DhProviderAsync).
+/// Zero-sized type implementing [`Curve`] and [`SigningCurve`], tying
+/// together the concrete [`Ed25519PublicKey`] and [`Ed25519Signature`]
+/// types. Used as a type parameter for
+/// [`SigningProvider`](crate::provider::SigningProvider) and
+/// [`SigningProviderAsync`](crate::provider::SigningProviderAsync).
+///
+/// Deliberately **not** a [`DhCurve`](super::DhCurve): see the module
+/// docs.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Ed25519;
 
@@ -95,11 +101,6 @@ impl Curve for Ed25519 {
     fn public_key_from_bytes(bytes: &[u8]) -> Result<Self::PublicKey, Self::Error> {
         Ed25519PublicKey::from_bytes(bytes)
     }
-}
-
-impl DhCurve for Ed25519 {
-    const DHLEN: usize = 32;
-    type SharedSecret = SharedSecret<32>;
 }
 
 impl SigningCurve for Ed25519 {
@@ -243,14 +244,6 @@ impl SoftwareEd25519PrivateKey {
         Ed25519Signature(ed::signature(message, &self.keypair))
     }
 
-    /// Perform Diffie–Hellman key exchange with a peer's public key.
-    ///
-    /// Converts Ed25519 keys to their Curve25519 (Montgomery)
-    /// equivalents via `cryptoxide::ed25519::exchange`.
-    pub fn dh(&self, peer: &Ed25519PublicKey) -> SharedSecret<32> {
-        SharedSecret::new(ed::exchange(&peer.0, &self.seed))
-    }
-
     /// Return the raw 32-byte seed.
     ///
     /// Use with care — this is secret material. Intended for
@@ -290,7 +283,7 @@ impl fmt::Debug for SoftwareEd25519PrivateKey {
 mod tests {
     use super::*;
     use crate::provider::{
-        CryptoKeyProviderAsync, DhProviderAsync, EphemeralOnly, ProviderExt, SigningProviderAsync,
+        CryptoKeyProviderAsync, EphemeralOnly, ProviderExt, SigningProviderAsync,
     };
     use rand::{SeedableRng, rngs::StdRng};
 
@@ -408,35 +401,10 @@ mod tests {
         assert_ne!(sk1.public_key(), sk2.public_key());
     }
 
-    // ── DH tests ─────────────────────────────────────────────────
-
-    #[test]
-    fn dh_is_symmetric() {
-        let sk1 = SoftwareEd25519PrivateKey::generate(rand::rng());
-        let pk1 = sk1.public_key();
-        let sk2 = SoftwareEd25519PrivateKey::generate(rand::rng());
-        let pk2 = sk2.public_key();
-
-        let ss1 = sk1.dh(&pk2);
-        let ss2 = sk2.dh(&pk1);
-        assert_eq!(ss1.as_bytes(), ss2.as_bytes());
-    }
-
-    #[test]
-    fn dh_different_peers_produce_different_secrets() {
-        let sk = SoftwareEd25519PrivateKey::generate(rand::rng());
-        let peer1 = SoftwareEd25519PrivateKey::generate(rand::rng()).public_key();
-        let peer2 = SoftwareEd25519PrivateKey::generate(rand::rng()).public_key();
-
-        let ss1 = sk.dh(&peer1);
-        let ss2 = sk.dh(&peer2);
-        assert_ne!(ss1.as_bytes(), ss2.as_bytes());
-    }
-
-    // ── DhProviderAsync trait tests ───────────────────────────────
+    // ── Provider trait tests ──────────────────────────────────────
 
     #[tokio::test]
-    async fn provider_sign_and_dh() {
+    async fn provider_sign() {
         let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
 
         let sk1 = CryptoKeyProviderAsync::<Ed25519>::generate_static_key_async(&mut provider)
@@ -456,14 +424,5 @@ mod tests {
             .unwrap();
         assert!(pk1.verify(sig, MSG));
         assert!(!pk2.verify(sig, MSG));
-
-        // DH symmetry
-        let ss1 = DhProviderAsync::<Ed25519>::dh_async(&provider, &sk1, &pk2)
-            .await
-            .unwrap();
-        let ss2 = DhProviderAsync::<Ed25519>::dh_async(&provider, &sk2, &pk1)
-            .await
-            .unwrap();
-        assert_eq!(ss1.as_bytes(), ss2.as_bytes());
     }
 }

@@ -89,10 +89,6 @@ core-foundation = { version = "0.10", features = [] }
 # empty features in this version, so we don't list them.
 security-framework = { version = "3.5", features = ["OSX_10_15"] }
 security-framework-sys = "2.15"
-# The Secure Enclave / Security-framework calls are synchronous, blocking
-# C FFI. The async `CryptoProvider` impl offloads them to Tokio's blocking
-# thread pool (`spawn_blocking`) so they never block the async executor.
-tokio = { version = "1.50", default-features = false, features = ["rt"] }
 
 [dev-dependencies]
 base64 = "0.22"

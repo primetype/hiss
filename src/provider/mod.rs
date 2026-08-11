@@ -25,6 +25,46 @@
 //! All operation traits are **independent**: a backend implements exactly the
 //! ones its curve and environment support — a DH-only curve has no signing
 //! impl at all.
+//!
+//! # Security posture
+//!
+//! A cryptographic property belongs to whatever actually computes it, so a
+//! guarantee about one backend says nothing about another. The crate-wide
+//! properties — the message-length limit, peer-key validation, zeroise-on-drop,
+//! the absence of a low-order check on `25519`/`448` — are listed at
+//! [crate level](crate#security-posture). What follows is what each backend
+//! adds, or does not.
+//!
+//! **[`EphemeralOnly`] — software, every platform.**
+//!
+//! * P-256 scalar multiplication is constant-time (the fixed-base comb relies
+//!   on `eccoxide`'s `table` feature, enabled by default).
+//! * ECDSA signing is deterministic (RFC 6979), low-S, and non-malleable, with
+//!   no signing RNG.
+//! * A degenerate (identity) P-256 ECDH result is rejected rather than
+//!   returned. This is defence in depth, not a fix: a parsed public key cannot
+//!   hold the identity under *either* backend, so the state is unreachable
+//!   through the public API.
+//! * Private keys are zeroised on drop — they are raw scalars held in process
+//!   memory, which is exactly why it matters here and not on the enclave.
+//!
+//! **`AppleSecureEnclave` — macOS, iOS.** Its P-256 arithmetic is the
+//! platform's, so none of the four above are `hiss`'s to promise, and `hiss`
+//! does not verify them.
+//!
+//! * ECDSA is **randomized, not RFC 6979, and not low-S**: the Security
+//!   framework derives its own per-signature nonce, and `hiss` decodes the DER
+//!   it returns without normalising. Signing one message twice gives two
+//!   different signatures.
+//! * The DH result is taken as given beyond a length check; `hiss` adds no
+//!   degeneracy check on that path.
+//! * A P-256 private key is never in the process to zeroise — the handle is a
+//!   `SecKey`. Its Ed25519 keys *are* software, over a hardware-sealed seed,
+//!   and do zeroise.
+//!
+//! The Noise handshake never signs ([`SigningProvider`] is independent of
+//! [`DhProvider`]), so the ECDSA points concern an identity layer built around
+//! a channel rather than the channel itself.
 
 use std::future::Future;
 
@@ -108,9 +148,11 @@ pub trait CryptoKeyProvider<C: Curve> {
 /// Asynchronous key generation — the async mirror of
 /// [`CryptoKeyProvider`]'s generation methods.
 ///
-/// For backends whose key generation genuinely suspends (the Apple Secure
-/// Enclave offloads its blocking call to a worker thread; remote/WASM
-/// backends await I/O). Independent of the DH and signing surfaces, so a
+/// For backends whose key generation genuinely suspends — remote/WASM
+/// backends awaiting I/O. `AppleSecureEnclave` implements it too, but its
+/// Security-framework calls are blocking C functions, so those futures do
+/// the work and resolve on the first poll rather than suspending.
+/// Independent of the DH and signing surfaces, so a
 /// sign-only curve can still be generated asynchronously. Both methods
 /// return `Send` futures and are suffixed `_async` to avoid clashing with
 /// the synchronous methods when a backend implements both.
@@ -153,11 +195,15 @@ pub trait DhProvider<C: DhCurve>: CryptoKeyProvider<C> {
 
 /// Asynchronous Diffie–Hellman over a [`DhCurve`].
 ///
-/// For backends that genuinely suspend — hardware that may prompt for
-/// user presence, or remote/WASM backends (KMS, WebCrypto). The Apple
-/// Secure Enclave implements this by offloading its blocking call to a
-/// worker thread (`spawn_blocking`) so the executor never blocks; pure
-/// software resolves immediately.
+/// For backends that genuinely suspend — remote/WASM backends (KMS,
+/// WebCrypto) that await real I/O.
+///
+/// **Implementing this trait is not a promise to yield.** Pure software
+/// resolves immediately, and `AppleSecureEnclave`'s calls are blocking C
+/// FFI, so its futures do the work on the polling thread. `hiss` pulls in
+/// no async runtime and will not move that work off your executor for
+/// you; a caller who must not block should wrap it in whatever their
+/// runtime offers.
 ///
 /// **Independent of [`DhProvider`]** — a genuinely-async backend need not
 /// (and may be unable to) provide synchronous operations. The future is
@@ -188,7 +234,8 @@ pub trait SigningProvider<C: SigningCurve>: CryptoKeyProvider<C> {
 /// Asynchronous digital signatures over a [`SigningCurve`].
 ///
 /// The async mirror of [`SigningProvider`], for backends that genuinely
-/// suspend (the Apple Secure Enclave offloads its blocking signing call).
+/// suspend. The same caveat as [`DhProviderAsync`] applies: implementing
+/// it is not a promise to yield.
 /// `_async`-suffixed so a backend implementing both surfaces has no clash.
 pub trait SigningProviderAsync<C: SigningCurve>: CryptoKeyProvider<C> {
     /// Sign a message (hash applied internally).
@@ -204,8 +251,10 @@ pub trait SigningProviderAsync<C: SigningCurve>: CryptoKeyProvider<C> {
 /// Pure-software provider — keys live in memory only and persist
 /// **nothing** (zeroized on drop).
 ///
-/// Implements the trait family for P-256 (`eccoxide`), X25519, and
-/// Ed25519 (`cryptoxide`); works on every platform (including WASM); all
+/// Implemented per capability, not per curve: key generation and DH for
+/// P-256 (`eccoxide`), X25519 and X448; signing for P-256 and Ed25519
+/// (`cryptoxide`) — Ed25519 is signing-only, and P-256 is the one curve
+/// with the whole family. Works on every platform (including WASM); all
 /// operations resolve immediately — no hardware, no prompts.
 ///
 /// "Ephemeral-only" means *no built-in persistence*, not "no static
@@ -317,26 +366,6 @@ impl<R: CryptoRng + RngCore + Send + Sync> CryptoKeyProviderAsync<Ed25519> for E
 
     async fn generate_ephemeral_key_async(&mut self) -> Result<Self::PrivateKey, Self::Error> {
         Ok(SoftwareEd25519PrivateKey::generate(&mut self.rng))
-    }
-}
-
-impl<R: CryptoRng + RngCore> DhProvider<Ed25519> for EphemeralOnly<R> {
-    fn dh(
-        &self,
-        key: &Self::PrivateKey,
-        peer: &Ed25519PublicKey,
-    ) -> Result<SharedSecret<32>, Self::Error> {
-        Ok(key.dh(peer))
-    }
-}
-
-impl<R: CryptoRng + RngCore + Send + Sync> DhProviderAsync<Ed25519> for EphemeralOnly<R> {
-    async fn dh_async(
-        &self,
-        key: &Self::PrivateKey,
-        peer: &Ed25519PublicKey,
-    ) -> Result<SharedSecret<32>, Self::Error> {
-        Ok(key.dh(peer))
     }
 }
 
