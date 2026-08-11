@@ -200,6 +200,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   repo. It remains in the graph transitively via `proptest`, so this changes
   no resolution — it just stops claiming a direct requirement that was not one.
 
+- **`hiss-macros` moved from `syn = "2"` to `syn = "3"`.** `hiss-macros` is a
+  regular dependency, so syn sits in every consumer's build graph — and
+  `serde_derive`, `thiserror-impl` and `tokio-macros` all require syn 3
+  already, so staying on 2 made a consumer with any of them compile *both*
+  majors. The macro's parsing surface (`Ident`, `LitInt`, `Path`,
+  `Visibility`, token punctuation, `braced!`/`bracketed!`) has no overlap
+  with syn 3.0's breaking changes: the migration is the requirement line, no
+  code moved, and the UI-diagnostic snapshots (`tests/ui/`) are byte-stable.
+  One duplicate remains out of our hands — `packtool-macro` still parses with
+  syn 2.
+
 - **The Apple provider no longer offloads to a tokio runtime; the `*Async`
   provider traits poll in place.** The `cfg(macos/ios)` dependency on `tokio`
   is gone — `hiss` now pulls in no async runtime on any platform.

@@ -41,7 +41,7 @@ jobs:
           - label: "no default features (eccoxide X25519)"
             flags: "--no-default-features"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
       - uses: dtolnay/rust-toolchain@stable

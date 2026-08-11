@@ -52,7 +52,7 @@ jobs:
     name: snow interop suite
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
 
       # `hiss-interop/Cargo.lock` is committed, so local and dispatch runs are

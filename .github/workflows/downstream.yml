@@ -47,7 +47,7 @@ jobs:
         # the check.
         os: [ubuntu-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       # Deliberately NOT cached (no Swatinem/rust-cache). The point of this
       # job is a resolution straight from the index; restoring a cached

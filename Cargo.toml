@@ -114,7 +114,7 @@ security-framework = { version = "3.5", features = ["OSX_10_15"] }
 security-framework-sys = "2.15"
 
 [dev-dependencies]
-base64 = "0.22"
+base64 = "0.23"
 criterion = { version = "0.8.2", features = ["html_reports"] }
 proptest = "1.6"
 rand = "0.9"
