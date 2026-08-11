@@ -44,6 +44,26 @@ targets = ["aarch64-apple-darwin"]
 
 
 [dependencies]
+# A caret range, both ends deliberate.
+#
+# Lower bound — 0.5.1 is the floor the feature set above needs; nothing in
+# `src/` reaches for anything newer.
+#
+# Upper bound — `^0.5.1` means `<0.6`, and that ceiling is load-bearing, not
+# incidental. cryptoxide 0.6 deletes `src/mac.rs` and the `mac` feature
+# outright and replaces the generic `Hmac<D: Digest>` with
+# `hmac::Context<A: Algorithm>`, for which it ships exactly three algorithms:
+# `Sha1`, `Sha256`, `Sha512`. There is no HMAC-BLAKE2 of either width. So
+# crossing this bound costs hiss its own HMAC-BLAKE2: a local marker type per
+# variant plus an `hmac::Algorithm` impl over
+# `cryptoxide::hashing::blake2{b,s}::Context` — local because the orphan rule
+# forbids implementing cryptoxide's trait for cryptoxide's type. Both
+# `Blake2b::hmac` and `Blake2s::hmac` ride on it, and `Blake2b` is the
+# recommended hash.
+#
+# Widening this bound therefore needs that code written first, plus a green
+# `scripts/downstream-build.sh` behind it — per CLAUDE.md's explicit-range
+# rule, a caret is not by itself protection.
 cryptoxide = { version = "0.5.1", default-features = false, features = ["chacha", "poly1305", "blake2", "sha2", "hmac", "ed25519"] }
 # Written as an explicit range, both ends deliberate.
 #
@@ -99,7 +119,7 @@ rand = "0.9"
 # published crate — see tests/vectors/).
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-snow = { version = "0.10.0", features = ["default-resolver", "use-p256", "use-chacha20poly1305", "use-blake2"] }
+snow = { version = "0.10.0", features = ["default-resolver", "use-p256", "use-chacha20poly1305", "use-blake2", "use-sha2"] }
 tempfile = "3.12"
 tokio = { version = "1.50", features = ["macros", "rt", "rt-multi-thread", "net", "signal", "time", "sync", "io-util", "fs"] }
 # Compile-fail (UI) harness for the `noise!` parser diagnostics

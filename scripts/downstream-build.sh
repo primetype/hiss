@@ -45,7 +45,9 @@
 #      run for binaries, and hiss's own `noise!` invocations are marker-mode,
 #      which emits no walkthrough. Without this step the macro could start
 #      emitting a walkthrough that does not compile and every gate would stay
-#      green.
+#      green. A companion grep catches the other half of that: a walkthrough
+#      the macro quietly demoted to an uncompiled sketch, which `cargo test
+#      --doc` cannot see because it simply collects one doctest fewer.
 #   5. Repeats with `default-features = false`, which swaps the X25519
 #      backend from cryptoxide to eccoxide — a path the rest of CI treats as
 #      first-class.
@@ -140,13 +142,22 @@ main_rs="$work/main.rs"
 # gate would let a walkthrough that does not compile ship to every consumer
 # of every other pattern. These four cover the generator:
 #
-#   XX      (from the README) — verify hook, no pre-messages, no PSK
+#   XX      (from the README) — verify hook, no pre-messages, no PSK.
+#             X25519 / ChaChaPoly / Blake2b
 #   IKpsk1  — pre-messages, `s` ahead of `psk` (per-peer lookup), payloads
-#             on both a sent and a received message
+#             on both a sent and a received message. P256 / ChaChaPoly / Sha512
 #   IKpsk0  — `psk` ahead of `s`: a read taking a plain PSK *and* a
-#             verification closure
+#             verification closure. X448 / ChaChaPoly / Sha256
 #   K       — one-way: a role that only writes, a role that only reads, and
-#             a local static in both constructors (the fallible arm)
+#             a local static in both constructors (the fallible arm).
+#             X25519 / ChaChaPoly / Blake2s
+#
+# The suites are spread deliberately: between them the four arms spell
+# **every** type in `hiss-macros`' `HISS_SUITE_TYPES` — three curves, one
+# cipher, four hashes. The sketch-degrade guard below only fires for a type
+# some arm actually writes, so this is what makes it total rather than
+# per-suite. Keep it that way: a new entry in `HISS_SUITE_TYPES` that no arm
+# spells is guarded by nothing.
 lib_rs="$work/lib.rs"
 {
     cat "$blocks/block1"
@@ -154,11 +165,11 @@ lib_rs="$work/lib.rs"
 
 /// Patterns picked to reach every arm of the walkthrough `noise!` emits.
 pub mod arms {
-    use hiss::noise::{Blake2b, ChaChaPoly, X25519};
+    use hiss::noise::{Blake2s, ChaChaPoly, P256, Sha256, Sha512, X25519, X448};
 
     hiss::noise! {
         /// Pre-messages, a per-peer PSK lookup, and declared payloads.
-        pub IKpsk1<X25519, ChaChaPoly, Blake2b> {
+        pub IKpsk1<P256, ChaChaPoly, Sha512> {
             <- s
             ...
             -> e, es, s, ss, psk [12]
@@ -167,8 +178,8 @@ pub mod arms {
     }
 
     hiss::noise! {
-        /// `psk` ahead of the `s` it protects.
-        pub IKpsk0<X25519, ChaChaPoly, Blake2b> {
+        /// `psk` ahead of the `s` it protects, over X448.
+        pub IKpsk0<X448, ChaChaPoly, Sha256> {
             <- s
             ...
             -> psk, e, es, s, ss
@@ -178,7 +189,7 @@ pub mod arms {
 
     hiss::noise! {
         /// One-way, with both statics known in advance.
-        pub K<X25519, ChaChaPoly, Blake2b> {
+        pub K<X25519, ChaChaPoly, Blake2s> {
             -> s
             <- s
             ...
@@ -234,6 +245,21 @@ EOF
     # else ever compiles them.
     echo "── $name: compiling the doctests \`noise!\` emitted ──"
     ( cd "$dir" && cargo test --doc --quiet )
+
+    # `noise!` degrades a walkthrough from a compiled doctest to an
+    # uncompiled ```text sketch whenever it cannot respell the suite for a
+    # doctest crate — i.e. when a suite type is missing from
+    # HISS_SUITE_TYPES in hiss-macros/src/codegen.rs. rustdoc then collects
+    # fewer doctests and the step above passes green, so the degrade is
+    # otherwise invisible. Every suite spelled in this script is one
+    # `noise!` can respell, so any sketch here is a bug.
+    echo "── $name: checking no walkthrough degraded to a sketch ──"
+    ( cd "$dir" && cargo doc --no-deps --quiet )
+    if grep -rqF 'Sketches rather than doctests' "$CARGO_TARGET_DIR/doc/${name//-/_}/"; then
+        echo "downstream-build: a noise! walkthrough degraded to an uncompiled sketch" >&2
+        echo "downstream-build: a suite type used above is missing from HISS_SUITE_TYPES (hiss-macros/src/codegen.rs)" >&2
+        exit 1
+    fi
     echo "── $name: OK ──"
 }
 

@@ -180,7 +180,7 @@ pub use self::curve::{Curve, DhCurve, P256, X448, X25519};
 pub use self::datagram::{DatagramRecv, DatagramSend};
 pub use self::error::HandshakeError;
 // Protocol re-exported from this module (defined below on Noise).
-pub use self::hash::{Blake2b, Hash};
+pub use self::hash::{Blake2b, Blake2s, Hash, Sha256, Sha512};
 // Pattern markers stay namespaced under `noise::pattern::{N, K, …}`; only the
 // `Pattern` trait is re-exported at the root. There are deliberately no
 // suite-bound protocol aliases here: `N`, `XX`, … are Noise *patterns*, not
@@ -902,6 +902,224 @@ mod tests {
         assert_ne!(a, b);
     }
 
+    /// FIPS 180-4 Appendix B short-message digests — a standards-body
+    /// oracle, which the BLAKE2b tests above have no equivalent of.
+    #[test]
+    fn sha256_matches_nist_vectors() {
+        assert_eq!(
+            hex::encode(Sha256::hash(b"")),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        assert_eq!(
+            hex::encode(Sha256::hash(b"abc")),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        // The 448-bit two-block message.
+        assert_eq!(
+            hex::encode(Sha256::hash(
+                b"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"
+            )),
+            "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"
+        );
+        assert_eq!(Sha256::hash(b"abc").len(), 32);
+    }
+
+    #[test]
+    fn sha256_hash_two_equals_concat() {
+        // hash_two(a, b) should equal hash(a || b)
+        let a = b"first part";
+        let b = b"second part";
+        let h1 = Sha256::hash_two(a, b);
+        let mut concat = a.to_vec();
+        concat.extend_from_slice(b);
+        let h2 = Sha256::hash(&concat);
+        assert_eq!(h1, h2);
+    }
+
+    /// RFC 4231 §4 HMAC-SHA-256 cases 1, 2, 3 and 6. Case 6's key is
+    /// longer than the 64-byte block, which is the only one of the four
+    /// that reaches the hash-the-key path inside `Hmac`.
+    #[test]
+    fn sha256_hmac_rfc4231() {
+        assert_eq!(
+            hex::encode(Sha256::hmac(&[0x0b; 20], b"Hi There")),
+            "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7"
+        );
+        assert_eq!(
+            hex::encode(Sha256::hmac(b"Jefe", b"what do ya want for nothing?")),
+            "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
+        );
+        assert_eq!(
+            hex::encode(Sha256::hmac(&[0xaa; 20], &[0xdd; 50])),
+            "773ea91e36800e46854db8ebd09181a72959098b3ef8c122d9635514ced565fe"
+        );
+        assert_eq!(
+            hex::encode(Sha256::hmac(
+                &[0xaa; 131],
+                b"Test Using Larger Than Block-Size Key - Hash Key First"
+            )),
+            "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54"
+        );
+    }
+
+    #[test]
+    fn sha256_hmac_different_keys() {
+        let a = Sha256::hmac(b"key1", b"data");
+        let b = Sha256::hmac(b"key2", b"data");
+        assert_ne!(a, b);
+    }
+
+    /// RFC 7693 Appendix B, "Example of BLAKE2s Computation" — the one
+    /// standards-body digest that exists for this hash. `snow` vendors the
+    /// same value from `draft-saarinen-blake2-06`
+    /// (`resolvers/default.rs`, `test_blake2s`), and Python's
+    /// `hashlib.blake2s` reproduces it — three independent sources.
+    #[test]
+    fn blake2s_matches_rfc7693() {
+        assert_eq!(
+            hex::encode(Blake2s::hash(b"abc")),
+            "508c5e8c327c14e2e1a72ba34eeb452f37458b209ed63a294d999b4c86675982"
+        );
+        assert_eq!(Blake2s::hash(b"abc").len(), 32);
+    }
+
+    #[test]
+    fn blake2s_hash_two_equals_concat() {
+        // hash_two(a, b) should equal hash(a || b)
+        let a = b"first part";
+        let b = b"second part";
+        let h1 = Blake2s::hash_two(a, b);
+        let mut concat = a.to_vec();
+        concat.extend_from_slice(b);
+        let h2 = Blake2s::hash(&concat);
+        assert_eq!(h1, h2);
+    }
+
+    /// HMAC-BLAKE2s over RFC 4231's *inputs* — but the values below are
+    /// **not** standards-body vectors, and must not be presented as such.
+    ///
+    /// No standards body publishes HMAC-BLAKE2 vectors: RFC 7693 defines no
+    /// HMAC, Wycheproof ships no HMAC-BLAKE2 file, and macOS's LibreSSL has
+    /// no BLAKE2 digest at all. So these are cross-generated, and pinned only
+    /// because two implementations independent of `cryptoxide` — Python's
+    /// `hmac` over `hashlib.blake2s`, and RustCrypto's `hmac::SimpleHmac`
+    /// over `blake2::Blake2s256` — agree on every one of them.
+    ///
+    /// The stronger check on this code path is elsewhere: `mix_key` runs
+    /// `Blake2s::hmac` on every one of the 22 BLAKE2s handshakes in
+    /// `tests/noise_cacophony.rs`, against an implementation neither hiss
+    /// nor `snow` wrote.
+    ///
+    /// Cases 1, 2, 3 and 6 of RFC 4231 §4. Case 6's 131-byte key is the only
+    /// one of the four longer than the 64-byte block, so it is the only one
+    /// that reaches the hash-the-key path inside `Hmac`.
+    #[test]
+    fn blake2s_hmac_cross_checked() {
+        assert_eq!(
+            hex::encode(Blake2s::hmac(&[0x0b; 20], b"Hi There")),
+            "65a8b7c5cc9136d424e82c37e2707e74e913c0655b99c75f40edf387453a3260"
+        );
+        assert_eq!(
+            hex::encode(Blake2s::hmac(b"Jefe", b"what do ya want for nothing?")),
+            "90b6281e2f3038c9056af0b4a7e763cae6fe5d9eb4386a0ec95237890c104ff0"
+        );
+        assert_eq!(
+            hex::encode(Blake2s::hmac(&[0xaa; 20], &[0xdd; 50])),
+            "fcc4f59529502e34c3d8da3ffdab82966a2cb637ff5e9bd701135c2e9469e790"
+        );
+        assert_eq!(
+            hex::encode(Blake2s::hmac(
+                &[0xaa; 131],
+                b"Test Using Larger Than Block-Size Key - Hash Key First"
+            )),
+            "d23d79394f53d536a096e6514447eeaabb05ded01be32c1937da6a8f7103bc4e"
+        );
+    }
+
+    #[test]
+    fn blake2s_hmac_different_keys() {
+        let a = Blake2s::hmac(b"key1", b"data");
+        let b = Blake2s::hmac(b"key2", b"data");
+        assert_ne!(a, b);
+    }
+
+    /// FIPS 180-4 Appendix C short-message digests, plus the 896-bit
+    /// two-block message — cross-checked against `openssl dgst -sha512`.
+    #[test]
+    fn sha512_matches_nist_vectors() {
+        assert_eq!(
+            hex::encode(Sha512::hash(b"")),
+            "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce\
+             47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e"
+        );
+        assert_eq!(
+            hex::encode(Sha512::hash(b"abc")),
+            "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a\
+             2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f"
+        );
+        // The 896-bit two-block message.
+        assert_eq!(
+            hex::encode(Sha512::hash(
+                b"abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmn\
+                  hijklmnoijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu"
+            )),
+            "8e959b75dae313da8cf4f72814fc143f8f7779c6eb9f7fa17299aeadb6889018\
+             501d289e4900f7e4331b99dec4b5433ac7d329eeb6dd26545e96e55b874be909"
+        );
+        assert_eq!(Sha512::hash(b"abc").len(), 64);
+    }
+
+    #[test]
+    fn sha512_hash_two_equals_concat() {
+        // hash_two(a, b) should equal hash(a || b)
+        let a = b"first part";
+        let b = b"second part";
+        let h1 = Sha512::hash_two(a, b);
+        let mut concat = a.to_vec();
+        concat.extend_from_slice(b);
+        let h2 = Sha512::hash(&concat);
+        assert_eq!(h1, h2);
+    }
+
+    /// RFC 4231 §4 HMAC-SHA-512 cases 1, 2, 3 and 6 — standards-body
+    /// vectors, unlike BLAKE2s, which has none. Case 3 additionally matches
+    /// `snow`'s own vendored test verbatim. Case 6's key is longer than the
+    /// 128-byte block, the only one of the four that reaches the
+    /// hash-the-key path.
+    #[test]
+    fn sha512_hmac_rfc4231() {
+        assert_eq!(
+            hex::encode(Sha512::hmac(&[0x0b; 20], b"Hi There")),
+            "87aa7cdea5ef619d4ff0b4241a1d6cb02379f4e2ce4ec2787ad0b30545e17cde\
+             daa833b7d6b8a702038b274eaea3f4e4be9d914eeb61f1702e696c203a126854"
+        );
+        assert_eq!(
+            hex::encode(Sha512::hmac(b"Jefe", b"what do ya want for nothing?")),
+            "164b7a7bfcf819e2e395fbe73b56e0a387bd64222e831fd610270cd7ea250554\
+             9758bf75c05a994a6d034f65f8f0e6fdcaeab1a34d4a6b4b636e070a38bce737"
+        );
+        assert_eq!(
+            hex::encode(Sha512::hmac(&[0xaa; 20], &[0xdd; 50])),
+            "fa73b0089d56a284efb0f0756c890be9b1b5dbdd8ee81a3655f83e33b2279d39\
+             bf3e848279a722c806b485a47e67c807b946a337bee8942674278859e13292fb"
+        );
+        assert_eq!(
+            hex::encode(Sha512::hmac(
+                &[0xaa; 131],
+                b"Test Using Larger Than Block-Size Key - Hash Key First"
+            )),
+            "80b24263c7c1a3ebb71493c1dd7be8b49b46d1f41b4aeec1121b013783f8f352\
+             6b56d037e05f2598bd0fd2215d6a1e5295e64f73f63f0aec8b915a985d786598"
+        );
+    }
+
+    #[test]
+    fn sha512_hmac_different_keys() {
+        let a = Sha512::hmac(b"key1", b"data");
+        let b = Sha512::hmac(b"key2", b"data");
+        assert_ne!(a, b);
+    }
+
     // ── Handshake error path tests ────────────────────────────────
 
     #[test]
@@ -1040,7 +1258,7 @@ mod tests {
         }
     }
 
-    // ── SymmetricState long protocol name hashing ─────────────────
+    // ── SymmetricState protocol name hashing ──────────────────────
 
     #[test]
     fn symmetric_state_long_protocol_name() {
@@ -1049,6 +1267,18 @@ mod tests {
         let ss = symmetric_state::SymmetricState::<ChaChaPoly, Blake2b>::initialize(&long_name);
         // Just verify it doesn't panic and the hash is 64 bytes.
         assert_eq!(ss.handshake_hash().len(), 64);
+    }
+
+    #[test]
+    fn symmetric_state_short_protocol_name_sha256() {
+        // 31 bytes, so at HASHLEN 32 this takes the padding branch. The
+        // hashing branch is the one `Noise_IKpsk1_P256_ChaChaPoly_SHA256`
+        // (35 bytes) reaches, pinned against snow in `tests/noise_kat.rs`.
+        let name = "Noise_XX_P256_ChaChaPoly_SHA256";
+        let ss = symmetric_state::SymmetricState::<ChaChaPoly, Sha256>::initialize(name);
+        let mut want = vec![0u8; 32];
+        want[..name.len()].copy_from_slice(name.as_bytes());
+        assert_eq!(ss.handshake_hash(), want.as_slice());
     }
 
     // ── Wrong responder static key ──────────────────────────────────

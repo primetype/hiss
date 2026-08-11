@@ -1222,7 +1222,16 @@ fn dh_call(tok: Tok, role: Role) -> Ident {
 /// invocation site's `use` items nor its module path, so a suite written
 /// as a bare `X25519` only resolves there if we can respell it
 /// absolutely. These are the names we can — see [`doctest_suite_path`].
-const HISS_SUITE_TYPES: &[&str] = &["Blake2b", "ChaChaPoly", "P256", "X25519", "X448"];
+const HISS_SUITE_TYPES: &[&str] = &[
+    "Blake2b",
+    "Blake2s",
+    "ChaChaPoly",
+    "P256",
+    "Sha256",
+    "Sha512",
+    "X25519",
+    "X448",
+];
 
 /// A suite path respelled so it resolves from the root of a doctest
 /// crate, or `None` when it cannot be — a suite named through a path
