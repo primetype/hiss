@@ -168,6 +168,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The `snow` interop suite moved to a new `hiss-interop` crate, and `snow`
+  left `[dev-dependencies]`.** Dev-only in effect — no published API, wire
+  format or vector changes — but two consequences are worth stating plainly.
+
+  **The dependency graph a contributor compiles drops 63 packages, 195 → 132**
+  (32%): the whole RustCrypto stack (`aes-gcm`, `curve25519-dalek`, `p256`,
+  `ecdsa`, `elliptic-curve`, `sha2`, `blake2`, `chacha20poly1305`, …), `ring`,
+  and ten `windows-*` crates. That makes the README's "production cryptography
+  here is `cryptoxide` and `eccoxide`, nothing else" true of what you build,
+  not only of what ships.
+
+  **And the interop suite no longer runs on every `cargo test`.** It runs
+  weekly, on pushes to `main`, and on `workflow_dispatch`, via the new
+  `Interop` workflow — so per-commit coverage genuinely shrinks by those 35
+  tests. What did *not* shrink is what they were checking: hiss's conformance
+  is pinned by frozen corpora that need no second implementation at runtime
+  (272 `cacophony` replays, 20 P-256 known-answer replays, 26 negative sweeps),
+  and those still run everywhere they did before. `snow` agreement is now
+  stated for what it is — how the P-256 vectors were *generated*, plus an
+  occasional live re-check.
+
+  Also moved: the `#[ignore]` vector regenerators (they link `snow`; the
+  replays they feed do not) and the hiss-vs-snow comparison benchmark. hiss
+  keeps a hiss-only `benches/noise.rs`, so `cargo bench` remains a meaningful
+  release gate. `tests/snow_diag.rs` split in two and the half that stayed is
+  now `tests/primitive_diag.rs` — its old name no longer described it.
+
+- **`tempfile` removed from `[dev-dependencies]`.** Unrelated to the above and
+  unused: it had zero references in any `.rs`, `.sh` or `.yml` file in the
+  repo. It remains in the graph transitively via `proptest`, so this changes
+  no resolution — it just stops claiming a direct requirement that was not one.
+
 - **The Apple provider no longer offloads to a tokio runtime; the `*Async`
   provider traits poll in place.** The `cfg(macos/ios)` dependency on `tokio`
   is gone — `hiss` now pulls in no async runtime on any platform.

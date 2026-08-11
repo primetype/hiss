@@ -79,6 +79,18 @@ Two rules follow:
    `>=0.4.0, <0.5.0`; it does nothing about a breaking change shipped *within*
    the `0.4.x` line, which is exactly what happened.
 
+### Occasional checks (not gates)
+
+`hiss-interop/` (out-of-workspace, unpublished, own lockfile) holds everything
+that links `snow`: the live interop tests, the `#[ignore]` generators behind
+the frozen P-256 corpora, and the hiss-vs-snow comparison bench. It runs on
+its own workflow (`interop.yml`: weekly cron with a fresh `cargo update`,
+manual dispatch, push to `main`) — no gate above depends on it, and `cargo
+test` in this repo builds nothing snow-shaped. Convention: **dispatch the
+Interop workflow before cutting a release**; it is not a gate and does not
+block, but a red run means the comparison harness — usually a moved `snow` —
+needs attention before the next vector regeneration.
+
 ### MSRV policy
 
 The MSRV is declared in `Cargo.toml` (`rust-version`) and pinned by the `msrv`

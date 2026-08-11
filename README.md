@@ -117,8 +117,8 @@ plus a PSK ceremony: [`tcp_ikpsk1_ceremony.rs`](examples/tcp_ikpsk1_ceremony.rs)
 ## Why this and not `snow`
 
 [`snow`](https://crates.io/crates/snow) is the established Rust Noise implementation, and
-this README leans on it: the interop suite runs `hiss` against it, and the frozen vectors
-were generated from it. Neither crate has been audited — snow says so on its own front
+this README leans on it: the `hiss-interop` suite runs `hiss` against it, and the frozen
+vectors were generated from it. Neither crate has been audited — snow says so on its own front
 page. Three things differ.
 
 **The pattern is a type, not a string.** snow parses `"Noise_XX_25519_ChaChaPoly_BLAKE2s"`
@@ -160,7 +160,9 @@ This release targets a narrow suite matrix and a fixed set of patterns:
 
 That pattern row is **all fifteen** of Noise's fundamental patterns plus two PSK
 variants. Conformance is anchored against
-[`snow`](https://crates.io/crates/snow) via an interop test suite. What is planned beyond
+[`snow`](https://crates.io/crates/snow) — by the frozen vectors snow generated, which
+every build replays, and by the live interop suite in `hiss-interop`, which runs
+occasionally. What is planned beyond
 this — and what is deliberately not — is in [TODO.md](TODO.md).
 
 There is no default suite — every `noise!` declaration names its curve, cipher and hash,
@@ -172,7 +174,8 @@ speaks `P256` and nothing else, or want `X448`'s larger margin. For the hash, **
 seventeen-pattern frozen P-256 matrix; the other three are there for peers that require
 them. All four are covered by primitive vectors from the relevant standard and by frozen
 **third-party** (`cacophony`) Noise vectors over `25519` and `448` across all seventeen
-patterns, plus live `snow` interop on `XX`. With `X448`, prefer a 512-bit hash
+patterns, plus live `snow` interop on `XX` in `hiss-interop`. With `X448`, prefer a
+512-bit hash
 (`Blake2b` or `Sha512`).
 
 ## Which pattern?
@@ -330,7 +333,7 @@ commit.
 
 | Check | What it establishes |
 |-------|---------------------|
-| **Interoperability with [`snow`](https://crates.io/crates/snow)** | 22 tests over P-256 and 5 over X25519 run one side of a handshake with `hiss` and the other with `snow`, then require both to derive the same handshake hash and to exchange transport messages in both directions. A one-byte disagreement between the two implementations fails the suite. |
+| **Interoperability with [`snow`](https://crates.io/crates/snow)** | 28 tests over P-256 and 5 over X25519 run one side of a handshake with `hiss` and the other with `snow`, then require both to derive the same handshake hash and to exchange transport messages in both directions. A one-byte disagreement between the two implementations fails the suite. These live in the separate `hiss-interop` crate and run weekly plus on demand — **not** on every `cargo test`, and not as a release gate; what runs per-commit is the frozen vectors above. |
 | **Frozen known-answer vectors** | 17 tests replay byte-for-byte expectations across all seventeen patterns, with ephemerals pinned by a scripted RNG, checking every handshake ciphertext, the final handshake hash, and the transport ciphertexts. **These were generated from `snow`, not from a standards body** — P-256 is not in the Noise specification, so no third-party vectors exist for it. Treat them as a regression lock, not independent conformance. |
 | **Wycheproof** | 484 ECDSA and 355 ECDH `secp256r1` vectors from Google's Project Wycheproof, vendored verbatim at a pinned commit and run as library unit tests. Third-party and adversarial: malformed points, edge-case scalars, signature malleability. |
 | **Negative tests** | 26 tests assert the *failures*. Twenty-one are tamper sweeps — every byte of every handshake message of the eleven patterns swept, plus every byte of a transport record; the rest reject a non-canonical ephemeral, a wrong PSK, a replay, and an out-of-order record, and pin the twenty on-wire message sizes of those eleven. (The sweeps stop at eleven deliberately: every message token list in the other six already appears among them, so extending would re-test identical machinery.) There is deliberately no truncation sweep: a wrong-length message is a compile error, not a runtime rejection, so that case is pinned by a `compile_fail` doctest instead. |

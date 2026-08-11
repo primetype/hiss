@@ -1,61 +1,20 @@
-//! Primitive-level diagnostics verifying that our crypto primitives
-//! produce identical results to snow's dependencies.
+//! Primitive- and handshake-level diagnostics that compare hiss directly
+//! against `snow`'s own dependencies.
 //!
-//! These tests are independent of the handshake framework — they
-//! exercise the raw BLAKE2b, HMAC, ECDH, and ChaCha20-Poly1305
-//! implementations directly.
+//! These are the two tests that used to sit in hiss's `tests/snow_diag.rs`
+//! and were the only reason that file linked `snow`. Their snow-free
+//! siblings — the ipad/opad HMAC oracle and the NIST ECCCDH vector — stayed
+//! behind in `tests/primitive_diag.rs`.
+//!
+//! What they add over the frozen corpora: the first checks that `eccoxide`
+//! and the `p256` crate derive the *same* public key from the same scalar,
+//! and the second replays a Noise `N` handshake by hand — every mix_hash,
+//! the HKDF, the AEAD — against a live snow initiator, so a divergence shows
+//! up at the exact step it happened rather than as a wrong final byte.
 
 use hiss::curve::p256::P256r1PublicKey;
 use hiss::noise::Blake2b;
 use hiss::noise::hash::Hash;
-
-/// Verify our HMAC-BLAKE2b matches a manual ipad/opad implementation
-/// (the same algorithm snow uses internally).
-#[test]
-fn hmac_blake2b_matches_manual_ipad_opad() {
-    let key = b"test-key-for-hmac";
-    let data = b"test-data-for-hmac";
-
-    let our_hmac = Blake2b::hmac(key, data);
-
-    // Manual HMAC using ipad/opad (same algorithm as snow)
-    let block_len = 128;
-    let mut ipad = vec![0x36u8; block_len];
-    let mut opad = vec![0x5cu8; block_len];
-    for i in 0..key.len() {
-        ipad[i] ^= key[i];
-        opad[i] ^= key[i];
-    }
-    let inner = Blake2b::hash_two(&ipad, data);
-    let manual_hmac = Blake2b::hash_two(&opad, &inner);
-
-    assert_eq!(our_hmac, manual_hmac);
-}
-
-/// Verify eccoxide ECDH against NIST ECCCDH P-256 test vector (Count=0).
-#[test]
-fn eccoxide_dh_matches_nist_vector() {
-    use eccoxide::curve::sec2::p256r1::{FieldElement, Point, PointAffine, Scalar};
-
-    let qcavs_x =
-        hex::decode("700c48f77f56584c5cc632ca65640db91b6bacce3a4df6b42ce7cc838833d287").unwrap();
-    let qcavs_y =
-        hex::decode("db71e509e3fd9b060ddb20ba5c51dcc5948d46fbf640dfe0441782cab85fa4ac").unwrap();
-    let diut =
-        hex::decode("7d7dc5f71eb29ddaf80d6214632eeae03d9058af1fb6d22ed80badb62bc1a534").unwrap();
-    let ziut =
-        hex::decode("46fc62106420ff012e54a434fbdd2d25ccc5852060561e68040dd7778997bd7b").unwrap();
-
-    let x = FieldElement::from_slice(&qcavs_x).unwrap();
-    let y = FieldElement::from_slice(&qcavs_y).unwrap();
-    let peer = Point::from(&PointAffine::from_coordinate(&x, &y).unwrap());
-    let scalar = Scalar::from_slice(&diut).unwrap();
-
-    let shared = (&scalar * &peer).to_affine().unwrap();
-    let (shared_x, _) = shared.to_coordinate();
-
-    assert_eq!(shared_x.to_bytes().as_slice(), ziut.as_slice());
-}
 
 /// Verify eccoxide public key derivation matches snow's p256 crate
 /// when using the same raw scalar bytes.

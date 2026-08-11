@@ -1,9 +1,9 @@
 //! End-to-end Noise handshake over **X448** (the `448` DH function),
 //! hiss ↔ hiss.
 //!
-//! `snow`'s default resolver has no `448`, so — unlike X25519
-//! ([`snow_interop_25519`]) — there is no cross-implementation interop to run
-//! here. Instead this drives a full **XX** handshake between two hiss parties
+//! `snow`'s default resolver has no `448`, so — unlike X25519, whose
+//! cross-implementation interop lives in `hiss-interop` — there is no such
+//! interop to run here. Instead this drives a full **XX** handshake between two hiss parties
 //! over X448 and confirms the things interop would: both statics are revealed
 //! correctly, the parties agree on the handshake hash (session id), and
 //! transport messages round-trip in both directions. The X448 DH primitive

@@ -1,7 +1,8 @@
 [workspace]
 members = ["hiss-macros"]
-# The browser playground is its own independent crate/workspace.
-exclude = ["demo"]
+# The browser playground and the snow interop suite are each their own
+# independent crate/workspace.
+exclude = ["demo", "hiss-interop"]
 
 [package]
 name = "hiss"
@@ -20,11 +21,12 @@ homepage = "https://github.com/primetype/hiss"
 documentation = "https://docs.rs/hiss"
 keywords = ["noise", "handshake", "secure-enclave", "x25519", "keychain"]
 categories = ["cryptography", "network-programming"]
-# The browser playground (`demo/`) is a separate, non-published crate that
-# depends on this one by path; `hiss-macros` is published separately. Keep
-# both out of the packaged crate. NOTE: `demo/` does not currently build —
-# it is generic over pattern and curve, which `noise!` cannot express.
-exclude = ["/demo", "/hiss-macros"]
+# `demo/` (browser playground) and `hiss-interop/` (the `snow` comparison
+# suite) are separate, non-published crates that depend on this one by path;
+# `hiss-macros` is published separately. Keep all three out of the packaged
+# crate. NOTE: `demo/` does not currently build — it is generic over pattern
+# and curve, which `noise!` cannot express.
+exclude = ["/demo", "/hiss-macros", "/hiss-interop"]
 
 # docs.rs builds with every feature and passes `--cfg docsrs`, so the
 # `#[doc(cfg(...))]` feature/platform badges (gated behind
@@ -91,8 +93,9 @@ thiserror = "2"
 
 [features]
 # X25519's software DH backend defaults to `cryptoxide`'s `x25519`: it
-# benchmarks faster than the `eccoxide` Montgomery ladder (and beats snow in
-# the `noise` bench). Build with `--no-default-features` to fall back to
+# benchmarks faster than the `eccoxide` Montgomery ladder (the cross-library
+# comparison against snow lives in `hiss-interop/benches/comparison.rs`).
+# Build with `--no-default-features` to fall back to
 # `eccoxide` (the ladder shared with X448) — output is byte-for-byte
 # identical, so the choice only affects which dependency carries the
 # primitive. The backends are additive, not mutually exclusive (so
@@ -119,8 +122,6 @@ rand = "0.9"
 # published crate — see tests/vectors/).
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-snow = { version = "0.10.0", features = ["default-resolver", "use-p256", "use-chacha20poly1305", "use-blake2", "use-sha2"] }
-tempfile = "3.12"
 tokio = { version = "1.50", features = ["macros", "rt", "rt-multi-thread", "net", "signal", "time", "sync", "io-util", "fs"] }
 # Compile-fail (UI) harness for the `noise!` parser diagnostics
 # (`tests/macro_ui.rs` + `tests/ui/`). Test-only; hosted in the root crate

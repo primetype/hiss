@@ -11,7 +11,8 @@
 //! in both directions, as a bridge between the two implementations. The
 //! driver is gone, so the bridge has nothing to compare against and those
 //! two tests went with it. Cross-implementation agreement is now covered
-//! where it belongs — against `snow`, in `snow_interop*.rs`, and against
+//! where it belongs — against `snow`, in `hiss-interop`'s `snow_interop*.rs`,
+//! and against
 //! the frozen vectors in `noise_kat.rs`.
 
 use hiss::noise::{Blake2b, ChaChaPoly, HandshakeError, Transport, X25519};

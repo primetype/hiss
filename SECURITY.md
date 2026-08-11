@@ -70,7 +70,9 @@ Noise matrix. The security claims below apply only to this surface:
 >   sources.** X25519 and X448 carry frozen **third-party** (`cacophony`) Noise
 >   vectors across all seventeen patterns and all four hashes, and X25519
 >   additionally has byte-for-byte live interop with
->   [snow](https://crates.io/crates/snow). P-256 keeps its own frozen corpus, but
+>   [snow](https://crates.io/crates/snow) — which runs in the separate
+>   `hiss-interop` crate, on a cron and on demand, not under `cargo test`.
+>   P-256 keeps its own frozen corpus, but
 >   that one is agreement-with-snow by necessity — P-256 is not in the Noise
 >   specification, so no third-party P-256 Noise vectors exist. See
 >   [Validated test vectors](#validated-test-vectors).
@@ -126,15 +128,23 @@ party's host OS or RNG.
 ### Per-pattern security properties
 
 These follow the payload-security properties defined by the Noise specification for
-the one-way and interactive patterns. `hiss`'s conformance is validated by
-byte-for-byte agreement with [snow](https://crates.io/crates/snow), the reference
-Noise implementation — **not** by an independent standards-body vector set, because
-P-256 is not part of the Noise spec (see the provenance note under
-[Validated test vectors](#validated-test-vectors)). The full per-pattern matrix is
-exercised on P-256; X25519 and X448 are additionally replayed against the frozen
-third-party `cacophony` corpus across all seventeen patterns, and X25519 is exercised
-against snow across `N` / `IK` / `XX` (see
-[Validated test vectors](#validated-test-vectors)).
+the one-way and interactive patterns. Two different things establish `hiss`'s
+conformance to them, and they are worth keeping apart.
+
+**What every build checks** is the **frozen** corpora: the P-256 known-answer
+vectors across the full per-pattern matrix, and the third-party `cacophony` corpus
+replayed over X25519 and X448 across all seventeen patterns in both roles. These are
+files of bytes; replaying them needs no second Noise implementation, so they run on
+every `cargo test` and in every release gate.
+
+**Where the P-256 bytes came from** is byte-for-byte agreement with
+[snow](https://crates.io/crates/snow), the reference implementation — **not** an
+independent standards-body vector set, because P-256 is not part of the Noise spec
+(see the provenance note under
+[Validated test vectors](#validated-test-vectors)). That agreement is a statement
+about generation time. It is *re-checked* live — including X25519 across
+`N` / `IK` / `XX` — by the suite in the separate `hiss-interop` crate, which runs
+weekly and on demand rather than per-commit.
 
 | Pattern | Flow | Sender authentication | Confidentiality to recipient | Forward secrecy | Replay resistance | PSK |
 |---------|------|-----------------------|------------------------------|-----------------|-------------------|-----|
@@ -314,7 +324,7 @@ in-tree tests:
 | Wycheproof ECDH (secp256r1) | **355** vectors | Project Wycheproof, `ecpoint` encoding |
 | RFC 6979 deterministic ECDSA | Appendix A.2.5 (P-256/SHA-256) KAT | RFC 6979; raw `(r, s)` pinned for `"sample"` and `"test"` |
 | NIST ECC CDH | P-256 `Count=0` | NIST CAVP ECDH vector |
-| Noise handshake KATs (**P-256 / BLAKE2b**) | patterns `N` / `K` / `Kpsk0` / `IKpsk1` / `IK` / `NK` / `IX` / `XK` / `NN` / `XX` / `X` | frozen, replayed byte-for-byte (handshake ciphertexts + handshake hash + transport) |
+| Noise handshake KATs (**P-256 / BLAKE2b**) | all **seventeen** patterns | frozen, replayed byte-for-byte (handshake ciphertexts + handshake hash + transport) |
 | Noise handshake KATs (**P-256 / SHA-256**) | patterns `N` / `IKpsk1` / `XX` | frozen, replayed byte-for-byte |
 | Noise handshake KATs, **third-party** (`cacophony`) | 17 patterns × {`25519`, `448`} × ChaChaPoly × {BLAKE2b, BLAKE2s, SHA256, SHA512} — **136** vectors | frozen, replayed byte-for-byte (handshake ciphertexts + recovered payloads + revealed statics + handshake hash + every transport message); **every pattern additionally replayed in the responder role** on all eight suites — 136 initiator + 136 responder = **272** tests. The thirteen interactive patterns pin responder-written bytes; the four one-way patterns have no responder write, so theirs pin the recipient read path and its transport receives. See `tests/vectors/cacophony/PROVENANCE.md` |
 | FIPS 180-4 SHA-256 digests | `""`, `"abc"`, the 448-bit message | NIST, pinned as hex |
@@ -323,7 +333,7 @@ in-tree tests:
 | RFC 4231 HMAC-SHA-512 | cases 1, 2, 3, 6 | RFC 4231 §4, pinned as hex |
 | RFC 7693 BLAKE2s digest | `"abc"` | RFC 7693 Appendix B, pinned as hex |
 | HMAC-BLAKE2s | RFC 4231 inputs 1, 2, 3, 6 | **not** standards-body vectors — none exist for HMAC-BLAKE2; cross-generated and agreed by two implementations independent of `cryptoxide` |
-| Noise interop, **X25519** | patterns `N` / `IK` / `XX` | byte-for-byte agreement with `snow`, live (unfrozen) |
+| Noise interop, **X25519** | patterns `N` / `IK` / `XX` | byte-for-byte agreement with `snow`, live (unfrozen). Runs in **`hiss-interop`** — a weekly cron plus `workflow_dispatch` — **not** under `cargo test` and not a release gate |
 | Noise round-trip, **X448** | pattern `XX` | hiss↔hiss self round-trip; `snow` has no `448` resolver, so no live interop is possible |
 | Negative / boundary sweeps | per-pattern, deterministic | every-byte tamper, every-prefix truncation, over-length, ciphertext bit-flip, replay, out-of-order, wrong-PSK → all rejected |
 
@@ -339,9 +349,11 @@ first, so the tests are non-vacuous).
 > reference implementation, not with a standards body. That is unavoidable rather
 > than lazy: P-256 is **not** a curve in the Noise specification, so no third-party
 > P-256 Noise vectors exist anywhere. A latent bug shared with snow would not be
-> caught by them.
+> caught by them. They are regenerated by the `#[ignore]` generators in
+> `hiss-interop`; the procedure, and the additions-only discipline that governs
+> the resulting diff, are in `hiss-interop/README.md`.
 >
-> The **`cacophony`** corpus is third-party: 88 frozen vectors over `25519` and
+> The **`cacophony`** corpus is third-party: 136 frozen vectors over `25519` and
 > `448`, from a community corpus neither `hiss` nor `snow` produced, acquired from
 > `snow`'s package and verified byte-identical to the copy in the Cacophony Haskell
 > implementation's own repository. The assertions are stricter than `snow`'s own

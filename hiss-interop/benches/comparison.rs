@@ -1,10 +1,15 @@
-//! Handshake and transport benchmarks for the hiss Noise implementation.
+//! Handshake and transport benchmarks comparing hiss against `snow`.
 //!
-//! hiss-only, by construction: the `snow` comparison lives in
-//! `hiss-interop/benches/comparison.rs`, which is where `snow` is a
-//! dependency. This bench is the one the release gate runs, so what it has to
-//! catch is a perf-shaped compile break or a regression in hiss itself —
-//! neither of which needs a second implementation present.
+//! This is the *comparison* bench, and it lives in `hiss-interop` because it
+//! links `snow`. hiss keeps a hiss-only bench (`benches/noise.rs`) so its
+//! `cargo bench` release gate still builds and runs real handshakes; this one
+//! carries both arms.
+//!
+//! **The `*_hiss` macros below are duplicated from that bench, deliberately.**
+//! Criterion can only put two implementations in one comparison group if it
+//! measures them in one process against one target directory — two runs of two
+//! crates is not a comparison. The `push: main` trigger on the Interop
+//! workflow is what bounds the drift that duplication invites.
 //!
 //! # What is measured
 //!
@@ -23,10 +28,26 @@
 //! (mutual, known static), **XX** (mutual, statics exchanged in-band) — each
 //! over three DH curves: **P256**, **X25519**, **X448**.
 //!
-//! Numbers are not comparable across the point where the streaming I/O driver
-//! was removed: the `noise!` handshakes below return each message as a
-//! fixed-size array and perform no I/O, where the old driver wrote through a
-//! `Read`/`Write` pair.
+//! `snow` is benchmarked alongside hiss for **P256** and **X25519**. It
+//! recognises `448` in the spec but ships **no Curve448 implementation** —
+//! its resolver returns `None`, so building a `448` handshake fails with
+//! `Init(GetDhImpl)`. X448 is therefore hiss-only: there is no snow row to
+//! compare against.
+//!
+//! # One caveat on the hiss-vs-snow comparison
+//!
+//! * **RNG strategy.** hiss draws ephemeral randomness from a `StdRng`
+//!   (a ChaCha PRNG) seeded *once* in setup, so its measured region performs
+//!   no OS-entropy syscalls. snow uses its internal `OsRng` per ephemeral,
+//!   which *is* in its measured region — a small, inherent difference in the
+//!   two libraries' default RNG handling, slightly in hiss's favour.
+//!
+//! There used to be a second caveat here, about hiss being driven through a
+//! streaming I/O driver while snow wrote into flat buffers. It no longer
+//! applies: the `noise!` handshakes below return each message as a
+//! fixed-size array and perform no I/O, so both implementations are now
+//! measured writing into plain memory. Numbers from before that change are
+//! not comparable with numbers after it.
 
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
@@ -159,13 +180,115 @@ macro_rules! bench_xx_hiss {
     };
 }
 
+// ── snow handshake drivers (parameterised by protocol string) ──────────
+//
+// snow's static keypairs are minted in setup; the routine builds the handshake
+// states and drives the messages. snow's ephemeral RNG (`OsRng`) is internal,
+// so unlike hiss it stays in the measured region (see the module-level caveat).
+
+/// snow N: one responder static keypair, single message.
+macro_rules! bench_n_snow {
+    ($group:expr, $proto:expr, $label:expr) => {{
+        let protocol: snow::params::NoiseParams = $proto.parse().unwrap();
+        $group.bench_function(BenchmarkId::new("snow", $label), |b| {
+            b.iter_batched(
+                || {
+                    snow::Builder::new(protocol.clone())
+                        .generate_keypair()
+                        .unwrap()
+                },
+                |kp| {
+                    let mut initiator = snow::Builder::new(protocol.clone())
+                        .remote_public_key(&kp.public)
+                        .unwrap()
+                        .build_initiator()
+                        .unwrap();
+                    let mut msg = [0u8; 256];
+                    let n = initiator.write_message(&[], &mut msg).unwrap();
+
+                    let mut responder = snow::Builder::new(protocol.clone())
+                        .local_private_key(&kp.private)
+                        .unwrap()
+                        .build_responder()
+                        .unwrap();
+                    let mut buf = [0u8; 256];
+                    responder.read_message(&msg[..n], &mut buf).unwrap();
+
+                    black_box((
+                        initiator.into_transport_mode().unwrap(),
+                        responder.into_transport_mode().unwrap(),
+                    ))
+                },
+                BatchSize::SmallInput,
+            );
+        });
+    }};
+}
+
+/// snow IK / XX: initiator + responder static keypairs, two or three messages.
+/// `$ik` selects whether the initiator pre-knows the responder's static (IK)
+/// or not (XX), and `$msgs` is the message count.
+macro_rules! bench_multi_snow {
+    ($group:expr, $proto:expr, $label:expr, ik = $ik:expr, msgs = $msgs:expr) => {{
+        let protocol: snow::params::NoiseParams = $proto.parse().unwrap();
+        $group.bench_function(BenchmarkId::new("snow", $label), |b| {
+            b.iter_batched(
+                || {
+                    let i_kp = snow::Builder::new(protocol.clone())
+                        .generate_keypair()
+                        .unwrap();
+                    let r_kp = snow::Builder::new(protocol.clone())
+                        .generate_keypair()
+                        .unwrap();
+                    (i_kp, r_kp)
+                },
+                |(i_kp, r_kp)| {
+                    let mut ib = snow::Builder::new(protocol.clone())
+                        .local_private_key(&i_kp.private)
+                        .unwrap();
+                    if $ik {
+                        ib = ib.remote_public_key(&r_kp.public).unwrap();
+                    }
+                    let mut initiator = ib.build_initiator().unwrap();
+                    let mut responder = snow::Builder::new(protocol.clone())
+                        .local_private_key(&r_kp.private)
+                        .unwrap()
+                        .build_responder()
+                        .unwrap();
+
+                    let mut a = [0u8; 512];
+                    let mut buf = [0u8; 512];
+                    // Alternate initiator → responder → initiator …
+                    let (mut sender, mut receiver): (
+                        &mut snow::HandshakeState,
+                        &mut snow::HandshakeState,
+                    ) = (&mut initiator, &mut responder);
+                    for _ in 0..$msgs {
+                        let n = sender.write_message(&[], &mut a).unwrap();
+                        receiver.read_message(&a[..n], &mut buf).unwrap();
+                        std::mem::swap(&mut sender, &mut receiver);
+                    }
+
+                    black_box((
+                        initiator.into_transport_mode().unwrap(),
+                        responder.into_transport_mode().unwrap(),
+                    ))
+                },
+                BatchSize::SmallInput,
+            );
+        });
+    }};
+}
+
 // ── Benchmark groups: one per pattern, curve × impl matrix ─────────────
 
 fn handshakes_n(c: &mut Criterion) {
     let mut g = c.benchmark_group("handshake_N");
     bench_n_hiss!(g, P256, "P256");
     bench_n_hiss!(g, X25519, "X25519");
-    bench_n_hiss!(g, X448, "X448");
+    bench_n_hiss!(g, X448, "X448"); // no snow `448` to compare against
+    bench_n_snow!(g, "Noise_N_P256_ChaChaPoly_BLAKE2b", "P256");
+    bench_n_snow!(g, "Noise_N_25519_ChaChaPoly_BLAKE2b", "X25519");
     g.finish();
 }
 
@@ -174,6 +297,20 @@ fn handshakes_ik(c: &mut Criterion) {
     bench_ik_hiss!(g, P256, "P256");
     bench_ik_hiss!(g, X25519, "X25519");
     bench_ik_hiss!(g, X448, "X448");
+    bench_multi_snow!(
+        g,
+        "Noise_IK_P256_ChaChaPoly_BLAKE2b",
+        "P256",
+        ik = true,
+        msgs = 2
+    );
+    bench_multi_snow!(
+        g,
+        "Noise_IK_25519_ChaChaPoly_BLAKE2b",
+        "X25519",
+        ik = true,
+        msgs = 2
+    );
     g.finish();
 }
 
@@ -182,16 +319,30 @@ fn handshakes_xx(c: &mut Criterion) {
     bench_xx_hiss!(g, P256, "P256");
     bench_xx_hiss!(g, X25519, "X25519");
     bench_xx_hiss!(g, X448, "X448");
+    bench_multi_snow!(
+        g,
+        "Noise_XX_P256_ChaChaPoly_BLAKE2b",
+        "P256",
+        ik = false,
+        msgs = 3
+    );
+    bench_multi_snow!(
+        g,
+        "Noise_XX_25519_ChaChaPoly_BLAKE2b",
+        "X25519",
+        ik = false,
+        msgs = 3
+    );
     g.finish();
 }
 
 // ── Bulk transport throughput (curve-independent: ChaCha20-Poly1305) ───
 //
-// Both sides encrypt and decrypt into flat slices, with no I/O abstraction in
-// the measured region.
+// Both sides encrypt/decrypt into flat slices — no I/O abstraction on either —
+// so this is an apples-to-apples symmetric-crypto comparison.
 
 fn transport(c: &mut Criterion) {
-    // Set up a completed N/P256 handshake, then measure transport only.
+    // hiss: set up a completed N/P256 handshake, then measure transport only.
     let (mut h_send, mut h_recv) = {
         let mut p = provider();
         let r_static = p.generate::<P256>().unwrap();
@@ -207,6 +358,33 @@ fn transport(c: &mut Criterion) {
         (i_t, r_t)
     };
 
+    // snow equivalent.
+    let (mut s_send, mut s_recv) = {
+        let protocol: snow::params::NoiseParams =
+            "Noise_N_P256_ChaChaPoly_BLAKE2b".parse().unwrap();
+        let r_kp = snow::Builder::new(protocol.clone())
+            .generate_keypair()
+            .unwrap();
+        let mut initiator = snow::Builder::new(protocol.clone())
+            .remote_public_key(&r_kp.public)
+            .unwrap()
+            .build_initiator()
+            .unwrap();
+        let mut msg = [0u8; 256];
+        let n = initiator.write_message(&[], &mut msg).unwrap();
+        let mut responder = snow::Builder::new(protocol.clone())
+            .local_private_key(&r_kp.private)
+            .unwrap()
+            .build_responder()
+            .unwrap();
+        let mut buf = [0u8; 256];
+        responder.read_message(&msg[..n], &mut buf).unwrap();
+        (
+            initiator.into_transport_mode().unwrap(),
+            responder.into_transport_mode().unwrap(),
+        )
+    };
+
     let plaintext = [0x42u8; 1024];
     let mut ct = [0u8; 1056]; // 1024 + 16 tag + headroom
     let mut pt = [0u8; 1024];
@@ -216,6 +394,13 @@ fn transport(c: &mut Criterion) {
         b.iter(|| {
             let n = h_send.send(&plaintext, &mut ct).unwrap();
             let m = h_recv.receive(&ct[..n], &mut pt).unwrap();
+            black_box(m)
+        });
+    });
+    g.bench_function(BenchmarkId::new("snow", "ChaChaPoly"), |b| {
+        b.iter(|| {
+            let n = s_send.write_message(&plaintext, &mut ct).unwrap();
+            let m = s_recv.read_message(&ct[..n], &mut pt).unwrap();
             black_box(m)
         });
     });
