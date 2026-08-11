@@ -2,8 +2,8 @@
 //!
 //! Where `src/noise/mod.rs` has hand-picked single-corruption tests, this
 //! file sweeps the adversarial space deterministically (via the
-//! [`ScriptedRng`] ephemeral-injection harness) across all eleven supported
-//! patterns:
+//! [`ScriptedRng`] ephemeral-injection harness) across the eleven patterns
+//! swept here:
 //!
 //! * **tamper** — flip *every* byte of *every* handshake message → the
 //!   receiver must reject (invalid curve point at the `e` token, or an

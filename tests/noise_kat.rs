@@ -1,10 +1,15 @@
 //! Frozen Noise known-answer-test (KAT) vectors.
 //!
 //! The vectors in `tests/vectors/noise/p256_chachapoly_blake2b.json` are
-//! **frozen** byte-for-byte expectations for the eleven supported patterns
+//! **frozen** byte-for-byte expectations for the seventeen supported patterns
 //! (N, K, Kpsk0, IKpsk1, IK, NK, IX, XK, NN, XX, X) over `P256 / ChaChaPoly / BLAKE2b`, produced from
 //! the `snow` reference implementation with fixed keys and pinned
 //! ephemerals (`generate_noise_kat_vectors`, `#[ignore]`).
+//!
+//! `tests/vectors/noise/p256_chachapoly_sha256.json` is the same thing over
+//! `P256 / ChaChaPoly / SHA256`, for the three patterns the hash choice can
+//! reach anything new in — N, IKpsk1 and XX (`generate_noise_kat_sha256_vectors`,
+//! `#[ignore]`); it is replayed by [`mod sha256`].
 //!
 //! [`noise_kat_*`] replay each vector through this crate: a [`ScriptedRng`]
 //! injects the recorded ephemeral, statics are set from the recorded key
@@ -20,7 +25,7 @@
 mod common;
 use common::{ScriptedRng, private_key, public_key};
 
-use hiss::noise::{Blake2b, ChaChaPoly, P256};
+use hiss::noise::{Blake2b, ChaChaPoly, P256, Sha256};
 use hiss::provider::EphemeralOnly;
 use hiss::psk::Psk;
 use serde::{Deserialize, Serialize};
@@ -40,6 +45,12 @@ hiss::noise! { pub XK<P256, ChaChaPoly, Blake2b>     { <- s ... -> e, es <- e, e
 hiss::noise! { pub NN<P256, ChaChaPoly, Blake2b>     { -> e <- e, ee } }
 hiss::noise! { pub XX<P256, ChaChaPoly, Blake2b>     { -> e <- e, ee, s, es -> s, se } }
 hiss::noise! { pub X<P256, ChaChaPoly, Blake2b>      { <- s ... -> e, es, s, ss } }
+hiss::noise! { pub NX<P256, ChaChaPoly, Blake2b>     { -> e <- e, ee, s, es } }
+hiss::noise! { pub XN<P256, ChaChaPoly, Blake2b>     { -> e <- e, ee -> s, se } }
+hiss::noise! { pub KN<P256, ChaChaPoly, Blake2b>     { -> s ... -> e <- e, ee, se } }
+hiss::noise! { pub KK<P256, ChaChaPoly, Blake2b>     { -> s <- s ... -> e, es, ss <- e, ee, se } }
+hiss::noise! { pub KX<P256, ChaChaPoly, Blake2b>     { -> s ... -> e <- e, ee, se, s, es } }
+hiss::noise! { pub IN<P256, ChaChaPoly, Blake2b>     { -> e, s <- e, ee, se } }
 
 // ── Fixed inputs (frozen) ────────────────────────────────────────
 
@@ -55,6 +66,11 @@ const TRANSPORT_R2I: &[u8] = b"hiss KAT: responder -> initiator";
 const VECTORS_PATH: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/tests/vectors/noise/p256_chachapoly_blake2b.json"
+);
+
+const SHA256_VECTORS_PATH: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/vectors/noise/p256_chachapoly_sha256.json"
 );
 
 // ── Vector schema ────────────────────────────────────────────────
@@ -553,6 +569,392 @@ fn noise_kat_x() {
     );
 }
 
+#[test]
+fn noise_kat_nx() {
+    let file = load_vectors();
+    let v = vector(&file, "Noise_NX_P256_ChaChaPoly_BLAKE2b");
+
+    let provider = EphemeralOnly::new(ScriptedRng::new(&[&INIT_EPHEMERAL]));
+    // NX: no pre-messages and an anonymous initiator, so the constructor
+    // takes nothing but a provider and the prologue.
+    let (msg1, hs) = NX::initiator(provider, &[]).write_message_1().unwrap();
+    assert_wire(&msg1, &v.messages[0].ciphertext, "NX msg1");
+
+    // msg2: <- e, ee, s, es — final, and its `s` reveals the responder's
+    // static onto the transport.
+    let msg2 = frozen(&v.messages[1].ciphertext);
+    let mut transport = hs.read_message_2(&msg2).unwrap();
+    assert_eq!(
+        transport.remote_static().unwrap().to_bytes(),
+        public_key(&RESP_STATIC).to_bytes(),
+        "NX revealed responder static"
+    );
+
+    assert_eq!(
+        transport.session_id().as_ref(),
+        decode(&v.handshake_hash),
+        "NX handshake hash"
+    );
+
+    let mut ct = [0u8; 256];
+    let n = transport.send(TRANSPORT_I2R, &mut ct).unwrap();
+    assert_eq!(
+        &ct[..n],
+        decode(&v.transport[0].ciphertext),
+        "NX transport i->r"
+    );
+
+    let r2i = decode(&v.transport[1].ciphertext);
+    let mut pt = [0u8; 256];
+    let pn = transport.receive(&r2i, &mut pt).unwrap();
+    assert_eq!(&pt[..pn], TRANSPORT_R2I, "NX transport r->i plaintext");
+}
+
+#[test]
+fn noise_kat_xn() {
+    let file = load_vectors();
+    let v = vector(&file, "Noise_XN_P256_ChaChaPoly_BLAKE2b");
+
+    let provider = EphemeralOnly::new(ScriptedRng::new(&[&INIT_EPHEMERAL]));
+    // XN: three messages, and the responder is anonymous — the only static
+    // on the wire is ours, sent encrypted in msg3.
+    let (msg1, hs) = XN::initiator(provider, &[]).write_message_1().unwrap();
+    assert_wire(&msg1, &v.messages[0].ciphertext, "XN msg1");
+
+    let msg2 = frozen(&v.messages[1].ciphertext);
+    let hs = hs.read_message_2(&msg2).unwrap();
+
+    let (msg3, mut transport) = hs.write_message_3(private_key(&INIT_STATIC)).unwrap();
+    assert_wire(&msg3, &v.messages[2].ciphertext, "XN msg3");
+
+    assert_eq!(
+        transport.session_id().as_ref(),
+        decode(&v.handshake_hash),
+        "XN handshake hash"
+    );
+
+    let mut ct = [0u8; 256];
+    let n = transport.send(TRANSPORT_I2R, &mut ct).unwrap();
+    assert_eq!(
+        &ct[..n],
+        decode(&v.transport[0].ciphertext),
+        "XN transport i->r"
+    );
+
+    let r2i = decode(&v.transport[1].ciphertext);
+    let mut pt = [0u8; 256];
+    let pn = transport.receive(&r2i, &mut pt).unwrap();
+    assert_eq!(&pt[..pn], TRANSPORT_R2I, "XN transport r->i plaintext");
+}
+
+#[test]
+fn noise_kat_kn() {
+    let file = load_vectors();
+    let v = vector(&file, "Noise_KN_P256_ChaChaPoly_BLAKE2b");
+
+    let provider = EphemeralOnly::new(ScriptedRng::new(&[&INIT_EPHEMERAL]));
+    // KN pre-message `-> s`: our own static is pre-shared, so it is a
+    // constructor argument and nothing identifying rides the wire.
+    let (msg1, hs) = KN::initiator(provider, &[], private_key(&INIT_STATIC))
+        .unwrap()
+        .write_message_1()
+        .unwrap();
+    assert_wire(&msg1, &v.messages[0].ciphertext, "KN msg1");
+
+    let msg2 = frozen(&v.messages[1].ciphertext);
+    let mut transport = hs.read_message_2(&msg2).unwrap();
+
+    assert_eq!(
+        transport.session_id().as_ref(),
+        decode(&v.handshake_hash),
+        "KN handshake hash"
+    );
+
+    let mut ct = [0u8; 256];
+    let n = transport.send(TRANSPORT_I2R, &mut ct).unwrap();
+    assert_eq!(
+        &ct[..n],
+        decode(&v.transport[0].ciphertext),
+        "KN transport i->r"
+    );
+
+    let r2i = decode(&v.transport[1].ciphertext);
+    let mut pt = [0u8; 256];
+    let pn = transport.receive(&r2i, &mut pt).unwrap();
+    assert_eq!(&pt[..pn], TRANSPORT_R2I, "KN transport r->i plaintext");
+}
+
+#[test]
+fn noise_kat_kk() {
+    let file = load_vectors();
+    let v = vector(&file, "Noise_KK_P256_ChaChaPoly_BLAKE2b");
+
+    let provider = EphemeralOnly::new(ScriptedRng::new(&[&INIT_EPHEMERAL]));
+    // KK: both statics are pre-messages, in pattern order — `-> s` (ours)
+    // then `<- s` (theirs). msg1's payload is already encrypted.
+    let (msg1, hs) = KK::initiator(
+        provider,
+        &[],
+        private_key(&INIT_STATIC),
+        public_key(&RESP_STATIC),
+    )
+    .unwrap()
+    .write_message_1()
+    .unwrap();
+    assert_wire(&msg1, &v.messages[0].ciphertext, "KK msg1");
+
+    let msg2 = frozen(&v.messages[1].ciphertext);
+    let mut transport = hs.read_message_2(&msg2).unwrap();
+
+    assert_eq!(
+        transport.session_id().as_ref(),
+        decode(&v.handshake_hash),
+        "KK handshake hash"
+    );
+
+    let mut ct = [0u8; 256];
+    let n = transport.send(TRANSPORT_I2R, &mut ct).unwrap();
+    assert_eq!(
+        &ct[..n],
+        decode(&v.transport[0].ciphertext),
+        "KK transport i->r"
+    );
+
+    let r2i = decode(&v.transport[1].ciphertext);
+    let mut pt = [0u8; 256];
+    let pn = transport.receive(&r2i, &mut pt).unwrap();
+    assert_eq!(&pt[..pn], TRANSPORT_R2I, "KK transport r->i plaintext");
+}
+
+#[test]
+fn noise_kat_kx() {
+    let file = load_vectors();
+    let v = vector(&file, "Noise_KX_P256_ChaChaPoly_BLAKE2b");
+
+    let provider = EphemeralOnly::new(ScriptedRng::new(&[&INIT_EPHEMERAL]));
+    // KX: our static pre-shared as in KN, theirs revealed encrypted in msg2.
+    let (msg1, hs) = KX::initiator(provider, &[], private_key(&INIT_STATIC))
+        .unwrap()
+        .write_message_1()
+        .unwrap();
+    assert_wire(&msg1, &v.messages[0].ciphertext, "KX msg1");
+
+    let msg2 = frozen(&v.messages[1].ciphertext);
+    let mut transport = hs.read_message_2(&msg2).unwrap();
+    assert_eq!(
+        transport.remote_static().unwrap().to_bytes(),
+        public_key(&RESP_STATIC).to_bytes(),
+        "KX revealed responder static"
+    );
+
+    assert_eq!(
+        transport.session_id().as_ref(),
+        decode(&v.handshake_hash),
+        "KX handshake hash"
+    );
+
+    let mut ct = [0u8; 256];
+    let n = transport.send(TRANSPORT_I2R, &mut ct).unwrap();
+    assert_eq!(
+        &ct[..n],
+        decode(&v.transport[0].ciphertext),
+        "KX transport i->r"
+    );
+
+    let r2i = decode(&v.transport[1].ciphertext);
+    let mut pt = [0u8; 256];
+    let pn = transport.receive(&r2i, &mut pt).unwrap();
+    assert_eq!(&pt[..pn], TRANSPORT_R2I, "KX transport r->i plaintext");
+}
+
+#[test]
+fn noise_kat_in() {
+    let file = load_vectors();
+    let v = vector(&file, "Noise_IN_P256_ChaChaPoly_BLAKE2b");
+
+    let provider = EphemeralOnly::new(ScriptedRng::new(&[&INIT_EPHEMERAL]));
+    // IN: no pre-messages, so the constructor is infallible; the `s` token
+    // makes our static a writer argument, and it travels in the clear.
+    let (msg1, hs) = IN::initiator(provider, &[])
+        .write_message_1(private_key(&INIT_STATIC))
+        .unwrap();
+    assert_wire(&msg1, &v.messages[0].ciphertext, "IN msg1");
+
+    let msg2 = frozen(&v.messages[1].ciphertext);
+    let mut transport = hs.read_message_2(&msg2).unwrap();
+
+    assert_eq!(
+        transport.session_id().as_ref(),
+        decode(&v.handshake_hash),
+        "IN handshake hash"
+    );
+
+    let mut ct = [0u8; 256];
+    let n = transport.send(TRANSPORT_I2R, &mut ct).unwrap();
+    assert_eq!(
+        &ct[..n],
+        decode(&v.transport[0].ciphertext),
+        "IN transport i->r"
+    );
+
+    let r2i = decode(&v.transport[1].ciphertext);
+    let mut pt = [0u8; 256];
+    let pn = transport.receive(&r2i, &mut pt).unwrap();
+    assert_eq!(&pt[..pn], TRANSPORT_R2I, "IN transport r->i plaintext");
+}
+
+// ── SHA-256 replay tests ─────────────────────────────────────────
+
+/// The same replay, over `P256 / ChaChaPoly / SHA256`.
+///
+/// A module rather than three more file-scope declarations: the pattern
+/// identifier *is* `Pattern::NAME` and reaches the protocol name, so these
+/// have to keep the names `N`, `XX` and `IKpsk1` and cannot sit alongside
+/// their BLAKE2b twins.
+///
+/// Three patterns, not seventeen. The token sequences are hash-independent and
+/// already frozen by the BLAKE2b corpus; what varies with the hash is
+/// HKDF-2 (`N`), `split` plus both transport directions (`XX`), and HKDF-3
+/// via the PSK (`IKpsk1`). `IKpsk1` earns its place twice over: at HASHLEN
+/// 32 its 35-byte protocol name is the only one in this crate that exceeds
+/// HASHLEN, so it is the only oracle-checked run of the hashing branch of
+/// `SymmetricState::initialize`.
+mod sha256 {
+    use super::*;
+
+    hiss::noise! { pub N<P256, ChaChaPoly, Sha256>      { <- s ... -> e, es } }
+    hiss::noise! { pub IKpsk1<P256, ChaChaPoly, Sha256> { <- s ... -> e, es, s, ss, psk <- e, ee, se } }
+    hiss::noise! { pub XX<P256, ChaChaPoly, Sha256>     { -> e <- e, ee, s, es -> s, se } }
+
+    fn load() -> VectorFile {
+        let raw = std::fs::read_to_string(SHA256_VECTORS_PATH).unwrap_or_else(|e| {
+            panic!(
+                "missing {SHA256_VECTORS_PATH}: run `cargo test --test noise_kat \
+                 generate_noise_kat_sha256_vectors -- --ignored` first ({e})"
+            )
+        });
+        serde_json::from_str(&raw).expect("valid noise KAT json")
+    }
+
+    #[test]
+    fn noise_kat_sha256_n() {
+        let file = load();
+        let v = vector(&file, "Noise_N_P256_ChaChaPoly_SHA256");
+
+        let provider = EphemeralOnly::new(ScriptedRng::new(&[&INIT_EPHEMERAL]));
+        let (msg1, mut transport) = N::initiator(provider, &[], public_key(&RESP_STATIC))
+            .write_message_1()
+            .unwrap();
+        assert_wire(&msg1, &v.messages[0].ciphertext, "N/SHA256 msg1");
+
+        // 32 bytes here, where the BLAKE2b twin sees 64.
+        assert_eq!(
+            transport.session_id().as_ref(),
+            decode(&v.handshake_hash),
+            "N/SHA256 handshake hash"
+        );
+
+        let mut ct = [0u8; 256];
+        let n = transport.send(TRANSPORT_I2R, &mut ct).unwrap();
+        assert_eq!(
+            &ct[..n],
+            decode(&v.transport[0].ciphertext),
+            "N/SHA256 transport i->r"
+        );
+    }
+
+    #[test]
+    fn noise_kat_sha256_ikpsk1() {
+        let file = load();
+        // 35 bytes: the one protocol name in this crate that exceeds its
+        // HASHLEN, so the frozen bytes below are what pins the hashing
+        // branch of `SymmetricState::initialize` against snow.
+        let v = vector(&file, "Noise_IKpsk1_P256_ChaChaPoly_SHA256");
+
+        let psk = Psk::from_bytes(PSK_BYTES);
+        let provider = EphemeralOnly::new(ScriptedRng::new(&[&INIT_EPHEMERAL]));
+
+        // msg1: -> e, es, s, ss, psk
+        let (msg1, hs) = IKpsk1::initiator(provider, &[], public_key(&RESP_STATIC))
+            .write_message_1(private_key(&INIT_STATIC), &psk)
+            .unwrap();
+        assert_wire(&msg1, &v.messages[0].ciphertext, "IKpsk1/SHA256 msg1");
+
+        // msg2: <- e, ee, se — final, so the reader yields the `Transport`.
+        let msg2 = frozen(&v.messages[1].ciphertext);
+        let mut transport = hs.read_message_2(&msg2).unwrap();
+
+        assert_eq!(
+            transport.session_id().as_ref(),
+            decode(&v.handshake_hash),
+            "IKpsk1/SHA256 handshake hash"
+        );
+
+        let mut ct = [0u8; 256];
+        let n = transport.send(TRANSPORT_I2R, &mut ct).unwrap();
+        assert_eq!(
+            &ct[..n],
+            decode(&v.transport[0].ciphertext),
+            "IKpsk1/SHA256 transport i->r"
+        );
+
+        let r2i = decode(&v.transport[1].ciphertext);
+        let mut pt = [0u8; 256];
+        let pn = transport.receive(&r2i, &mut pt).unwrap();
+        assert_eq!(
+            &pt[..pn],
+            TRANSPORT_R2I,
+            "IKpsk1/SHA256 transport r->i plaintext"
+        );
+    }
+
+    #[test]
+    fn noise_kat_sha256_xx() {
+        let file = load();
+        let v = vector(&file, "Noise_XX_P256_ChaChaPoly_SHA256");
+
+        let provider = EphemeralOnly::new(ScriptedRng::new(&[&INIT_EPHEMERAL]));
+        let (msg1, hs) = XX::initiator(provider, &[]).write_message_1().unwrap();
+        assert_wire(&msg1, &v.messages[0].ciphertext, "XX/SHA256 msg1");
+
+        // msg2: <- e, ee, s, es — the `s` token reveals the responder's static.
+        let msg2 = frozen(&v.messages[1].ciphertext);
+        let hs = hs.read_message_2(&msg2).unwrap();
+        assert_eq!(
+            hs.remote_static().to_bytes(),
+            public_key(&RESP_STATIC).to_bytes(),
+            "XX/SHA256 revealed responder static"
+        );
+
+        // msg3: -> s, se
+        let (msg3, mut transport) = hs.write_message_3(private_key(&INIT_STATIC)).unwrap();
+        assert_wire(&msg3, &v.messages[2].ciphertext, "XX/SHA256 msg3");
+
+        assert_eq!(
+            transport.session_id().as_ref(),
+            decode(&v.handshake_hash),
+            "XX/SHA256 handshake hash"
+        );
+
+        let mut ct = [0u8; 256];
+        let n = transport.send(TRANSPORT_I2R, &mut ct).unwrap();
+        assert_eq!(
+            &ct[..n],
+            decode(&v.transport[0].ciphertext),
+            "XX/SHA256 transport i->r"
+        );
+
+        let r2i = decode(&v.transport[1].ciphertext);
+        let mut pt = [0u8; 256];
+        let pn = transport.receive(&r2i, &mut pt).unwrap();
+        assert_eq!(
+            &pt[..pn],
+            TRANSPORT_R2I,
+            "XX/SHA256 transport r->i plaintext"
+        );
+    }
+}
+
 // ── Generator (reference: snow) ──────────────────────────────────
 
 #[cfg(test)]
@@ -834,8 +1236,7 @@ mod generate {
         }
     }
 
-    fn vector_n() -> Vector {
-        let proto = "Noise_N_P256_ChaChaPoly_BLAKE2b";
+    fn vector_n(proto: &str) -> Vector {
         let init = snow::Builder::new(proto.parse().unwrap())
             .remote_public_key(&resp_pub_bytes())
             .unwrap()
@@ -900,8 +1301,7 @@ mod generate {
         )
     }
 
-    fn vector_ikpsk1() -> Vector {
-        let proto = "Noise_IKpsk1_P256_ChaChaPoly_BLAKE2b";
+    fn vector_ikpsk1(proto: &str) -> Vector {
         let init = snow::Builder::new(proto.parse().unwrap())
             .local_private_key(&INIT_STATIC)
             .unwrap()
@@ -1025,8 +1425,7 @@ mod generate {
         two_message_vector(proto, None, None, init, resp)
     }
 
-    fn vector_xx() -> Vector {
-        let proto = "Noise_XX_P256_ChaChaPoly_BLAKE2b";
+    fn vector_xx(proto: &str) -> Vector {
         // XX: no pre-messages. Both sides carry a local static (sent
         // in-handshake, encrypted after `ee`) and neither pre-knows the
         // other's static, so there is no `remote_public_key` on either
@@ -1069,6 +1468,121 @@ mod generate {
         one_message_vector(proto, Some(hh(&INIT_STATIC)), None, init, resp)
     }
 
+    fn vector_nx() -> Vector {
+        let proto = "Noise_NX_P256_ChaChaPoly_BLAKE2b";
+        // NX: no pre-messages. The initiator is anonymous (no local static);
+        // the responder carries its own, sent encrypted in msg2.
+        let init = snow::Builder::new(proto.parse().unwrap())
+            .fixed_ephemeral_key_for_testing_only(&INIT_EPHEMERAL)
+            .build_initiator()
+            .unwrap();
+        let resp = snow::Builder::new(proto.parse().unwrap())
+            .local_private_key(&RESP_STATIC)
+            .unwrap()
+            .fixed_ephemeral_key_for_testing_only(&RESP_EPHEMERAL)
+            .build_responder()
+            .unwrap();
+        two_message_vector(proto, None, None, init, resp)
+    }
+
+    fn vector_xn() -> Vector {
+        let proto = "Noise_XN_P256_ChaChaPoly_BLAKE2b";
+        // XN: no pre-messages, three messages. The mirror of NX — the
+        // initiator carries the only static, sent encrypted in msg3, and the
+        // responder is anonymous.
+        let init = snow::Builder::new(proto.parse().unwrap())
+            .local_private_key(&INIT_STATIC)
+            .unwrap()
+            .fixed_ephemeral_key_for_testing_only(&INIT_EPHEMERAL)
+            .build_initiator()
+            .unwrap();
+        let resp = snow::Builder::new(proto.parse().unwrap())
+            .fixed_ephemeral_key_for_testing_only(&RESP_EPHEMERAL)
+            .build_responder()
+            .unwrap();
+        three_message_vector(proto, Some(hh(&INIT_STATIC)), None, init, resp)
+    }
+
+    fn vector_kn() -> Vector {
+        let proto = "Noise_KN_P256_ChaChaPoly_BLAKE2b";
+        // KN: pre-message `-> s` — the responder pre-knows the initiator's
+        // static and holds none of its own.
+        let init = snow::Builder::new(proto.parse().unwrap())
+            .local_private_key(&INIT_STATIC)
+            .unwrap()
+            .fixed_ephemeral_key_for_testing_only(&INIT_EPHEMERAL)
+            .build_initiator()
+            .unwrap();
+        let resp = snow::Builder::new(proto.parse().unwrap())
+            .remote_public_key(&init_pub_bytes())
+            .unwrap()
+            .fixed_ephemeral_key_for_testing_only(&RESP_EPHEMERAL)
+            .build_responder()
+            .unwrap();
+        two_message_vector(proto, Some(hh(&INIT_STATIC)), None, init, resp)
+    }
+
+    fn vector_kk() -> Vector {
+        let proto = "Noise_KK_P256_ChaChaPoly_BLAKE2b";
+        // KK: both pre-messages — each side holds its own static and
+        // pre-knows the other's, so msg1's payload is already encrypted.
+        let init = snow::Builder::new(proto.parse().unwrap())
+            .local_private_key(&INIT_STATIC)
+            .unwrap()
+            .remote_public_key(&resp_pub_bytes())
+            .unwrap()
+            .fixed_ephemeral_key_for_testing_only(&INIT_EPHEMERAL)
+            .build_initiator()
+            .unwrap();
+        let resp = snow::Builder::new(proto.parse().unwrap())
+            .local_private_key(&RESP_STATIC)
+            .unwrap()
+            .remote_public_key(&init_pub_bytes())
+            .unwrap()
+            .fixed_ephemeral_key_for_testing_only(&RESP_EPHEMERAL)
+            .build_responder()
+            .unwrap();
+        two_message_vector(proto, Some(hh(&INIT_STATIC)), None, init, resp)
+    }
+
+    fn vector_kx() -> Vector {
+        let proto = "Noise_KX_P256_ChaChaPoly_BLAKE2b";
+        // KX: pre-message `-> s` as in KN, but the responder also carries a
+        // static of its own, sent encrypted in msg2.
+        let init = snow::Builder::new(proto.parse().unwrap())
+            .local_private_key(&INIT_STATIC)
+            .unwrap()
+            .fixed_ephemeral_key_for_testing_only(&INIT_EPHEMERAL)
+            .build_initiator()
+            .unwrap();
+        let resp = snow::Builder::new(proto.parse().unwrap())
+            .local_private_key(&RESP_STATIC)
+            .unwrap()
+            .remote_public_key(&init_pub_bytes())
+            .unwrap()
+            .fixed_ephemeral_key_for_testing_only(&RESP_EPHEMERAL)
+            .build_responder()
+            .unwrap();
+        two_message_vector(proto, Some(hh(&INIT_STATIC)), None, init, resp)
+    }
+
+    fn vector_in() -> Vector {
+        let proto = "Noise_IN_P256_ChaChaPoly_BLAKE2b";
+        // IN: no pre-messages. The initiator's static rides msg1 in the
+        // clear; the responder is anonymous.
+        let init = snow::Builder::new(proto.parse().unwrap())
+            .local_private_key(&INIT_STATIC)
+            .unwrap()
+            .fixed_ephemeral_key_for_testing_only(&INIT_EPHEMERAL)
+            .build_initiator()
+            .unwrap();
+        let resp = snow::Builder::new(proto.parse().unwrap())
+            .fixed_ephemeral_key_for_testing_only(&RESP_EPHEMERAL)
+            .build_responder()
+            .unwrap();
+        two_message_vector(proto, Some(hh(&INIT_STATIC)), None, init, resp)
+    }
+
     /// Regenerate the frozen vectors from snow. Ignored: run manually with
     /// `cargo test --test noise_kat generate_noise_kat_vectors -- --ignored`.
     #[test]
@@ -1078,26 +1592,59 @@ mod generate {
             note: "Noise KAT vectors for P256/ChaChaPoly/BLAKE2b, generated \
                    from snow with fixed keys + pinned ephemerals. One-way \
                    patterns (N, K, Kpsk0, X) freeze msg1 + the initiator->responder \
-                   transport; the interactive patterns (IKpsk1, IK, NK, IX, XK, NN, XX) freeze every \
-                   handshake message + both transport directions. \
+                   transport; the interactive patterns (IKpsk1, IK, NK, IX, XK, NN, XX, NX, XN, \
+                   KN, KK, KX, IN) freeze every handshake message + both transport directions. \
                    Provenance: agreement with snow (no spec P-256 vectors exist)."
                 .to_string(),
             vectors: vec![
-                vector_n(),
+                vector_n("Noise_N_P256_ChaChaPoly_BLAKE2b"),
                 vector_k(),
                 vector_kpsk0(),
-                vector_ikpsk1(),
+                vector_ikpsk1("Noise_IKpsk1_P256_ChaChaPoly_BLAKE2b"),
                 vector_ik(),
                 vector_nk(),
                 vector_ix(),
                 vector_xk(),
                 vector_nn(),
-                vector_xx(),
+                vector_xx("Noise_XX_P256_ChaChaPoly_BLAKE2b"),
                 vector_x(),
+                vector_nx(),
+                vector_xn(),
+                vector_kn(),
+                vector_kk(),
+                vector_kx(),
+                vector_in(),
             ],
         };
         let json = serde_json::to_string_pretty(&file).unwrap();
         std::fs::write(VECTORS_PATH, json + "\n").unwrap();
         eprintln!("wrote {VECTORS_PATH}");
+    }
+
+    /// Regenerate the frozen SHA-256 vectors from snow. Ignored: run
+    /// manually with `cargo test --test noise_kat
+    /// generate_noise_kat_sha256_vectors -- --ignored`.
+    #[test]
+    #[ignore]
+    fn generate_noise_kat_sha256_vectors() {
+        let file = VectorFile {
+            note: "Noise KAT vectors for P256/ChaChaPoly/SHA256, generated \
+                   from snow with fixed keys + pinned ephemerals. Three \
+                   patterns, one per code path the hash choice reaches: N \
+                   (one-way, HKDF-2, protocol name padded), XX (three \
+                   messages, split, both transport directions), IKpsk1 (PSK \
+                   => HKDF-3, and a 35-byte protocol name => hashed rather \
+                   than padded at HASHLEN 32). \
+                   Provenance: agreement with snow (no spec P-256 vectors exist)."
+                .to_string(),
+            vectors: vec![
+                vector_n("Noise_N_P256_ChaChaPoly_SHA256"),
+                vector_ikpsk1("Noise_IKpsk1_P256_ChaChaPoly_SHA256"),
+                vector_xx("Noise_XX_P256_ChaChaPoly_SHA256"),
+            ],
+        };
+        let json = serde_json::to_string_pretty(&file).unwrap();
+        std::fs::write(SHA256_VECTORS_PATH, json + "\n").unwrap();
+        eprintln!("wrote {SHA256_VECTORS_PATH}");
     }
 }
