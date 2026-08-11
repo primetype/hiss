@@ -13,7 +13,7 @@ it is fixed, not deferred to "the next patch."
 | Lints | `cargo clippy --all-features --all-targets -- -D warnings` | zero warnings |
 | Docs | `cargo doc --no-deps` and `--all-features`, `RUSTDOCFLAGS=-D warnings` | no broken intra-doc links |
 | Tests | `cargo test` **and** `cargo test --all-features` | all pass |
-| KAT | `cargo test --all-features --test noise_kat` (Noise known-answer vectors) | all pass |
+| KAT | `cargo test --all-features --test noise_kat --test noise_cacophony` (Noise known-answer vectors: snow-generated P-256 + third-party cacophony) | all pass |
 | Wycheproof | P-256 / X25519 Wycheproof vectors — lib unit tests, run under `cargo test --all-features` | all pass |
 | MSRV | `cargo +<MSRV> check --all-features --all-targets` | passes on the declared MSRV |
 | Coverage | `cargo llvm-cov` (gated total — see `.github/workflows/coverage.yml`) | ≥ 80% lines / 75% regions |
@@ -61,7 +61,11 @@ So what the gate adds, concretely:
    only writes. Nothing else compiles them: doctests do not run for
    binaries, and hiss's own `noise!` invocations are marker-mode, which
    emits no walkthrough. Sabotage one arm and every other gate stays
-   green while this one goes red — which is the point.
+   green while this one goes red — which is the point. The arms also
+   spell every suite type in the macro's `HISS_SUITE_TYPES` list, and a
+   sketch-sentinel grep goes red when a walkthrough silently degrades to
+   an uncompiled sketch — the exact failure of a type missing from that
+   list, which leaves every other gate green.
 5. The `default-features = false` consumer is covered.
 6. On its weekly cron it catches an upstream break during an idle window,
    rather than at the next push — which, for a quiet week, is the release

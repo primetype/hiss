@@ -49,11 +49,11 @@ Noise matrix. The security claims below apply only to this surface:
 
 | Component | Supported |
 |-----------|-----------|
-| Handshake patterns | `N`, `K`, `Kpsk0`, `IKpsk1`, `IK`, `NK`, `IX`, `XK`, `NN`, `XX`, `X` (an 11-pattern subset) |
+| Handshake patterns | `N`, `K`, `Kpsk0`, `IKpsk1`, `IK`, `NK`, `IX`, `XK`, `NN`, `XX`, `X`, `NX`, `XN`, `KN`, `KK`, `KX`, `IN` — **all fifteen** of the specification's fundamental patterns plus two PSK variants |
 | Noise DH curves | NIST **P-256** (the Noise DH curve), **X25519** (the Noise `25519` curve, Curve25519 / RFC 7748), and **X448** (the Noise `448` curve, RFC 7748) |
-| Signing curve | **Ed25519** (standalone signing; not used as a Noise DH curve) |
+| Signing curve | **Ed25519** (standalone signing; not a Noise DH curve — and as of this release not a `DhCurve` at all, so the type system enforces it) |
 | AEAD cipher | **ChaCha20-Poly1305** |
-| Hash | **BLAKE2b-512** |
+| Hash | **BLAKE2b-512**, **SHA-512**, **SHA-256**, **BLAKE2s** — the Noise specification's four (§12.5 SHA256, §12.6 SHA512, §12.7 BLAKE2s, §12.8 BLAKE2b) |
 | Backends | **Software** (default, all platforms incl. WASM) and **Apple Secure Enclave** (macOS/iOS, opt-in) |
 
 > **The non-P-256 DH curves carry a narrower assurance surface.** All three DH
@@ -66,14 +66,17 @@ Noise matrix. The security claims below apply only to this surface:
 >   simply yields an **all-zero shared secret** rather than an error. This is
 >   spec-conformant (the check is optional in RFC 7748), but it means the Curve25519
 >   / Curve448 paths give the caller no signal on a degenerate DH.
-> - **Frozen known-answer coverage is P-256-only.** The frozen Noise KAT corpus
->   exists for **P-256 only**. X25519 is validated by **byte-for-byte interop with
->   [snow](https://crates.io/crates/snow)** across the `N` / `IK` / `XX` patterns;
->   X448 has a single self round-trip (`XX`). There are **no frozen X25519/X448
->   KAT vectors yet**. See [Validated test vectors](#validated-test-vectors).
+> - **Frozen known-answer coverage now spans all three, but from different
+>   sources.** X25519 and X448 carry frozen **third-party** (`cacophony`) Noise
+>   vectors across all seventeen patterns and all four hashes, and X25519
+>   additionally has byte-for-byte live interop with
+>   [snow](https://crates.io/crates/snow). P-256 keeps its own frozen corpus, but
+>   that one is agreement-with-snow by necessity — P-256 is not in the Noise
+>   specification, so no third-party P-256 Noise vectors exist. See
+>   [Validated test vectors](#validated-test-vectors).
 >
-> Ed25519 is exposed for **standalone** signing (and a Curve25519 DH) through the
-> provider API; it is not used as the curve inside a Noise pattern.
+> Ed25519 is exposed for **standalone** signing through the provider API; it is not
+> used as the curve inside a Noise pattern, and cannot be.
 
 ## Threat model
 
@@ -128,22 +131,30 @@ byte-for-byte agreement with [snow](https://crates.io/crates/snow), the referenc
 Noise implementation — **not** by an independent standards-body vector set, because
 P-256 is not part of the Noise spec (see the provenance note under
 [Validated test vectors](#validated-test-vectors)). The full per-pattern matrix is
-exercised on P-256; X25519 is exercised against snow across `N` / `IK` / `XX`, and
-X448 has a single `XX` self round-trip (see [Validated test vectors](#validated-test-vectors)).
+exercised on P-256; X25519 and X448 are additionally replayed against the frozen
+third-party `cacophony` corpus across all seventeen patterns, and X25519 is exercised
+against snow across `N` / `IK` / `XX` (see
+[Validated test vectors](#validated-test-vectors)).
 
 | Pattern | Flow | Sender authentication | Confidentiality to recipient | Forward secrecy | Replay resistance | PSK |
 |---------|------|-----------------------|------------------------------|-----------------|-------------------|-----|
 | **N** | one message (`-> e, es`) | **none** — sender is anonymous | encrypted to the recipient's known static key | sender-side only (fresh ephemeral per message); **lost if the recipient's static key is compromised** | **no** (one-way) | — |
 | **K** | one message (`-> e, es, ss`) | sender's static key, **vulnerable to key-compromise impersonation** (auth rests on the static–static `ss` DH) | encrypted to the recipient's known static key | sender-side only | **no** (one-way) | — |
-| **Kpsk0** | one message (`-> psk, e, es, ss`) | sender's static key **plus a PSK** (a second factor) | recipient's static key **plus the PSK** — an attacker needs the relevant private key *and* the PSK | sender-side only | **no** (one-way) | position 0 |
-| **IKpsk1** | two messages (`-> e, es, s, ss, psk` / `<- e, ee, se`) | **mutual** — responder authenticated to the initiator via `es`/`ss` (the DHs that bind the responder's static key); initiator authenticated to the responder via `ss` then `se` — **plus a PSK** | recipient's static key plus the PSK; the initiator's identity is hidden from a passive eavesdropper | **full** once both ephemerals are mixed (`ee`) | **yes** (responder contributes a fresh ephemeral) | position 1 |
-| **IK** | two messages (`-> e, es, s, ss` / `<- e, ee, se`) | **mutual** — responder authenticated to the initiator via `es`/`ss` (the DHs that bind the responder's static key); initiator authenticated to the responder via `ss` then `se` | encrypted to the recipient's known static key; the initiator's identity is hidden from a passive eavesdropper | **full** once both ephemerals are mixed (`ee`) | **yes** (responder contributes a fresh ephemeral) | — |
-| **NK** | two messages (`-> e, es` / `<- e, ee`) | **none for the initiator — it is anonymous** (no static key); the **responder is authenticated to the initiator** via the `es` DH that binds the responder's known static key | encrypted to the responder's known static key | **full** once both ephemerals are mixed (`ee`) | **yes** (responder contributes a fresh ephemeral) | — |
+| **Kpsk0** | one message (`-> psk, e, es, ss`) | sender's static key **plus a PSK** (a second factor) — but the static-key half is the same static–static `ss` DH as `K`'s and is **equally vulnerable to key-compromise impersonation**; the PSK is what an attacker additionally needs, not a repair of `ss`. (The specification tabulates no psk-modified pattern, so this is read across from `K`, whose msg1 this is with `psk` prepended.) | recipient's static key **plus the PSK** — an attacker needs the relevant private key *and* the PSK | sender-side only | **no** (one-way) | position 0 |
+| **IKpsk1** | two messages (`-> e, es, s, ss, psk` / `<- e, ee, se`) | **mutual** — responder authenticated to the initiator via `es`/`ss` (the DHs that bind the responder's static key); initiator authenticated to the responder via `ss` then `se` — **plus a PSK** | recipient's static key plus the PSK; the initiator's identity is hidden from a passive eavesdropper | **full** once both ephemerals are mixed (`ee`) | **yes for the handshake** (the responder contributes a fresh ephemeral) — but the **msg1 (0-RTT) payload is replayable** on its own, since nothing of the responder's contributes to it, and it is authenticated only by the static–static `ss` DH, so it is **KCI-forgeable**; both harden once msg2 lands. The PSK does **not** stop the replay: an attacker replays recorded ciphertext and needs no PSK knowledge | position 1 |
+| **IK** | two messages (`-> e, es, s, ss` / `<- e, ee, se`) | **mutual** — responder authenticated to the initiator via `es`/`ss` (the DHs that bind the responder's static key); initiator authenticated to the responder via `ss` then `se` | encrypted to the recipient's known static key; the initiator's identity is hidden from a passive eavesdropper | **full** once both ephemerals are mixed (`ee`) | **yes for the handshake** (the responder contributes a fresh ephemeral) — but the **msg1 (0-RTT) payload is replayable** on its own, since nothing of the responder's contributes to it, and it is authenticated only by the static–static `ss` DH, so it is **KCI-forgeable**; both harden once msg2 lands | — |
+| **NK** | two messages (`-> e, es` / `<- e, ee`) | **none for the initiator — it is anonymous** (no static key); the **responder is authenticated to the initiator** via the `es` DH that binds the responder's known static key | encrypted to the responder's known static key | **full** once both ephemerals are mixed (`ee`) | **yes for the handshake** (the responder contributes a fresh ephemeral) — but the **msg1 payload is replayable** on its own, for the same reason as `IK`'s; unlike `IK` it carries no sender authentication at all, so there is no KCI clause | — |
 | **IX** | two messages (`-> e, s` / `<- e, ee, se, s, es`) | **mutual** — no pre-known statics: the initiator is authenticated to the responder via `se`, the responder to the initiator via `es`; both statics are sent in-handshake | payload encrypted after `ee`; **the initiator's static identity is sent in the clear in msg1 (before any DH) and is exposed to a passive eavesdropper**; the responder's static is sent in msg2 after `ee` and is encrypted | **full** once both ephemerals are mixed (`ee`) | **yes** (responder contributes a fresh ephemeral) | — |
-| **XK** | three messages (`-> e, es` / `<- e, ee` / `-> s, se`) | **mutual** — the responder is authenticated to the initiator via the `es` DH that binds the responder's known static key; the initiator is authenticated to the responder via `se` | encrypted to the responder's known static key; **the initiator's static identity is sent encrypted in msg3 (after `ee`) and is hidden from a passive eavesdropper** | **full** once both ephemerals are mixed (`ee`) | **yes** (responder contributes a fresh ephemeral) | — |
-| **NN** | two messages (`-> e` / `<- e, ee`) | **none — both parties are anonymous** (no static keys); **no protection against an active man-in-the-middle** | only against a **passive** eavesdropper — there are no static keys, so a passive observer cannot read the traffic but an active MITM can impersonate either side | **full** once both ephemerals are mixed (`ee`) | **yes** (responder contributes a fresh ephemeral) | — |
+| **XK** | three messages (`-> e, es` / `<- e, ee` / `-> s, se`) | **mutual** — the responder is authenticated to the initiator via the `es` DH that binds the responder's known static key; the initiator is authenticated to the responder via `se` | encrypted to the responder's known static key; **the initiator's static identity is sent encrypted in msg3 (after `ee`) and is hidden from a passive eavesdropper** | **full** once both ephemerals are mixed (`ee`) | **yes for the handshake** (the responder contributes a fresh ephemeral) — but the **msg1 payload is replayable** on its own, exactly as `NK`'s is, and likewise carries no sender authentication | — |
+| **NN** | two messages (`-> e` / `<- e, ee`) | **none — both parties are anonymous** (no static keys); **no protection against an active man-in-the-middle** | only against a **passive** eavesdropper, and only from msg2 onward — there are no static keys, so a passive observer cannot read the traffic once `ee` keys the cipher, but an active MITM can impersonate either side. A payload declared on msg1 (`-> e`) closes **before any DH** and therefore travels **in cleartext**, readable by anyone | **full** once both ephemerals are mixed (`ee`) | **yes** (responder contributes a fresh ephemeral) | — |
 | **XX** | three messages (`-> e` / `<- e, ee, s, es` / `-> s, se`) | **mutual** — no pre-known statics: the initiator is authenticated to the responder via `se`, the responder to the initiator via `es`; both statics are sent in-handshake | payload encrypted after `ee`; **both statics are sent encrypted (the responder's in msg2, the initiator's in msg3, both after `ee`), so both identities are hidden from a passive eavesdropper** | **full** once both ephemerals are mixed (`ee`) | **yes** (responder contributes a fresh ephemeral) | — |
 | **X** | one message (`-> e, es, s, ss`) | sender's static key, **vulnerable to key-compromise impersonation** (auth rests on the static–static `ss` DH); the sender's static is sent **encrypted in-band** (after `es`), not pre-shared | encrypted to the recipient's known static key; **the sender's identity is hidden from a passive eavesdropper** (its static rides encrypted after `es`) | sender-side only (fresh ephemeral per message); **lost if the recipient's static key is compromised** | **no** (one-way) | — |
+| **NX** | two messages (`-> e` / `<- e, ee, s, es`) | **responder only** — the initiator is anonymous (it has no static key); the responder is authenticated to the initiator via `es` | payload encrypted after `ee`; **the responder's static is sent encrypted in msg2, so it is hidden from a passive eavesdropper — but any anonymous initiator can ask for it**, since nothing gates the handshake | **full** once both ephemerals are mixed (`ee`) | **yes** (responder contributes a fresh ephemeral) | — |
+| **XN** | three messages (`-> e` / `<- e, ee` / `-> s, se`) | **initiator only** — the responder is anonymous (it has no static key); the initiator is authenticated to the responder via `se` | payload encrypted after `ee`; the initiator's static is sent encrypted in msg3, so it is hidden from a passive eavesdropper — but it is **sent to a responder that was never authenticated**, and an active MITM can impersonate that responder outright | **full** once both ephemerals are mixed (`ee`) | **yes** (responder contributes a fresh ephemeral) | — |
+| **KN** | two messages (`-> e` / `<- e, ee, se`), initiator's static pre-shared (`-> s`) | **initiator only** — authenticated via `se`; **the responder is never authenticated** | payload encrypted after `ee`, but the responder's identity is unverified, so the responder-to-initiator direction has only **weak** forward secrecy until the responder receives a transport message; nothing identifying is transmitted, though an **active** attacker impersonating the initiator who later obtains a candidate for the initiator's *private* key can confirm it | **full** once both ephemerals are mixed (`ee`) | **yes** (responder contributes a fresh ephemeral) | — |
+| **KK** | two messages (`-> e, es, ss` / `<- e, ee, se`), **both** statics pre-shared (`-> s`, `<- s`) | **mutual** — the responder via `es`/`ss`, the initiator via `ss` then `se`. The **msg1 (0-RTT) payload's** authentication rests on the static–static `ss` DH alone and is therefore **KCI-forgeable**; it hardens once msg2 lands | encrypted to the recipient's known static key; **nothing identifying is transmitted**, but a **passive** attacker can test candidate (responder private key, initiator public key) pairs against a recording | **full** once both ephemerals are mixed (`ee`) | **yes for the handshake** (the responder contributes a fresh ephemeral) — but the **msg1 (0-RTT) payload is replayable** on its own, exactly as `IK`'s is | — |
+| **KX** | two messages (`-> e` / `<- e, ee, se, s, es`), initiator's static pre-shared (`-> s`) | **mutual** — the initiator via `se`, the responder via `es` | payload encrypted after `ee`; the responder's static is sent encrypted in msg2 but with only **weak** forward secrecy — the initiator's alleged ephemeral may have been forged by an active attacker, who could later compromise the **initiator's** static key, decrypt msg2, and learn which responder answered. The initiator's own pre-shared key carries `KN`'s active-attacker caveat | **full** once both ephemerals are mixed (`ee`) | **yes** (responder contributes a fresh ephemeral) | — |
+| **IN** | two messages (`-> e, s` / `<- e, ee, se`) | **initiator only** — authenticated via `se`; **the responder is never authenticated** | payload encrypted after `ee`; **the initiator's static identity is sent in the clear in msg1 (before any DH) and is exposed to a passive eavesdropper** — the weakest identity exposure of any pattern this crate ships. The responder's identity is unverified, so its own sends have only **weak** forward secrecy until it receives a transport message | **full** once both ephemerals are mixed (`ee`) | **yes** (responder contributes a fresh ephemeral) | — |
 
 Notes:
 
@@ -202,6 +213,38 @@ Notes:
   advance.
 - A PSK (`Kpsk0`, `IKpsk1`) is an **additional** authentication and confidentiality
   factor layered on top of the asymmetric authentication — not a replacement for it.
+
+- `NX` and `XN` are the **half-authenticated** `XX` variants: one side has no static
+  key at all. In `NX` the **initiator** is unauthenticated, so any anonymous caller can
+  make the responder identify itself; in `XN` the **responder** is unauthenticated, so
+  the initiator hands over its identity without knowing who received it. Both are
+  therefore vulnerable to an active man-in-the-middle **impersonating the anonymous
+  side** — the authenticated half is genuinely authenticated, the other half is not
+  there to be.
+
+- `KN`, `KK` and `KX` **pre-share the initiator's static** (`-> s`), which means it is
+  never transmitted — **not** that it is private. The specification distinguishes two
+  cases here and so should we. For `KN` and `KX` it is an **active** attacker: one who
+  impersonates the initiator without holding its private key and later obtains a
+  candidate for that **private** key can confirm the guess. For `KK` it is a
+  **passive** attacker: one who records a handshake can test candidate **(responder
+  private key, initiator public key) pairs**. Different attacker, different secret.
+
+- `KK` is the **zero-RTT** pattern — the only interactive one here whose first message
+  already carries an encrypted payload — and that payload is both **KCI-vulnerable**
+  (its authentication is the static–static `ss` DH, forgeable by anyone holding the
+  responder's private key) and **replayable** (nothing of the responder's contributes
+  to msg1). This is the same warning the one-way `K` row carries, for the same reason,
+  and it applies to `IK` and `IKpsk1`'s msg1 payloads too. Both properties harden once
+  msg2 lands.
+
+- **The `K`/`I` responder caveat.** For every pattern whose name begins with `K` or
+  `I` — `KN`, `KK`, `KX`, `IN`, and the already-shipped `IK`, `IKpsk1` and `IX` — the
+  responder is only guaranteed **weak** forward secrecy for the transport messages it
+  sends until it receives a transport message from the initiator. The initiator's
+  static is either pre-shared or arrives early, so the responder starts sending before
+  it has evidence binding the initiator's ephemeral to a key it has verified. It does
+  **not** apply to the one-way `K`/`Kpsk0`, whose responder never sends.
 
 ## Side-channel posture (per backend)
 
@@ -271,24 +314,59 @@ in-tree tests:
 | Wycheproof ECDH (secp256r1) | **355** vectors | Project Wycheproof, `ecpoint` encoding |
 | RFC 6979 deterministic ECDSA | Appendix A.2.5 (P-256/SHA-256) KAT | RFC 6979; raw `(r, s)` pinned for `"sample"` and `"test"` |
 | NIST ECC CDH | P-256 `Count=0` | NIST CAVP ECDH vector |
-| Noise handshake KATs (**P-256**) | patterns `N` / `K` / `Kpsk0` / `IKpsk1` / `IK` / `NK` / `IX` / `XK` / `NN` / `XX` / `X` | frozen, replayed byte-for-byte (handshake ciphertexts + handshake hash + transport) |
-| Noise interop, **X25519** | patterns `N` / `IK` / `XX` | byte-for-byte agreement with `snow` (no frozen KAT vectors) |
-| Noise round-trip, **X448** | pattern `XX` | single self round-trip (no frozen KAT vectors, no snow interop) |
+| Noise handshake KATs (**P-256 / BLAKE2b**) | patterns `N` / `K` / `Kpsk0` / `IKpsk1` / `IK` / `NK` / `IX` / `XK` / `NN` / `XX` / `X` | frozen, replayed byte-for-byte (handshake ciphertexts + handshake hash + transport) |
+| Noise handshake KATs (**P-256 / SHA-256**) | patterns `N` / `IKpsk1` / `XX` | frozen, replayed byte-for-byte |
+| Noise handshake KATs, **third-party** (`cacophony`) | 17 patterns × {`25519`, `448`} × ChaChaPoly × {BLAKE2b, BLAKE2s, SHA256, SHA512} — **136** vectors | frozen, replayed byte-for-byte (handshake ciphertexts + recovered payloads + revealed statics + handshake hash + every transport message); **every pattern additionally replayed in the responder role** on all eight suites — 136 initiator + 136 responder = **272** tests. The thirteen interactive patterns pin responder-written bytes; the four one-way patterns have no responder write, so theirs pin the recipient read path and its transport receives. See `tests/vectors/cacophony/PROVENANCE.md` |
+| FIPS 180-4 SHA-256 digests | `""`, `"abc"`, the 448-bit message | NIST, pinned as hex |
+| RFC 4231 HMAC-SHA-256 | cases 1, 2, 3, 6 | RFC 4231 §4, pinned as hex |
+| FIPS 180-4 SHA-512 digests | `""`, `"abc"`, the 896-bit message | NIST, pinned as hex |
+| RFC 4231 HMAC-SHA-512 | cases 1, 2, 3, 6 | RFC 4231 §4, pinned as hex |
+| RFC 7693 BLAKE2s digest | `"abc"` | RFC 7693 Appendix B, pinned as hex |
+| HMAC-BLAKE2s | RFC 4231 inputs 1, 2, 3, 6 | **not** standards-body vectors — none exist for HMAC-BLAKE2; cross-generated and agreed by two implementations independent of `cryptoxide` |
+| Noise interop, **X25519** | patterns `N` / `IK` / `XX` | byte-for-byte agreement with `snow`, live (unfrozen) |
+| Noise round-trip, **X448** | pattern `XX` | hiss↔hiss self round-trip; `snow` has no `448` resolver, so no live interop is possible |
 | Negative / boundary sweeps | per-pattern, deterministic | every-byte tamper, every-prefix truncation, over-length, ciphertext bit-flip, replay, out-of-order, wrong-PSK → all rejected |
 
 The Wycheproof corpora are third-party authoritative. The negative sweeps are
 generated deterministically (each driver runs a genuine handshake that must complete
 first, so the tests are non-vacuous).
 
-> **Provenance of the Noise KATs (read this).** P-256 is **not** a curve in the Noise
-> specification, and no third-party P-256 Noise test vectors exist. The frozen `hiss`
-> Noise KATs are therefore **"agreement with snow"** — they assert byte-for-byte
-> equality with the [snow](https://crates.io/crates/snow) reference implementation, not
-> with a standards body. A latent bug shared with snow would not be caught by these
-> vectors. The frozen KAT corpus is **P-256-only**: X25519 is covered by live snow
-> interop (`N` / `IK` / `XX`) and X448 by a single `XX` self round-trip, but neither
-> curve has a frozen KAT file yet — adding standards-body X25519/X448 vectors is future
-> work.
+> **Provenance of the Noise KATs (read this).** There are two corpora here and they
+> are not equally strong.
+>
+> The **P-256** corpora — BLAKE2b and SHA-256 — are **"agreement with snow"**: they
+> assert byte-for-byte equality with the [snow](https://crates.io/crates/snow)
+> reference implementation, not with a standards body. That is unavoidable rather
+> than lazy: P-256 is **not** a curve in the Noise specification, so no third-party
+> P-256 Noise vectors exist anywhere. A latent bug shared with snow would not be
+> caught by them.
+>
+> The **`cacophony`** corpus is third-party: 88 frozen vectors over `25519` and
+> `448`, from a community corpus neither `hiss` nor `snow` produced, acquired from
+> `snow`'s package and verified byte-identical to the copy in the Cacophony Haskell
+> implementation's own repository. The assertions are stricter than `snow`'s own
+> harness, which does not even deserialize the `handshake_hash` field. For **X448**
+> this is the only cross-implementation check that exists at all: `snow`'s default
+> resolver returns `None` for `448`, so `snow` skips every `448` vector it ships.
+>
+> Scope that claim honestly: these are **third-party relative to `snow`**, not
+> standards-body vectors. `hiss` did not audit the Cacophony implementation and its
+> generation was not reviewed here. What they buy is agreement with a *second,
+> independent* implementation. `tests/vectors/cacophony/PROVENANCE.md` records the
+> pins, the filter and the licence chain.
+>
+> Residual: these replays call only the plain readers; the `read_message_N_with`
+> per-peer-PSK and verification-closure variants are never exercised against
+> third-party vectors.
+>
+> The primitives underneath are separately anchored: the SHA-256, SHA-512 and
+> BLAKE2s rows above are NIST / RFC 4231 / RFC 7693 vectors — except HMAC-BLAKE2s,
+> for which **no standards body publishes vectors at all**. RFC 7693 defines no
+> HMAC and Wycheproof ships no HMAC-BLAKE2 file, so those four values are
+> cross-generated and agreed by two implementations independent of `cryptoxide`.
+> They are not presented as standards-body vectors. The stronger check on that path
+> is the `cacophony` corpus, which runs `Blake2s::hmac` on every `mix_key` of 22
+> handshakes against an implementation `hiss` did not write.
 
 ## Signature malleability and encoding
 
@@ -358,8 +436,10 @@ best-effort compiler fence:
   spec and unnecessary for the targeted use cases — a deliberate scoping decision, not an
   oversight. `snow` omits it likewise.
 - **Noise KAT provenance.** The frozen P-256 Noise vectors are agreement-with-snow,
-  not standards-body vectors; X25519 has live snow interop only and X448 a single
-  self round-trip — no frozen X25519/X448 KATs yet (see above).
+  not standards-body vectors. X25519 and X448 now carry frozen **third-party**
+  (`cacophony`) vectors, but "third-party" there means *independent of snow*, not
+  *from a standards body* — nobody in this chain audited the Cacophony
+  implementation.
 - **Upstream constant-time dependency.** Constant-time P-256 rests on `eccoxide`'s
   released crates.io `0.4`; the property is only as strong as that upstream backend,
   which `hiss` does not independently verify.

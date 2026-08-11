@@ -103,6 +103,10 @@
 //! `Err` aborts before any [`Transport`](noise::Transport) exists. Leave
 //! it out and you have an encrypted channel to a stranger.
 //!
+//! The *prologue* is any context both sides already agree on — a protocol
+//! version, a channel name — mixed into the handshake so a mismatch fails
+//! it; pass `&[]` if you have none.
+//!
 //! ```rust
 //! # use hiss::noise::{Blake2b, ChaChaPoly, X25519};
 //! # hiss::noise! {
@@ -122,6 +126,8 @@
 //! # let bob_pub = bob_keys.public(&bob_static)?;
 //! use hiss::noise::HandshakeError;
 //!
+//! const PROLOGUE: &[u8] = b"prologue";
+//!
 //! // Your trust policy: a pin, an enrolment record, an allow-list. Here, the key we expect.
 //! let accept = |ok: bool| match ok {
 //!     true => Ok(()),
@@ -130,8 +136,8 @@
 //!     }),
 //! };
 //!
-//! let (msg1, alice) = XX::initiator(alice_keys, &[]).write_message_1()?;
-//! let bob = XX::responder(bob_keys, &[]).read_message_1(&msg1)?;
+//! let (msg1, alice) = XX::initiator(alice_keys, PROLOGUE).write_message_1()?;
+//! let bob = XX::responder(bob_keys, PROLOGUE).read_message_1(&msg1)?;
 //! let (msg2, bob) = bob.write_message_2(bob_static)?;
 //! let alice = alice.read_message_2_with(&msg2, |peer| accept(peer == &bob_pub))?;
 //! let (msg3, mut alice) = alice.write_message_3(alice_static)?;
@@ -144,7 +150,10 @@
 //! ### 4. Talk
 //!
 //! Both ends now hold a `Transport`. `OVERHEAD` is what the authentication
-//! tag costs you per message.
+//! tag costs you per message: give `send` a buffer of
+//! `plaintext.len() + OVERHEAD`, and `receive` one that fits the plaintext.
+//! `b"ping"` is 4 bytes, so 4 is the size below. One record carries at most
+//! 65519 bytes of plaintext — chunk anything larger yourself.
 //!
 //! ```rust
 //! # use hiss::noise::{Blake2b, ChaChaPoly, X25519};
@@ -167,16 +176,17 @@
 //! # let accept = |ok: bool| if ok { Ok(()) } else {
 //! #     Err(HandshakeError::PeerRejected { reason: "unknown peer".into() })
 //! # };
-//! # let (msg1, alice) = XX::initiator(alice_keys, &[]).write_message_1()?;
-//! # let bob = XX::responder(bob_keys, &[]).read_message_1(&msg1)?;
+//! # const PROLOGUE: &[u8] = b"prologue";
+//! # let (msg1, alice) = XX::initiator(alice_keys, PROLOGUE).write_message_1()?;
+//! # let bob = XX::responder(bob_keys, PROLOGUE).read_message_1(&msg1)?;
 //! # let (msg2, bob) = bob.write_message_2(bob_static)?;
 //! # let alice = alice.read_message_2_with(&msg2, |peer| accept(peer == &bob_pub))?;
 //! # let (msg3, mut alice) = alice.write_message_3(alice_static)?;
 //! # let mut bob = bob.read_message_3_with(&msg3, |peer| accept(peer == &alice_pub))?;
 //! use hiss::noise::Transport;
 //!
-//! let mut wire = [0u8; 32 + Transport::<XX>::OVERHEAD];
-//! let mut got = [0u8; 32];
+//! let mut wire = [0u8; 4 + Transport::<XX>::OVERHEAD];
+//! let mut got = [0u8; 4];
 //!
 //! let n = alice.send(b"ping", &mut wire)?;
 //! let m = bob.receive(&wire[..n], &mut got)?;
@@ -191,28 +201,73 @@
 //!
 //! # Suite and breadth
 //!
-//! The default suite is **P-256 / ChaCha20-Poly1305 / BLAKE2b** —
-//! [`P256`](noise::P256), [`ChaChaPoly`](noise::ChaChaPoly), and
-//! [`Blake2b`](noise::Blake2b). Eleven patterns are provided as markers in
-//! [`noise::pattern`] — nine of Noise's fifteen fundamental patterns plus
-//! two PSK variants; `NX`, `XN`, `KN`, `KK`, `KX` and `IN` are not
-//! implemented. Each is combined with a suite
+//! **There is no default suite.** [`Noise<P, Cu, Ci, H>`](noise::Noise)
+//! declares no default type parameters, and a [`noise!`](crate::noise!)
+//! declaration that omits `<Curve, Cipher, Hash>` is not a shorthand for
+//! one — it is *marker mode*, which generates the pattern marker alone,
+//! with no state machine and no wire-size constants. Every usable
+//! declaration names all three.
+//!
+//! [`ChaChaPoly`](noise::ChaChaPoly) is the only cipher implemented. For
+//! the curve, reach for [`X25519`](noise::X25519) — what the Quickstart
+//! uses — unless you need the Apple Secure Enclave, which speaks
+//! [`P256`](noise::P256) and nothing else, or want [`X448`](noise::X448)'s
+//! larger margin. All four of the Noise specification's official hashes
+//! ship: [`Blake2b`](noise::Blake2b) and [`Sha512`](noise::Sha512) at
+//! HASHLEN 64, [`Sha256`](noise::Sha256) and [`Blake2s`](noise::Blake2s)
+//! at HASHLEN 32. **Use `Blake2b`** — it is what the Quickstart, the
+//! examples and the crate's own sealed-message helper use, and the only
+//! hash carrying the full seventeen-pattern frozen P-256 matrix. Pick another
+//! when a peer requires it. Every one of the four is pinned as a primitive
+//! against the relevant standard, and as a Noise suite by frozen
+//! third-party (`cacophony`)
+//! known-answer vectors over `25519` and `448` across all seventeen patterns.
+//! If you use `X448`, prefer a 512-bit hash with it (`Blake2b` or
+//! `Sha512`), per the specification's §13 guidance.
+//!
+//! Seventeen patterns are provided as markers in
+//! [`noise::pattern`] — **all fifteen** of Noise's fundamental patterns plus
+//! two PSK variants. Each is combined with a suite
 //! through [`Noise<P, Cu, Ci, H>`](noise::Noise):
 //! [`N`](noise::pattern::N), [`K`](noise::pattern::K),
 //! [`Kpsk0`](noise::pattern::Kpsk0), [`IKpsk1`](noise::pattern::IKpsk1),
 //! [`IK`](noise::pattern::IK), [`NK`](noise::pattern::NK),
 //! [`IX`](noise::pattern::IX), [`XK`](noise::pattern::XK),
-//! [`NN`](noise::pattern::NN), [`XX`](noise::pattern::XX), and
-//! [`X`](noise::pattern::X). Three
-//! Diffie-Hellman curves are supported —
-//! [`P256`](noise::P256), [`X25519`](noise::X25519) (the Noise `25519`
-//! curve), and [`X448`](noise::X448) (the Noise `448` curve) — with
-//! Ed25519 reserved for identity and signing.
+//! [`NN`](noise::pattern::NN), [`XX`](noise::pattern::XX),
+//! [`X`](noise::pattern::X), [`NX`](noise::pattern::NX),
+//! [`XN`](noise::pattern::XN), [`KN`](noise::pattern::KN),
+//! [`KK`](noise::pattern::KK), [`KX`](noise::pattern::KX), and
+//! [`IN`](noise::pattern::IN). One caveat is worth carrying up here:
+//! [`IN`](noise::pattern::IN) transmits the **initiator's static key in the
+//! clear**, in msg1 before any DH — the only pattern that ships here where a
+//! passive observer learns the initiator's identity outright. In Noise's own
+//! naming the two curves above
+//! are `25519` and `448`; Ed25519 is reserved for identity and signing
+//! rather than the handshake — it does not implement
+//! [`DhCurve`](curve::DhCurve) at all, so naming it as a suite's curve is
+//! a compile error rather than a protocol name no registry knows.
 //!
 //! # Providers
 //!
-//! The handshake performs no cryptography itself; it delegates to a
-//! *provider*. The provider traits form a small hierarchy:
+//! A *provider* is where your private keys live and what performs the key
+//! agreement — the handshake does no cryptography of its own. You
+//! construct one and hand it to `initiator` / `responder`; it is the
+//! `alice_keys` argument in the Quickstart. Two ship with the crate:
+//!
+//! * [`EphemeralOnly<R>`](provider::EphemeralOnly) — pure software over a
+//!   caller-supplied CSPRNG `R`, via `eccoxide`/`cryptoxide`. Works
+//!   everywhere, including WASM, and is what the Quickstart uses. The
+//!   name means *no built-in persistence*, not "no long-term keys": it
+//!   does generate the static key a mutual pattern authenticates you by.
+//!   Storing that key between runs, and distributing the public halves
+//!   your peers pin, are yours to do.
+//! * `AppleSecureEnclave` (Apple platforms) — P-256 keys generated inside
+//!   the Secure Enclave and never extractable; software Ed25519 over a
+//!   hardware-sealed seed.
+//!
+//! A backend `hiss` has never heard of — an HSM, a cloud KMS, a key store
+//! you already have — plugs in by implementing the provider traits,
+//! without touching the Noise core:
 //!
 //! * [`CryptoKeyProvider<C: Curve>`](provider::CryptoKeyProvider) is the
 //!   key-generation base, refined for awaitable backends by
@@ -225,26 +280,32 @@
 //!   identity signing, which lives *around* the channel rather than
 //!   inside the Noise handshake.
 //!
-//! Two backends implement these traits:
-//!
-//! * [`EphemeralOnly<R>`](provider::EphemeralOnly) — pure software, over
-//!   a caller-supplied CSPRNG `R`, via `eccoxide`/`cryptoxide`.
-//! * `AppleSecureEnclave` (Apple platforms) — P-256 keys held in the
-//!   Secure Enclave; software Ed25519 over a hardware-sealed seed.
+//! Noise key-agrees **only via raw Diffie–Hellman**, so a backend can
+//! carry the channel only if it will hand back the shared secret. One
+//! that can sign but never expose a DH result fits the identity layer
+//! instead.
 //!
 //! # Security posture
 //!
-//! * Secret material is zeroised on drop (see [`zeroize`]) and is never
-//!   required to be `Clone`.
-//! * ECDSA signing is deterministic (RFC 6979), low-S, and
-//!   non-malleable; there is no signing RNG.
-//! * P-256 scalar multiplication is constant-time (the fixed-base comb
-//!   relies on `eccoxide`'s `table` feature, enabled by default).
-//! * P-256 ECDH rejects a degenerate (identity) shared secret rather
-//!   than returning it; on the prime-order curve the identity is the
-//!   only such point. The Noise `25519` and `448` curves perform no
-//!   equivalent check — per the spec (and RFC 7748) a low-order peer key
-//!   simply yields an all-zero secret rather than an error.
+//! These hold whatever provider you use:
+//!
+//! * Noise's 65535-byte message-length limit is enforced at the
+//!   cipher-state chokepoint.
+//! * Peer public keys are parsed and validated by `hiss` before a
+//!   provider sees them; operations on attacker-supplied points return
+//!   `Result` rather than panicking.
+//! * Secret material is zeroised on drop (see [`zeroize`]) — pre-shared
+//!   keys, shared secrets, cipher and symmetric state, and the datagram
+//!   receive ratchet — and no provider is required to make its private
+//!   key `Clone`.
+//! * The Noise `25519` and `448` curves perform no low-order or
+//!   contributory-key check — per the spec (and RFC 7748) a low-order
+//!   peer key yields an all-zero secret rather than an error.
+//!
+//! Everything else — constant-time scalar multiplication, deterministic
+//! signing, what happens to a private key — belongs to the backend that
+//! computes it, and does not transfer between backends. See
+//! [`provider`](provider#security-posture) for the per-provider posture.
 //!
 //! This crate has **not** been independently audited and is pre-1.0.
 //!
@@ -259,15 +320,12 @@
 //!   is byte-for-byte identical, so this only changes which dependency
 //!   carries the primitive.
 //!
-//! The Noise `fallback` modifier is an intentional non-goal, not a
-//! missing feature: it is optional in the Noise spec and unnecessary for
-//! the targeted use cases.
-//!
 //! # Modules
 //!
-//! * **[`curve`]** — Elliptic-curve math and key/handle types: ECDSA
-//!   signing and ECDH on NIST P-256 (secp256r1) and Ed25519, plus the
-//!   [`Curve`](curve::Curve) trait tying them to the type-level protocol.
+//! * **[`curve`]** — Elliptic-curve math and key/handle types: ECDH on
+//!   NIST P-256 (secp256r1), X25519 and X448, signing on P-256 (ECDSA)
+//!   and Ed25519, plus the [`Curve`](curve::Curve) trait tying them to the
+//!   type-level protocol.
 //!
 //! * **[`provider`]** — the backends that *perform* a curve's
 //!   operations: [`EphemeralOnly`](provider::EphemeralOnly) (pure

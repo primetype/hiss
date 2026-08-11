@@ -41,6 +41,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bob_static = bob_keys.generate::<X25519>()?;
     let bob_pub = bob_keys.public(&bob_static)?;
 
+    // Context both sides already agree on — a protocol version, a channel name
+    // — mixed into the handshake, so a mismatch fails it. `&[]` if you have none.
+    const PROLOGUE: &[u8] = b"prologue";
+
     // Your trust policy: a pin, an enrolment record, an allow-list. Here, the
     // key we expect. `Ok(())` accepts the peer; `Err` aborts the handshake.
     let accept = |ok: bool| match ok {
@@ -52,16 +56,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Three messages. hiss hands you bytes; moving them is your job. The `_with`
     // reads are where each side decides the key it just learned is one it trusts.
-    let (msg1, alice) = XX::initiator(alice_keys, &[]).write_message_1()?;
-    let bob = XX::responder(bob_keys, &[]).read_message_1(&msg1)?;
+    let (msg1, alice) = XX::initiator(alice_keys, PROLOGUE).write_message_1()?;
+    let bob = XX::responder(bob_keys, PROLOGUE).read_message_1(&msg1)?;
     let (msg2, bob) = bob.write_message_2(bob_static)?;
     let alice = alice.read_message_2_with(&msg2, |peer| accept(peer == &bob_pub))?;
     let (msg3, mut alice) = alice.write_message_3(alice_static)?;
     let mut bob = bob.read_message_3_with(&msg3, |peer| accept(peer == &alice_pub))?;
 
-    // Encrypted, both directions.
-    let mut wire = [0u8; 32 + Transport::<XX>::OVERHEAD];
-    let mut got = [0u8; 32];
+    // Encrypted, both directions. `send` needs `plaintext.len() + OVERHEAD`;
+    // `receive` needs room for the plaintext. `b"ping"` is 4 bytes.
+    let mut wire = [0u8; 4 + Transport::<XX>::OVERHEAD];
+    let mut got = [0u8; 4];
 
     let n = alice.send(b"ping", &mut wire)?;
     let m = bob.receive(&wire[..n], &mut got)?;

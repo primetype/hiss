@@ -67,8 +67,13 @@ trust. `read_message_N_with` is where that decision goes: the closure sees the p
 as it decrypts, and an `Err` aborts before any `Transport` exists. Leave it out and you
 have an encrypted channel to a stranger.
 
+The *prologue* is any context both sides already agree on — a protocol version, a channel
+name — mixed into the handshake so a mismatch fails it; pass `&[]` if you have none.
+
 ```rust
 use hiss::noise::HandshakeError;
+
+const PROLOGUE: &[u8] = b"prologue";
 
 // Your trust policy: a pin, an enrolment record, an allow-list. Here, the key we expect.
 let accept = |ok: bool| match ok {
@@ -78,8 +83,8 @@ let accept = |ok: bool| match ok {
     }),
 };
 
-let (msg1, alice) = XX::initiator(alice_keys, &[]).write_message_1()?;
-let bob = XX::responder(bob_keys, &[]).read_message_1(&msg1)?;
+let (msg1, alice) = XX::initiator(alice_keys, PROLOGUE).write_message_1()?;
+let bob = XX::responder(bob_keys, PROLOGUE).read_message_1(&msg1)?;
 let (msg2, bob) = bob.write_message_2(bob_static)?;
 let alice = alice.read_message_2_with(&msg2, |peer| accept(peer == &bob_pub))?;
 let (msg3, mut alice) = alice.write_message_3(alice_static)?;
@@ -87,13 +92,15 @@ let mut bob = bob.read_message_3_with(&msg3, |peer| accept(peer == &alice_pub))?
 ```
 
 **4. Talk.** Both ends now hold a `Transport`. `OVERHEAD` is what the authentication tag
-costs you per message.
+costs you per message: give `send` a buffer of `plaintext.len() + OVERHEAD`, and `receive`
+one that fits the plaintext. `b"ping"` is 4 bytes, so 4 is the size below. One record
+carries at most 65519 bytes of plaintext — chunk anything larger yourself.
 
 ```rust
 use hiss::noise::Transport;
 
-let mut wire = [0u8; 32 + Transport::<XX>::OVERHEAD];
-let mut got = [0u8; 32];
+let mut wire = [0u8; 4 + Transport::<XX>::OVERHEAD];
+let mut got = [0u8; 4];
 
 let n = alice.send(b"ping", &mut wire)?;
 let m = bob.receive(&wire[..n], &mut got)?;
@@ -130,33 +137,43 @@ prefix, no scratch buffer.
 macOS and iOS, `hiss` can generate the static key inside the Apple Secure Enclave and
 leave it there; your process only ever holds a handle. See [Providers](#providers).
 
-**Choose snow** if you need more of Noise than this covers — it has all fifteen
-fundamental patterns to hiss's nine, more ciphers and hashes, and swappable crypto
-backends including `ring` — or if you need something on crates.io today.
+**Choose snow** if you need more of Noise than this covers — the **23 deferred
+patterns** (spec §7.6), the `fallback` modifier, PSKs at arbitrary positions
+(`psk0`–`psk4`), more ciphers (AES-GCM, XChaChaPoly), and swappable crypto backends
+including `ring` — or if you need something on crates.io today. Two axes where it is no
+longer ahead: the **fundamental** patterns, all fifteen of which hiss now ships, and the
+hashes — snow's set is the specification's four, and so is hiss's.
 
 One choice that isn't a comparison: production cryptography here is `cryptoxide` and
 `eccoxide`, nothing else.
 
 ## Supported suite
 
-This release targets one cipher suite and a fixed set of patterns:
+This release targets a narrow suite matrix and a fixed set of patterns:
 
 | Axis    | Supported |
 |---------|-----------|
-| Patterns | `N`, `K`, `Kpsk0`, `IKpsk1`, `IK`, `NK`, `IX`, `XK`, `NN`, `XX`, `X` |
+| Patterns | `N`, `K`, `Kpsk0`, `IKpsk1`, `IK`, `NK`, `IX`, `XK`, `NN`, `XX`, `X`, `NX`, `XN`, `KN`, `KK`, `KX`, `IN` |
 | Curves  | NIST **P-256** (secp256r1), **X25519** (Curve25519, the Noise `25519` curve), and **X448** (the Noise `448` curve) |
 | Cipher  | **ChaCha20-Poly1305** |
-| Hash    | **BLAKE2b** |
+| Hash    | **BLAKE2b**-512, **SHA-512**, **SHA-256**, **BLAKE2s** — the Noise specification's four |
 
-That pattern row is nine of Noise's fifteen fundamental patterns plus two PSK variants;
-`NX`, `XN`, `KN`, `KK`, `KX` and `IN` are not implemented. Conformance is anchored against
-[`snow`](https://crates.io/crates/snow) via an interop test suite. Additional hashes and
-ciphers (AES-GCM) are planned.
+That pattern row is **all fifteen** of Noise's fundamental patterns plus two PSK
+variants. Conformance is anchored against
+[`snow`](https://crates.io/crates/snow) via an interop test suite. What is planned beyond
+this — and what is deliberately not — is in [TODO.md](TODO.md).
 
-The `fallback` modifier — and the compound protocols it enables (e.g. Noise Pipes /
-0-RTT-with-retry) — is an **intentional non-goal**, not a missing feature. It is optional
-in the Noise spec, which presents it only as an illustrative building block, and is
-unnecessary for the targeted use cases; `snow` omits it for the same reason.
+There is no default suite — every `noise!` declaration names its curve, cipher and hash,
+and one that omits them generates a bare pattern marker rather than a working protocol.
+The cipher row has one entry, so the choices are the curve and the hash. For the curve,
+**use `X25519`**, as the Quickstart does, unless you need the Apple Secure Enclave, which
+speaks `P256` and nothing else, or want `X448`'s larger margin. For the hash, **use
+`Blake2b`** — it is what the Quickstart uses and the only one with the full
+seventeen-pattern frozen P-256 matrix; the other three are there for peers that require
+them. All four are covered by primitive vectors from the relevant standard and by frozen
+**third-party** (`cacophony`) Noise vectors over `25519` and `448` across all seventeen
+patterns, plus live `snow` interop on `XX`. With `X448`, prefer a 512-bit hash
+(`Blake2b` or `Sha512`).
 
 ## Which pattern?
 
@@ -224,22 +241,29 @@ key sent twice, and a Diffie–Hellman in a pre-message — the rules of Noise �
 by the type system.
 
 Both messages are pinned by tests — the first by `tests/ui/duplicate_token.stderr`, the
-second by a `compile_fail` doctest on `WellFormed` — so they are regression-locked, not
-aspirational. Reproduced here with the fixture paths replaced by a plausible `src/main.rs`,
-one over-long line wrapped, and the trait-bound detail below the second error trimmed;
-the diagnostic text itself is verbatim.
+second by a `compile_fail` doctest on `WellFormed` — so they stay true as the crate
+changes. (Diagnostic text verbatim; paths and line wrapping tidied for print.)
 
 ## Providers
 
-A *provider* holds the private keys and performs the key agreement. The default is
-software; on macOS and iOS you can move the private key into the Secure Enclave, where it
-is generated and where it stays — the process never sees the key material, only a handle
-to it.
+A *provider* is where your private keys live and what performs the key agreement. `hiss`
+never picks one for you: you construct it and hand it to `initiator` / `responder`, which
+is the `alice_keys` argument in the Quickstart. Two ship with the crate:
 
-Swapping the provider is the whole change *in your code* — the enclave itself still needs
+| Provider | Platforms | Where the private key lives | Curves |
+|----------|-----------|-----------------------------|--------|
+| `EphemeralOnly` | everywhere, including WASM | in your process memory, zeroized on drop | P-256, X25519, X448 (DH); Ed25519 (signing only) |
+| `AppleSecureEnclave` | macOS, iOS | inside the enclave — your process only ever holds a handle | P-256 |
+
+`EphemeralOnly` is the default, and what the Quickstart uses. Its name means *no built-in
+persistence*, not "no long-term keys": it does generate the static key that `XX`
+authenticates you by. Storing that key between runs, and distributing the public halves
+your peers pin, are yours to do — `EphemeralOnly` will not do them behind your back.
+
+Moving to the enclave is a two-line change in your code; the enclave itself still needs
 setting up, which on macOS means a team-prefixed keychain entitlement carried by an
 embedded provisioning profile (the `hiss::provider::apple` module docs list what it
-takes). Everything after the first two lines is identical to the [Quickstart](#quickstart):
+takes). Everything after those two lines is identical to the [Quickstart](#quickstart):
 
 ```rust
 use hiss::noise::{Blake2b, ChaChaPoly, P256};
@@ -265,33 +289,28 @@ The suite names `P256` because the Secure Enclave implements that curve and no o
 This snippet is a compiled doctest on `AppleSecureEnclave`, marked `no_run` — running it
 needs enclave hardware and a provisioned entitlement.
 
-### Which backends can do this
+### Bring your own
 
-Standard Noise authenticates and key-agrees **only via raw ECDH** — there is no signature
-token in the handshake. A backend can therefore serve the Noise **DH (key-agreement)**
-role only if it can yield a value Noise can mix (the raw shared secret, or the result of
-Noise's exact HKDF over it). Backends that can only *sign* fit a separate
-identity/attestation layer **around** the channel, not inside it.
+A provider is just a pair of traits, so a backend `hiss` has never heard of — an HSM, a
+cloud KMS, a key store you already have — plugs in without touching the Noise core.
+Implement `CryptoKeyProvider` (your key handle, your error type, generate a key, extract a
+public key) and `DhProvider` (one method: `dh`), or their `_async` mirrors if the backend
+genuinely suspends. Signing lives on separate traits that the Noise handshake never calls.
 
-| Backend | DH (Noise channel) | Identity / signing | Status |
-|---------|:------------------:|:------------------:|--------|
-| Software (`eccoxide`)        | ✅ | ✅ | **implemented** |
-| Apple Secure Enclave (macOS/iOS) | ✅ | ✅ | **implemented** |
-| Android Keystore / StrongBox | ✅ | ✅ | planned |
-| Linux TPM2                   | ✅ (policy-permitting) | ✅ | planned |
-| AWS KMS                      | ✅ (`DeriveSharedSecret`) | ✅ | planned |
-| Windows CNG / Azure / GCP KMS | ❌ (no raw ECDH) | ✅ | identity role only |
-| PKCS#11 HSM, YubiKey, Ledger | ❌ (no raw ECDH export) | — | out of scope |
-
-A DH-capable backend is selected through the `DhProvider` / `DhProviderAsync` traits
-(both refining the `CryptoKeyProvider` keygen base), so additional backends can be added
-without touching the Noise core.
+One hard requirement, and it is Noise's rather than hiss's: the handshake key-agrees
+**only via raw Diffie–Hellman**, so a backend qualifies only if it will hand back the
+shared secret. A backend that can sign but never expose a DH result cannot carry the
+channel — it fits an identity layer *around* it instead.
 
 ## Platforms
 
 - **All platforms:** the software backend (`EphemeralOnly`).
-- **macOS / iOS:** the Apple Secure Enclave backend. Its blocking Security-framework calls
-  are offloaded to a Tokio blocking thread pool for the async provider path.
+- **macOS / iOS:** the Apple Secure Enclave backend.
+
+`hiss` depends on **no async runtime** on any platform. The `*Async` provider traits exist
+for backends that genuinely await I/O; where the underlying calls are blocking — as
+Apple's Security-framework calls are — those futures do the work on the thread that polls
+them. Keeping that off your executor is the application's call, not the library's.
 
 ## Cargo features
 
@@ -312,9 +331,9 @@ commit.
 | Check | What it establishes |
 |-------|---------------------|
 | **Interoperability with [`snow`](https://crates.io/crates/snow)** | 22 tests over P-256 and 5 over X25519 run one side of a handshake with `hiss` and the other with `snow`, then require both to derive the same handshake hash and to exchange transport messages in both directions. A one-byte disagreement between the two implementations fails the suite. |
-| **Frozen known-answer vectors** | 11 tests replay byte-for-byte expectations across all eleven patterns, with ephemerals pinned by a scripted RNG, checking every handshake ciphertext, the final handshake hash, and the transport ciphertexts. **These were generated from `snow`, not from a standards body** — P-256 is not in the Noise specification, so no third-party vectors exist for it. Treat them as a regression lock, not independent conformance. |
+| **Frozen known-answer vectors** | 17 tests replay byte-for-byte expectations across all seventeen patterns, with ephemerals pinned by a scripted RNG, checking every handshake ciphertext, the final handshake hash, and the transport ciphertexts. **These were generated from `snow`, not from a standards body** — P-256 is not in the Noise specification, so no third-party vectors exist for it. Treat them as a regression lock, not independent conformance. |
 | **Wycheproof** | 484 ECDSA and 355 ECDH `secp256r1` vectors from Google's Project Wycheproof, vendored verbatim at a pinned commit and run as library unit tests. Third-party and adversarial: malformed points, edge-case scalars, signature malleability. |
-| **Negative tests** | 26 tests assert the *failures*. Twenty-one are tamper sweeps — every byte of every handshake message of every pattern, plus every byte of a transport record; the rest reject a non-canonical ephemeral, a wrong PSK, a replay, and an out-of-order record, and pin all twenty on-wire message sizes. There is deliberately no truncation sweep: a wrong-length message is a compile error, not a runtime rejection, so that case is pinned by a `compile_fail` doctest instead. |
+| **Negative tests** | 26 tests assert the *failures*. Twenty-one are tamper sweeps — every byte of every handshake message of the eleven patterns swept, plus every byte of a transport record; the rest reject a non-canonical ephemeral, a wrong PSK, a replay, and an out-of-order record, and pin the twenty on-wire message sizes of those eleven. (The sweeps stop at eleven deliberately: every message token list in the other six already appears among them, so extending would re-test identical machinery.) There is deliberately no truncation sweep: a wrong-length message is a compile error, not a runtime rejection, so that case is pinned by a `compile_fail` doctest instead. |
 | **Compile-fail tests** | 12 `trybuild` cases pin the compiler diagnostics for malformed patterns, so "it will not build" stays true *and* keeps saying something useful. Separate `compile_fail` doctests cover the §7.3 pattern guard and the wrong-length message case. |
 | **Coverage floor** | CI fails the build below 80% lines / 75% regions. |
 
@@ -329,15 +348,43 @@ None of that is an audit, and none of it is a substitute for one.
 anything you cannot afford to lose.** That said, the crypto core is built to be
 responsible:
 
-- **Constant-time P-256 scalar multiplication** via `eccoxide`'s constant-time backend.
-- **Deterministic ECDSA** (RFC 6979) with low-S normalization; no signing RNG.
-- **Peer-key and DH-output validation** — operations on attacker-supplied points return
-  `Result` rather than panicking. On **P-256** a degenerate (point-at-infinity) shared
-  secret is rejected; the Noise **`25519`/`448`** curves perform no low-order or
-  contributory-key check — per RFC 7748 a low-order peer key simply yields an all-zero
-  shared secret rather than an error.
+A cryptographic property belongs to whatever actually computes it. Some of these are the
+crate's own and hold under any provider; the rest are a *backend's*, and do not transfer
+to the other one. They are listed apart for that reason — a guarantee about the software
+provider says nothing about the Secure Enclave.
+
+**Under any provider:**
+
 - **Noise's 65535-byte message-length limit** is enforced at the cipher-state chokepoint.
-- **Secret material is zeroized on drop** and is never required to be `Clone`.
+- **Peer public keys are parsed and validated by `hiss`** before a provider ever sees
+  them; operations on attacker-supplied points return `Result` rather than panicking.
+- **Secret material is zeroized on drop** — pre-shared keys, shared secrets, cipher state
+  and symmetric state, and the datagram receive ratchet all wipe their bytes — and no
+  provider is required to make its private key `Clone`.
+- **The Noise `25519` and `448` curves perform no low-order or contributory-key check.**
+  Per RFC 7748 a low-order peer key yields an all-zero shared secret rather than an error.
+
+**`EphemeralOnly` — software, every platform:**
+
+- **Constant-time P-256 scalar multiplication** via `eccoxide`'s constant-time backend.
+- **Deterministic ECDSA** (RFC 6979), low-S normalized, no signing RNG.
+- **A degenerate (point-at-infinity) P-256 ECDH result is rejected** rather than returned.
+- **Private keys are zeroized on drop** — they are raw scalars sitting in your memory.
+
+**`AppleSecureEnclave` — macOS, iOS:** its P-256 arithmetic is the platform's, so none of
+the four above are `hiss`'s to promise, and `hiss` does not verify them.
+
+- **ECDSA is randomized, not RFC 6979, and not low-S** — the framework derives its own
+  nonce, and `hiss` decodes the DER it returns without normalizing. Signing the same
+  message twice yields different signatures.
+- **The DH result is taken as given**, beyond checking it is 32 bytes; `hiss` adds no
+  degeneracy check of its own on this path. (A parsed public key cannot hold the identity
+  on either provider, so the software check above is defence in depth, not a fix.)
+- **A P-256 private key is never in your process to zeroize** — you hold a `SecKey`
+  handle. Its Ed25519 keys *are* software, over a hardware-sealed seed, and do zeroize.
+
+The Noise handshake never signs, so the ECDSA rows concern the identity layer around a
+channel rather than the channel itself.
 
 Please report security issues privately to the maintainers rather than opening a public
 issue.
