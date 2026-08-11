@@ -12,7 +12,7 @@
 
 use hiss::noise::{Blake2b, ChaChaPoly, X448};
 use hiss::provider::{EphemeralOnly, ProviderExt};
-use rand::{SeedableRng, rngs::StdRng};
+use rand::rngs::StdRng;
 
 // The bare pattern markers are curve-agnostic; spell the X448 suite out.
 //
@@ -25,7 +25,7 @@ hiss::noise! { pub XX<X448, ChaChaPoly, Blake2b> { -> e <- e, ee, s, es -> s, se
 
 #[test]
 fn xx_round_trip_hiss_to_hiss_over_x448() {
-    let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
+    let mut provider = EphemeralOnly::new(rand::make_rng::<StdRng>());
     let initiator_static = provider.generate::<X448>().unwrap();
     let initiator_pub = provider.public(&initiator_static).unwrap();
     let responder_static = provider.generate::<X448>().unwrap();
@@ -33,8 +33,8 @@ fn xx_round_trip_hiss_to_hiss_over_x448() {
 
     // XX has no pre-messages, so both constructors are infallible and take
     // nothing but a provider and the prologue.
-    let i_hs = XX::initiator(EphemeralOnly::new(StdRng::from_os_rng()), &[]);
-    let r_hs = XX::responder(EphemeralOnly::new(StdRng::from_os_rng()), &[]);
+    let i_hs = XX::initiator(EphemeralOnly::new(rand::make_rng::<StdRng>()), &[]);
+    let r_hs = XX::responder(EphemeralOnly::new(rand::make_rng::<StdRng>()), &[]);
 
     // msg1: -> e (bare ephemeral, cipher never keyed)
     let (msg1, i_hs) = i_hs.write_message_1().unwrap();

@@ -280,7 +280,7 @@ mod tests {
     use crate::provider::EphemeralOnly;
     use crate::provider::ProviderExt;
     use crate::psk::Psk;
-    use rand::{SeedableRng, rngs::StdRng};
+    use rand::rngs::StdRng;
 
     use std::num::NonZeroU64;
 
@@ -307,13 +307,13 @@ mod tests {
     /// The whole exchange is two calls a side, so the tests that only need
     /// a live channel say that rather than restating the token sequence.
     fn complete_ikpsk1(psk: &Psk) -> (Transport<IKpsk1>, Transport<IKpsk1>) {
-        let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
+        let mut provider = EphemeralOnly::new(rand::make_rng::<StdRng>());
         let initiator_static = provider.generate::<P256>().unwrap();
         let responder_static = provider.generate::<P256>().unwrap();
         let responder_pub = provider.public(&responder_static).unwrap();
 
         let (msg1, i_hs) = IKpsk1::initiator(
-            EphemeralOnly::new(StdRng::from_os_rng()),
+            EphemeralOnly::new(rand::make_rng::<StdRng>()),
             &[],
             responder_pub,
         )
@@ -321,7 +321,7 @@ mod tests {
         .unwrap();
 
         let r_hs = IKpsk1::responder(
-            EphemeralOnly::new(StdRng::from_os_rng()),
+            EphemeralOnly::new(rand::make_rng::<StdRng>()),
             &[],
             responder_static,
         )
@@ -372,7 +372,7 @@ mod tests {
     /// then open it with the corresponding private key.
     #[test]
     fn noise_n_seal_open() {
-        let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
+        let mut provider = EphemeralOnly::new(rand::make_rng::<StdRng>());
 
         // The "recipient" — in practice, the device's own Secure Enclave key.
         let recipient_static = provider.generate::<P256>().unwrap();
@@ -384,7 +384,7 @@ mod tests {
         // `-> e, es` is N's only message and also its last, so writing it
         // hands back the finished message and the transport together.
         let (msg, mut transport) = N::initiator(
-            EphemeralOnly::new(StdRng::from_os_rng()),
+            EphemeralOnly::new(rand::make_rng::<StdRng>()),
             &[],
             recipient_pub,
         )
@@ -400,7 +400,7 @@ mod tests {
 
         // ── Open (responder side) ─────────────────────────────────
         let mut transport = N::responder(
-            EphemeralOnly::new(StdRng::from_os_rng()),
+            EphemeralOnly::new(rand::make_rng::<StdRng>()),
             &[],
             recipient_static,
         )
@@ -421,13 +421,13 @@ mod tests {
 
     #[test]
     fn noise_n_tampered_ephemeral_rejected() {
-        let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
+        let mut provider = EphemeralOnly::new(rand::make_rng::<StdRng>());
 
         let recipient_static = provider.generate::<P256>().unwrap();
         let recipient_pub = provider.public(&recipient_static).unwrap();
 
         let (mut tampered, _transport) = N::initiator(
-            EphemeralOnly::new(StdRng::from_os_rng()),
+            EphemeralOnly::new(rand::make_rng::<StdRng>()),
             &[],
             recipient_pub,
         )
@@ -441,7 +441,7 @@ mod tests {
         // Either way the read rejects it; there is no partial state to
         // inspect, since the message is processed as a whole.
         let outcome = N::responder(
-            EphemeralOnly::new(StdRng::from_os_rng()),
+            EphemeralOnly::new(rand::make_rng::<StdRng>()),
             &[],
             recipient_static,
         )
@@ -452,13 +452,13 @@ mod tests {
 
     #[test]
     fn noise_n_tampered_tag_rejected() {
-        let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
+        let mut provider = EphemeralOnly::new(rand::make_rng::<StdRng>());
 
         let recipient_static = provider.generate::<P256>().unwrap();
         let recipient_pub = provider.public(&recipient_static).unwrap();
 
         let (mut tampered, _transport) = N::initiator(
-            EphemeralOnly::new(StdRng::from_os_rng()),
+            EphemeralOnly::new(rand::make_rng::<StdRng>()),
             &[],
             recipient_pub,
         )
@@ -469,7 +469,7 @@ mod tests {
 
         // The tag is corrupted, so the read must fail at DecryptAndHash.
         let outcome = N::responder(
-            EphemeralOnly::new(StdRng::from_os_rng()),
+            EphemeralOnly::new(rand::make_rng::<StdRng>()),
             &[],
             recipient_static,
         )
@@ -508,7 +508,7 @@ mod tests {
     /// where both static keys are known. Open with Bob's key.
     #[test]
     fn noise_k_seal_open() {
-        let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
+        let mut provider = EphemeralOnly::new(rand::make_rng::<StdRng>());
 
         // Alice (sender) and Bob (recipient) each have static keys.
         let alice_static = provider.generate::<P256>().unwrap();
@@ -523,7 +523,7 @@ mod tests {
         // Pre-messages `-> s` (Alice) and `<- s` (Bob) are constructor
         // arguments, in pattern order.
         let (msg, mut transport) = K::initiator(
-            EphemeralOnly::new(StdRng::from_os_rng()),
+            EphemeralOnly::new(rand::make_rng::<StdRng>()),
             &[],
             alice_static,
             bob_pub,
@@ -541,7 +541,7 @@ mod tests {
         // ── Open (Bob) ──────────────────────────────────────────
         // Same two pre-messages, mirrored: the peer's public first.
         let mut transport = K::responder(
-            EphemeralOnly::new(StdRng::from_os_rng()),
+            EphemeralOnly::new(rand::make_rng::<StdRng>()),
             &[],
             alice_pub,
             bob_static,
@@ -562,7 +562,7 @@ mod tests {
     /// Noise Kpsk0 authenticated seal with PSK binding.
     #[test]
     fn noise_kpsk0_seal_open() {
-        let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
+        let mut provider = EphemeralOnly::new(rand::make_rng::<StdRng>());
 
         let alice_static = provider.generate::<P256>().unwrap();
         let alice_pub = provider.public(&alice_static).unwrap();
@@ -577,7 +577,7 @@ mod tests {
         // `-> psk, e, es, ss`: the psk is a message token, so it is a
         // writer argument rather than a constructor one.
         let (msg, mut transport) = Kpsk0::initiator(
-            EphemeralOnly::new(StdRng::from_os_rng()),
+            EphemeralOnly::new(rand::make_rng::<StdRng>()),
             &[],
             alice_static,
             bob_pub,
@@ -593,7 +593,7 @@ mod tests {
 
         // ── Open (Bob) ──────────────────────────────────────────
         let mut transport = Kpsk0::responder(
-            EphemeralOnly::new(StdRng::from_os_rng()),
+            EphemeralOnly::new(rand::make_rng::<StdRng>()),
             &[],
             alice_pub,
             bob_static,
@@ -614,7 +614,7 @@ mod tests {
     /// Kpsk0 with wrong PSK fails to decrypt.
     #[test]
     fn noise_kpsk0_wrong_psk_fails() {
-        let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
+        let mut provider = EphemeralOnly::new(rand::make_rng::<StdRng>());
 
         let alice_static = provider.generate::<P256>().unwrap();
         let alice_pub = provider.public(&alice_static).unwrap();
@@ -628,7 +628,7 @@ mod tests {
 
         // Seal with correct PSK
         let (msg, mut transport) = Kpsk0::initiator(
-            EphemeralOnly::new(StdRng::from_os_rng()),
+            EphemeralOnly::new(rand::make_rng::<StdRng>()),
             &[],
             alice_static,
             bob_pub,
@@ -643,7 +643,7 @@ mod tests {
         // Open with wrong PSK — the wrong PSK produces different derived
         // keys, so the payload tag closing the message fails to verify.
         let result = Kpsk0::responder(
-            EphemeralOnly::new(StdRng::from_os_rng()),
+            EphemeralOnly::new(rand::make_rng::<StdRng>()),
             &[],
             alice_pub,
             bob_static,
@@ -669,7 +669,7 @@ mod tests {
     /// ```
     #[test]
     fn ikpsk1_round_trip() {
-        let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
+        let mut provider = EphemeralOnly::new(rand::make_rng::<StdRng>());
 
         // ── Key generation ──────────────────────────────────────
         let initiator_static = provider.generate::<P256>().unwrap();
@@ -683,7 +683,7 @@ mod tests {
 
         // ── Message 1: -> e, es, s, ss, psk (initiator sends) ──
         let (msg1, i_hs) = IKpsk1::initiator(
-            EphemeralOnly::new(StdRng::from_os_rng()),
+            EphemeralOnly::new(rand::make_rng::<StdRng>()),
             &[],
             responder_pub,
         )
@@ -700,7 +700,7 @@ mod tests {
 
         // ── Message 1 (responder receives) ──────────────────────
         let r_hs = IKpsk1::responder(
-            EphemeralOnly::new(StdRng::from_os_rng()),
+            EphemeralOnly::new(rand::make_rng::<StdRng>()),
             &[],
             responder_static,
         )
@@ -1154,7 +1154,7 @@ mod tests {
 
     #[test]
     fn corrupted_encrypted_static_in_msg1_rejected() {
-        let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
+        let mut provider = EphemeralOnly::new(rand::make_rng::<StdRng>());
 
         let initiator_static = provider.generate::<P256>().unwrap();
         let responder_static = provider.generate::<P256>().unwrap();
@@ -1164,7 +1164,7 @@ mod tests {
 
         // Initiator constructs msg1 normally.
         let (mut corrupted, _i_hs) = IKpsk1::initiator(
-            EphemeralOnly::new(StdRng::from_os_rng()),
+            EphemeralOnly::new(rand::make_rng::<StdRng>()),
             &[],
             responder_pub,
         )
@@ -1178,7 +1178,7 @@ mod tests {
         // The `s` token decrypts the static key — corruption fails its tag,
         // so the read rejects the message.
         let outcome = IKpsk1::responder(
-            EphemeralOnly::new(StdRng::from_os_rng()),
+            EphemeralOnly::new(rand::make_rng::<StdRng>()),
             &[],
             responder_static,
         )
@@ -1189,7 +1189,7 @@ mod tests {
 
     #[test]
     fn mismatched_psk_fails() {
-        let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
+        let mut provider = EphemeralOnly::new(rand::make_rng::<StdRng>());
 
         let initiator_static = provider.generate::<P256>().unwrap();
         let responder_static = provider.generate::<P256>().unwrap();
@@ -1200,7 +1200,7 @@ mod tests {
 
         // Initiator sends msg1 with i_psk.
         let (msg1, _i_hs) = IKpsk1::initiator(
-            EphemeralOnly::new(StdRng::from_os_rng()),
+            EphemeralOnly::new(rand::make_rng::<StdRng>()),
             &[],
             responder_pub,
         )
@@ -1211,7 +1211,7 @@ mod tests {
         // last in msg1, so the payload tag closing the message catches the
         // divergence.
         let result = IKpsk1::responder(
-            EphemeralOnly::new(StdRng::from_os_rng()),
+            EphemeralOnly::new(rand::make_rng::<StdRng>()),
             &[],
             responder_static,
         )
@@ -1285,7 +1285,7 @@ mod tests {
 
     #[test]
     fn ikpsk1_wrong_responder_key_rejected() {
-        let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
+        let mut provider = EphemeralOnly::new(rand::make_rng::<StdRng>());
 
         let initiator_static = provider.generate::<P256>().unwrap();
         let responder_static = provider.generate::<P256>().unwrap();
@@ -1295,10 +1295,13 @@ mod tests {
 
         // Initiator targets the wrong responder public key, so its `es` DH
         // is against a key the real responder does not hold.
-        let (msg1, _i_hs) =
-            IKpsk1::initiator(EphemeralOnly::new(StdRng::from_os_rng()), &[], wrong_pub)
-                .write_message_1(initiator_static, &psk)
-                .unwrap();
+        let (msg1, _i_hs) = IKpsk1::initiator(
+            EphemeralOnly::new(rand::make_rng::<StdRng>()),
+            &[],
+            wrong_pub,
+        )
+        .write_message_1(initiator_static, &psk)
+        .unwrap();
 
         // The actual responder holds a different static key, so `es`
         // produces a different shared secret. The token itself succeeds —
@@ -1306,7 +1309,7 @@ mod tests {
         // wrong, so decrypting the initiator's static at the `s` token
         // fails and the read rejects the message.
         let result = IKpsk1::responder(
-            EphemeralOnly::new(StdRng::from_os_rng()),
+            EphemeralOnly::new(rand::make_rng::<StdRng>()),
             &[],
             responder_static,
         )
@@ -1355,12 +1358,12 @@ mod tests {
                 P256r1PrivateKey::from_bytes(responder_bytes).expect("valid test scalar");
             let responder_pub = responder_static.public();
 
-            let initiator_static = EphemeralOnly::new(StdRng::from_os_rng())
+            let initiator_static = EphemeralOnly::new(rand::make_rng::<StdRng>())
                 .generate::<P256>()
                 .unwrap();
 
             let (msg1, i_hs) = IKpsk1::initiator(
-                EphemeralOnly::new(StdRng::from_os_rng()),
+                EphemeralOnly::new(rand::make_rng::<StdRng>()),
                 &[],
                 responder_pub,
             )
@@ -1368,7 +1371,7 @@ mod tests {
             .unwrap();
 
             let r_hs = IKpsk1::responder(
-                EphemeralOnly::new(StdRng::from_os_rng()),
+                EphemeralOnly::new(rand::make_rng::<StdRng>()),
                 &[],
                 responder_static,
             )
@@ -1392,7 +1395,7 @@ mod tests {
 
     #[tokio::test]
     async fn ikpsk1_wrong_initiator_static_in_msg1() {
-        let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
+        let mut provider = EphemeralOnly::new(rand::make_rng::<StdRng>());
 
         let initiator_static = provider.generate::<P256>().unwrap();
         let initiator_pub = provider.public(&initiator_static).unwrap();
@@ -1410,7 +1413,7 @@ mod tests {
         let wrong_static = provider.generate::<P256>().unwrap();
 
         let (msg1, i_hs) = IKpsk1::initiator(
-            EphemeralOnly::new(StdRng::from_os_rng()),
+            EphemeralOnly::new(rand::make_rng::<StdRng>()),
             &[],
             responder_pub,
         )
@@ -1418,7 +1421,7 @@ mod tests {
         .unwrap();
 
         let r_hs = IKpsk1::responder(
-            EphemeralOnly::new(StdRng::from_os_rng()),
+            EphemeralOnly::new(rand::make_rng::<StdRng>()),
             &[],
             responder_static,
         )
@@ -1448,7 +1451,7 @@ mod tests {
 
     #[test]
     fn ikpsk1_corrupted_msg1_rejected() {
-        let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
+        let mut provider = EphemeralOnly::new(rand::make_rng::<StdRng>());
 
         let initiator_static = provider.generate::<P256>().unwrap();
         let responder_static = provider.generate::<P256>().unwrap();
@@ -1456,7 +1459,7 @@ mod tests {
         let psk = Psk::from_bytes([0xDD; 32]);
 
         let (mut corrupted, _i_hs) = IKpsk1::initiator(
-            EphemeralOnly::new(StdRng::from_os_rng()),
+            EphemeralOnly::new(rand::make_rng::<StdRng>()),
             &[],
             responder_pub,
         )
@@ -1469,7 +1472,7 @@ mod tests {
         // wrong one, whose `es` DH diverges the key and fails the payload
         // tag. Either way the read rejects it and no state comes back.
         let outcome = IKpsk1::responder(
-            EphemeralOnly::new(StdRng::from_os_rng()),
+            EphemeralOnly::new(rand::make_rng::<StdRng>()),
             &[],
             responder_static,
         )
@@ -1482,7 +1485,7 @@ mod tests {
 
     #[test]
     fn ikpsk1_corrupted_msg2_rejected() {
-        let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
+        let mut provider = EphemeralOnly::new(rand::make_rng::<StdRng>());
 
         let initiator_static = provider.generate::<P256>().unwrap();
         let responder_static = provider.generate::<P256>().unwrap();
@@ -1491,14 +1494,14 @@ mod tests {
 
         // msg1 flows through cleanly so the responder can produce msg2.
         let (msg1, i_hs) = IKpsk1::initiator(
-            EphemeralOnly::new(StdRng::from_os_rng()),
+            EphemeralOnly::new(rand::make_rng::<StdRng>()),
             &[],
             responder_pub,
         )
         .write_message_1(initiator_static, &psk)
         .unwrap();
         let r_hs = IKpsk1::responder(
-            EphemeralOnly::new(StdRng::from_os_rng()),
+            EphemeralOnly::new(rand::make_rng::<StdRng>()),
             &[],
             responder_static,
         )
@@ -2179,7 +2182,7 @@ mod tests {
 
     #[test]
     fn matching_prologue_succeeds() {
-        let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
+        let mut provider = EphemeralOnly::new(rand::make_rng::<StdRng>());
 
         let responder_static = provider.generate::<P256>().unwrap();
         let responder_pub = provider.public(&responder_static).unwrap();
@@ -2187,7 +2190,7 @@ mod tests {
         let prologue = b"hiss/v1";
 
         let (msg, mut i_transport) = N::initiator(
-            EphemeralOnly::new(StdRng::from_os_rng()),
+            EphemeralOnly::new(rand::make_rng::<StdRng>()),
             prologue,
             responder_pub,
         )
@@ -2195,7 +2198,7 @@ mod tests {
         .unwrap();
 
         let mut r_transport = N::responder(
-            EphemeralOnly::new(StdRng::from_os_rng()),
+            EphemeralOnly::new(rand::make_rng::<StdRng>()),
             prologue,
             responder_static,
         )
@@ -2213,14 +2216,14 @@ mod tests {
 
     #[test]
     fn mismatched_prologue_rejected() {
-        let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
+        let mut provider = EphemeralOnly::new(rand::make_rng::<StdRng>());
 
         let responder_static = provider.generate::<P256>().unwrap();
         let responder_pub = provider.public(&responder_static).unwrap();
 
         // Initiator uses prologue "v1", responder uses "v2".
         let (msg, _i_transport) = N::initiator(
-            EphemeralOnly::new(StdRng::from_os_rng()),
+            EphemeralOnly::new(rand::make_rng::<StdRng>()),
             b"v1",
             responder_pub,
         )
@@ -2230,7 +2233,7 @@ mod tests {
         // The read fails because the handshake hashes diverge on the
         // differing prologues — the payload AEAD tag will not match.
         let outcome = N::responder(
-            EphemeralOnly::new(StdRng::from_os_rng()),
+            EphemeralOnly::new(rand::make_rng::<StdRng>()),
             b"v2",
             responder_static,
         )
@@ -2284,11 +2287,11 @@ mod tests {
             responder_static: P256r1PrivateKey,
             psk: Psk,
         ) -> (transport::Transport<IKpsk1>, transport::Transport<IKpsk1>) {
-            let provider = EphemeralOnly::new(StdRng::from_os_rng());
+            let provider = EphemeralOnly::new(rand::make_rng::<StdRng>());
             let responder_pub = provider.public(&responder_static).unwrap();
 
             let (msg1, i_hs) = IKpsk1::initiator(
-                EphemeralOnly::new(StdRng::from_os_rng()),
+                EphemeralOnly::new(rand::make_rng::<StdRng>()),
                 &[],
                 responder_pub,
             )
@@ -2296,7 +2299,7 @@ mod tests {
             .unwrap();
 
             let r_hs = IKpsk1::responder(
-                EphemeralOnly::new(StdRng::from_os_rng()),
+                EphemeralOnly::new(rand::make_rng::<StdRng>()),
                 &[],
                 responder_static,
             )
@@ -2317,8 +2320,8 @@ mod tests {
                 plaintext in proptest::collection::vec(any::<u8>(), 0..4096),
                 psk in any::<[u8; 32]>().prop_map(Psk::from_bytes),
             ) {
-                let i_sk = EphemeralOnly::new(StdRng::from_os_rng()).generate::<P256>().unwrap();
-                let r_sk = EphemeralOnly::new(StdRng::from_os_rng()).generate::<P256>().unwrap();
+                let i_sk = EphemeralOnly::new(rand::make_rng::<StdRng>()).generate::<P256>().unwrap();
+                let r_sk = EphemeralOnly::new(rand::make_rng::<StdRng>()).generate::<P256>().unwrap();
 
                 let (mut i_t, mut r_t) = full_ikpsk1_handshake(i_sk, r_sk, psk);
 
@@ -2343,8 +2346,8 @@ mod tests {
                 psk in any::<[u8; 32]>().prop_map(Psk::from_bytes),
                 corrupt_pos_seed in any::<usize>(),
             ) {
-                let i_sk = EphemeralOnly::new(StdRng::from_os_rng()).generate::<P256>().unwrap();
-                let r_sk = EphemeralOnly::new(StdRng::from_os_rng()).generate::<P256>().unwrap();
+                let i_sk = EphemeralOnly::new(rand::make_rng::<StdRng>()).generate::<P256>().unwrap();
+                let r_sk = EphemeralOnly::new(rand::make_rng::<StdRng>()).generate::<P256>().unwrap();
 
                 let (mut i_t, mut r_t) = full_ikpsk1_handshake(i_sk, r_sk, psk);
 
@@ -2365,7 +2368,7 @@ mod tests {
             fn random_msg1_rejected(
                 garbage in proptest::collection::vec(any::<u8>(), 162..163),
             ) {
-                let r_sk = EphemeralOnly::new(StdRng::from_os_rng()).generate::<P256>().unwrap();
+                let r_sk = EphemeralOnly::new(rand::make_rng::<StdRng>()).generate::<P256>().unwrap();
                 let garbage: [u8; IKpsk1::MSG1_SIZE] =
                     garbage.try_into().expect("generated at the wire size");
 
@@ -2374,7 +2377,7 @@ mod tests {
                 // tag on the encrypted static at `s`. Either way the read
                 // fails and no handshake state comes back.
                 let outcome = IKpsk1::responder(
-                    EphemeralOnly::new(StdRng::from_os_rng()),
+                    EphemeralOnly::new(rand::make_rng::<StdRng>()),
                     &[],
                     r_sk,
                 )

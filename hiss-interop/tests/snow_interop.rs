@@ -25,7 +25,7 @@ use hiss::noise::*;
 use hiss::provider::EphemeralOnly;
 use hiss::provider::ProviderExt;
 use hiss::psk::Psk;
-use rand::{SeedableRng, rngs::StdRng};
+use rand::rngs::StdRng;
 
 const PROTOCOL: &str = "Noise_IKpsk1_P256_ChaChaPoly_BLAKE2b";
 
@@ -42,7 +42,7 @@ fn exact<const N: usize>(buf: &[u8]) -> &[u8; N] {
 
 #[test]
 fn ikpsk1_hiss_initiator_snow_responder() {
-    let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
+    let mut provider = EphemeralOnly::new(rand::make_rng::<StdRng>());
 
     // Generate keys for both sides.
     let initiator_static = provider.generate::<P256>().unwrap();
@@ -73,7 +73,7 @@ fn ikpsk1_hiss_initiator_snow_responder() {
 
     // ── Message 1: -> e, es, s, ss, psk (our initiator sends) ──
     let (msg1, i_hs) = IKpsk1::initiator(
-        EphemeralOnly::new(StdRng::from_os_rng()),
+        EphemeralOnly::new(rand::make_rng::<StdRng>()),
         &[],
         responder_pub,
     )
@@ -124,7 +124,7 @@ fn ikpsk1_hiss_initiator_snow_responder() {
 
 #[test]
 fn ikpsk1_snow_initiator_hiss_responder() {
-    let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
+    let mut provider = EphemeralOnly::new(rand::make_rng::<StdRng>());
 
     // Generate keys for our responder.
     let responder_static = provider.generate::<P256>().unwrap();
@@ -157,7 +157,7 @@ fn ikpsk1_snow_initiator_hiss_responder() {
 
     // Our responder reads msg1.
     let r_hs = IKpsk1::responder(
-        EphemeralOnly::new(StdRng::from_os_rng()),
+        EphemeralOnly::new(rand::make_rng::<StdRng>()),
         &[],
         responder_static,
     )
@@ -229,7 +229,7 @@ fn n_hiss_initiator_snow_responder() {
     hiss::noise! { pub N<P256, ChaChaPoly, Blake2b> { <- s ... -> e, es } }
 
     let (msg, mut transport) = N::initiator(
-        EphemeralOnly::new(StdRng::from_os_rng()),
+        EphemeralOnly::new(rand::make_rng::<StdRng>()),
         &[],
         responder_pub,
     )
@@ -259,7 +259,7 @@ fn n_hiss_initiator_snow_responder() {
 
 #[test]
 fn kpsk0_hiss_initiator_snow_responder() {
-    let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
+    let mut provider = EphemeralOnly::new(rand::make_rng::<StdRng>());
 
     let alice_static = provider.generate::<P256>().unwrap();
     let alice_pub = provider.public(&alice_static).unwrap();
@@ -289,7 +289,7 @@ fn kpsk0_hiss_initiator_snow_responder() {
     }
 
     let (msg, mut transport) = Kpsk0::initiator(
-        EphemeralOnly::new(StdRng::from_os_rng()),
+        EphemeralOnly::new(rand::make_rng::<StdRng>()),
         &[],
         alice_static,
         bob_pub,
@@ -340,7 +340,7 @@ fn n_with_prologue_hiss_initiator_snow_responder() {
     hiss::noise! { pub N<P256, ChaChaPoly, Blake2b> { <- s ... -> e, es } }
 
     let (msg, mut transport) = N::initiator(
-        EphemeralOnly::new(StdRng::from_os_rng()),
+        EphemeralOnly::new(rand::make_rng::<StdRng>()),
         prologue,
         responder_pub,
     )
@@ -369,7 +369,7 @@ fn n_with_prologue_hiss_initiator_snow_responder() {
 
 #[test]
 fn ikpsk1_with_prologue_hiss_initiator_snow_responder() {
-    let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
+    let mut provider = EphemeralOnly::new(rand::make_rng::<StdRng>());
     let prologue = b"hiss/v1/ikpsk1";
 
     let initiator_static = provider.generate::<P256>().unwrap();
@@ -395,7 +395,7 @@ fn ikpsk1_with_prologue_hiss_initiator_snow_responder() {
 
     // msg1: -> e, es, s, ss, psk
     let (msg1, i_hs) = IKpsk1::initiator(
-        EphemeralOnly::new(StdRng::from_os_rng()),
+        EphemeralOnly::new(rand::make_rng::<StdRng>()),
         prologue,
         responder_pub,
     )
@@ -444,7 +444,7 @@ fn n_rekey_hiss_initiator_snow_responder() {
     hiss::noise! { pub N<P256, ChaChaPoly, Blake2b> { <- s ... -> e, es } }
 
     let (msg, mut transport) = N::initiator(
-        EphemeralOnly::new(StdRng::from_os_rng()),
+        EphemeralOnly::new(rand::make_rng::<StdRng>()),
         &[],
         responder_pub,
     )
@@ -475,7 +475,7 @@ fn n_rekey_hiss_initiator_snow_responder() {
 
 #[test]
 fn ikpsk1_rekey_hiss_initiator_snow_responder() {
-    let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
+    let mut provider = EphemeralOnly::new(rand::make_rng::<StdRng>());
 
     let initiator_static = provider.generate::<P256>().unwrap();
     let psk = Psk::from_bytes([0xDD; 32]);
@@ -499,7 +499,7 @@ fn ikpsk1_rekey_hiss_initiator_snow_responder() {
     // Complete handshake.
     // msg1: -> e, es, s, ss, psk
     let (msg1, i_hs) = IKpsk1::initiator(
-        EphemeralOnly::new(StdRng::from_os_rng()),
+        EphemeralOnly::new(rand::make_rng::<StdRng>()),
         &[],
         responder_pub,
     )
@@ -550,7 +550,7 @@ fn ikpsk1_rekey_hiss_initiator_snow_responder() {
 
 #[test]
 fn ik_hiss_initiator_snow_responder() {
-    let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
+    let mut provider = EphemeralOnly::new(rand::make_rng::<StdRng>());
     let initiator_static = provider.generate::<P256>().unwrap();
 
     let proto = "Noise_IK_P256_ChaChaPoly_BLAKE2b";
@@ -573,7 +573,7 @@ fn ik_hiss_initiator_snow_responder() {
 
     // msg1: -> e, es, s, ss (our initiator sends)
     let (msg1, i_hs) = IK::initiator(
-        EphemeralOnly::new(StdRng::from_os_rng()),
+        EphemeralOnly::new(rand::make_rng::<StdRng>()),
         &[],
         responder_pub,
     )
@@ -615,7 +615,7 @@ fn ik_hiss_initiator_snow_responder() {
 
 #[test]
 fn ik_snow_initiator_hiss_responder() {
-    let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
+    let mut provider = EphemeralOnly::new(rand::make_rng::<StdRng>());
     let responder_static = provider.generate::<P256>().unwrap();
     let responder_pub = provider.public(&responder_static).unwrap();
 
@@ -644,7 +644,7 @@ fn ik_snow_initiator_hiss_responder() {
 
     // Our responder reads msg1.
     let r_hs = IK::responder(
-        EphemeralOnly::new(StdRng::from_os_rng()),
+        EphemeralOnly::new(rand::make_rng::<StdRng>()),
         &[],
         responder_static,
     )
@@ -691,7 +691,7 @@ fn ik_snow_initiator_hiss_responder() {
 
 #[test]
 fn k_hiss_initiator_snow_responder() {
-    let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
+    let mut provider = EphemeralOnly::new(rand::make_rng::<StdRng>());
 
     let alice_static = provider.generate::<P256>().unwrap();
     let alice_pub = provider.public(&alice_static).unwrap();
@@ -715,7 +715,7 @@ fn k_hiss_initiator_snow_responder() {
     hiss::noise! { pub K<P256, ChaChaPoly, Blake2b> { -> s <- s ... -> e, es, ss } }
 
     let (msg, mut transport) = K::initiator(
-        EphemeralOnly::new(StdRng::from_os_rng()),
+        EphemeralOnly::new(rand::make_rng::<StdRng>()),
         &[],
         alice_static,
         bob_pub,
@@ -765,7 +765,7 @@ fn nk_hiss_initiator_snow_responder() {
 
     // msg1: -> e, es (our initiator sends)
     let (msg1, i_hs) = NK::initiator(
-        EphemeralOnly::new(StdRng::from_os_rng()),
+        EphemeralOnly::new(rand::make_rng::<StdRng>()),
         &[],
         responder_pub,
     )
@@ -807,7 +807,7 @@ fn nk_hiss_initiator_snow_responder() {
 
 #[test]
 fn nk_snow_initiator_hiss_responder() {
-    let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
+    let mut provider = EphemeralOnly::new(rand::make_rng::<StdRng>());
     let responder_static = provider.generate::<P256>().unwrap();
     let responder_pub = provider.public(&responder_static).unwrap();
 
@@ -831,7 +831,7 @@ fn nk_snow_initiator_hiss_responder() {
 
     // Our responder reads msg1.
     let r_hs = NK::responder(
-        EphemeralOnly::new(StdRng::from_os_rng()),
+        EphemeralOnly::new(rand::make_rng::<StdRng>()),
         &[],
         responder_static,
     )
@@ -872,7 +872,7 @@ fn nk_snow_initiator_hiss_responder() {
 
 #[test]
 fn ix_hiss_initiator_snow_responder() {
-    let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
+    let mut provider = EphemeralOnly::new(rand::make_rng::<StdRng>());
     let initiator_static = provider.generate::<P256>().unwrap();
     let initiator_pub = provider.public(&initiator_static).unwrap();
 
@@ -893,7 +893,7 @@ fn ix_hiss_initiator_snow_responder() {
     hiss::noise! { pub IX<P256, ChaChaPoly, Blake2b> { -> e, s <- e, ee, se, s, es } }
 
     // msg1: -> e, s (our initiator sends; its static is in the clear)
-    let (msg1, i_hs) = IX::initiator(EphemeralOnly::new(StdRng::from_os_rng()), &[])
+    let (msg1, i_hs) = IX::initiator(EphemeralOnly::new(rand::make_rng::<StdRng>()), &[])
         .write_message_1(initiator_static)
         .unwrap();
 
@@ -944,7 +944,7 @@ fn ix_hiss_initiator_snow_responder() {
 
 #[test]
 fn ix_snow_initiator_hiss_responder() {
-    let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
+    let mut provider = EphemeralOnly::new(rand::make_rng::<StdRng>());
     let responder_static = provider.generate::<P256>().unwrap();
     let responder_pub = provider.public(&responder_static).unwrap();
 
@@ -968,7 +968,7 @@ fn ix_snow_initiator_hiss_responder() {
     let msg1_len = snow_initiator.write_message(&[], &mut msg1).unwrap();
 
     // Our responder reads msg1; the `s` token reveals the initiator static.
-    let r_hs = IX::responder(EphemeralOnly::new(StdRng::from_os_rng()), &[])
+    let r_hs = IX::responder(EphemeralOnly::new(rand::make_rng::<StdRng>()), &[])
         .read_message_1(exact(&msg1[..msg1_len]))
         .unwrap();
 
@@ -1017,7 +1017,7 @@ fn ix_snow_initiator_hiss_responder() {
 
 #[test]
 fn xk_hiss_initiator_snow_responder() {
-    let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
+    let mut provider = EphemeralOnly::new(rand::make_rng::<StdRng>());
     let initiator_static = provider.generate::<P256>().unwrap();
     let initiator_pub = provider.public(&initiator_static).unwrap();
 
@@ -1041,7 +1041,7 @@ fn xk_hiss_initiator_snow_responder() {
 
     // msg1: -> e, es (our initiator sends)
     let (msg1, i_hs) = XK::initiator(
-        EphemeralOnly::new(StdRng::from_os_rng()),
+        EphemeralOnly::new(rand::make_rng::<StdRng>()),
         &[],
         responder_pub,
     )
@@ -1095,7 +1095,7 @@ fn xk_hiss_initiator_snow_responder() {
 
 #[test]
 fn xk_snow_initiator_hiss_responder() {
-    let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
+    let mut provider = EphemeralOnly::new(rand::make_rng::<StdRng>());
     let responder_static = provider.generate::<P256>().unwrap();
     let responder_pub = provider.public(&responder_static).unwrap();
 
@@ -1124,7 +1124,7 @@ fn xk_snow_initiator_hiss_responder() {
 
     // Our responder reads msg1 (-> e, es).
     let r_hs = XK::responder(
-        EphemeralOnly::new(StdRng::from_os_rng()),
+        EphemeralOnly::new(rand::make_rng::<StdRng>()),
         &[],
         responder_static,
     )
@@ -1189,7 +1189,7 @@ fn nn_hiss_initiator_snow_responder() {
     hiss::noise! { pub NN<P256, ChaChaPoly, Blake2b> { -> e <- e, ee } }
 
     // msg1: -> e (bare ephemeral; 65 bytes, cipher never keyed)
-    let (msg1, i_hs) = NN::initiator(EphemeralOnly::new(StdRng::from_os_rng()), &[])
+    let (msg1, i_hs) = NN::initiator(EphemeralOnly::new(rand::make_rng::<StdRng>()), &[])
         .write_message_1()
         .unwrap();
     assert_eq!(NN::MSG1_SIZE, 65);
@@ -1244,7 +1244,7 @@ fn nn_snow_initiator_hiss_responder() {
     let msg1_len = snow_initiator.write_message(&[], &mut msg1).unwrap();
 
     // Our responder reads msg1.
-    let r_hs = NN::responder(EphemeralOnly::new(StdRng::from_os_rng()), &[])
+    let r_hs = NN::responder(EphemeralOnly::new(rand::make_rng::<StdRng>()), &[])
         .read_message_1(exact(&msg1[..msg1_len]))
         .unwrap();
 
@@ -1281,7 +1281,7 @@ fn nn_snow_initiator_hiss_responder() {
 
 #[test]
 fn xx_hiss_initiator_snow_responder() {
-    let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
+    let mut provider = EphemeralOnly::new(rand::make_rng::<StdRng>());
     let initiator_static = provider.generate::<P256>().unwrap();
     let initiator_pub = provider.public(&initiator_static).unwrap();
 
@@ -1302,7 +1302,7 @@ fn xx_hiss_initiator_snow_responder() {
     hiss::noise! { pub XX<P256, ChaChaPoly, Blake2b> { -> e <- e, ee, s, es -> s, se } }
 
     // msg1: -> e (bare ephemeral; 65 bytes, cipher never keyed)
-    let (msg1, i_hs) = XX::initiator(EphemeralOnly::new(StdRng::from_os_rng()), &[])
+    let (msg1, i_hs) = XX::initiator(EphemeralOnly::new(rand::make_rng::<StdRng>()), &[])
         .write_message_1()
         .unwrap();
     assert_eq!(XX::MSG1_SIZE, 65);
@@ -1359,7 +1359,7 @@ fn xx_hiss_initiator_snow_responder() {
 
 #[test]
 fn xx_snow_initiator_hiss_responder() {
-    let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
+    let mut provider = EphemeralOnly::new(rand::make_rng::<StdRng>());
     let responder_static = provider.generate::<P256>().unwrap();
     let responder_pub = provider.public(&responder_static).unwrap();
 
@@ -1383,7 +1383,7 @@ fn xx_snow_initiator_hiss_responder() {
     let msg1_len = snow_initiator.write_message(&[], &mut msg1).unwrap();
 
     // Our responder reads msg1.
-    let r_hs = XX::responder(EphemeralOnly::new(StdRng::from_os_rng()), &[])
+    let r_hs = XX::responder(EphemeralOnly::new(rand::make_rng::<StdRng>()), &[])
         .read_message_1(exact(&msg1[..msg1_len]))
         .unwrap();
 
@@ -1439,7 +1439,7 @@ fn xx_snow_initiator_hiss_responder() {
 
 #[test]
 fn x_hiss_initiator_snow_responder() {
-    let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
+    let mut provider = EphemeralOnly::new(rand::make_rng::<StdRng>());
 
     // The initiator's own static is transmitted (encrypted) in msg1.
     let alice_static = provider.generate::<P256>().unwrap();
@@ -1467,7 +1467,7 @@ fn x_hiss_initiator_snow_responder() {
 
     // msg1: -> e, es, s, ss
     let (msg, mut transport) =
-        X::initiator(EphemeralOnly::new(StdRng::from_os_rng()), &[], bob_pub)
+        X::initiator(EphemeralOnly::new(rand::make_rng::<StdRng>()), &[], bob_pub)
             .write_message_1(alice_static)
             .unwrap();
     // e (65) + encrypted s (81) + payload tag (16)
@@ -1500,7 +1500,7 @@ fn x_hiss_initiator_snow_responder() {
 
 #[test]
 fn xx_sha256_hiss_initiator_snow_responder() {
-    let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
+    let mut provider = EphemeralOnly::new(rand::make_rng::<StdRng>());
     let initiator_static = provider.generate::<P256>().unwrap();
     let initiator_pub = provider.public(&initiator_static).unwrap();
 
@@ -1521,7 +1521,7 @@ fn xx_sha256_hiss_initiator_snow_responder() {
     hiss::noise! { pub XX<P256, ChaChaPoly, Sha256> { -> e <- e, ee, s, es -> s, se } }
 
     // msg1: -> e (bare ephemeral; the wire size is hash-independent)
-    let (msg1, i_hs) = XX::initiator(EphemeralOnly::new(StdRng::from_os_rng()), &[])
+    let (msg1, i_hs) = XX::initiator(EphemeralOnly::new(rand::make_rng::<StdRng>()), &[])
         .write_message_1()
         .unwrap();
     assert_eq!(XX::MSG1_SIZE, 65);
@@ -1578,7 +1578,7 @@ fn xx_sha256_hiss_initiator_snow_responder() {
 
 #[test]
 fn xx_sha256_snow_initiator_hiss_responder() {
-    let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
+    let mut provider = EphemeralOnly::new(rand::make_rng::<StdRng>());
     let responder_static = provider.generate::<P256>().unwrap();
     let responder_pub = provider.public(&responder_static).unwrap();
 
@@ -1602,7 +1602,7 @@ fn xx_sha256_snow_initiator_hiss_responder() {
     let msg1_len = snow_initiator.write_message(&[], &mut msg1).unwrap();
 
     // Our responder reads msg1.
-    let r_hs = XX::responder(EphemeralOnly::new(StdRng::from_os_rng()), &[])
+    let r_hs = XX::responder(EphemeralOnly::new(rand::make_rng::<StdRng>()), &[])
         .read_message_1(exact(&msg1[..msg1_len]))
         .unwrap();
 
@@ -1662,7 +1662,7 @@ fn xx_sha256_snow_initiator_hiss_responder() {
 
 #[test]
 fn xx_blake2s_hiss_initiator_snow_responder() {
-    let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
+    let mut provider = EphemeralOnly::new(rand::make_rng::<StdRng>());
     let initiator_static = provider.generate::<P256>().unwrap();
     let initiator_pub = provider.public(&initiator_static).unwrap();
 
@@ -1683,7 +1683,7 @@ fn xx_blake2s_hiss_initiator_snow_responder() {
     hiss::noise! { pub XX<P256, ChaChaPoly, Blake2s> { -> e <- e, ee, s, es -> s, se } }
 
     // msg1: -> e (bare ephemeral; the wire size is hash-independent)
-    let (msg1, i_hs) = XX::initiator(EphemeralOnly::new(StdRng::from_os_rng()), &[])
+    let (msg1, i_hs) = XX::initiator(EphemeralOnly::new(rand::make_rng::<StdRng>()), &[])
         .write_message_1()
         .unwrap();
     assert_eq!(XX::MSG1_SIZE, 65);
@@ -1739,7 +1739,7 @@ fn xx_blake2s_hiss_initiator_snow_responder() {
 
 #[test]
 fn xx_blake2s_snow_initiator_hiss_responder() {
-    let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
+    let mut provider = EphemeralOnly::new(rand::make_rng::<StdRng>());
     let responder_static = provider.generate::<P256>().unwrap();
     let responder_pub = provider.public(&responder_static).unwrap();
 
@@ -1763,7 +1763,7 @@ fn xx_blake2s_snow_initiator_hiss_responder() {
     let msg1_len = snow_initiator.write_message(&[], &mut msg1).unwrap();
 
     // Our responder reads msg1.
-    let r_hs = XX::responder(EphemeralOnly::new(StdRng::from_os_rng()), &[])
+    let r_hs = XX::responder(EphemeralOnly::new(rand::make_rng::<StdRng>()), &[])
         .read_message_1(exact(&msg1[..msg1_len]))
         .unwrap();
 
@@ -1822,7 +1822,7 @@ fn xx_blake2s_snow_initiator_hiss_responder() {
 
 #[test]
 fn xx_sha512_hiss_initiator_snow_responder() {
-    let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
+    let mut provider = EphemeralOnly::new(rand::make_rng::<StdRng>());
     let initiator_static = provider.generate::<P256>().unwrap();
     let initiator_pub = provider.public(&initiator_static).unwrap();
 
@@ -1843,7 +1843,7 @@ fn xx_sha512_hiss_initiator_snow_responder() {
     hiss::noise! { pub XX<P256, ChaChaPoly, Sha512> { -> e <- e, ee, s, es -> s, se } }
 
     // msg1: -> e (bare ephemeral; the wire size is hash-independent)
-    let (msg1, i_hs) = XX::initiator(EphemeralOnly::new(StdRng::from_os_rng()), &[])
+    let (msg1, i_hs) = XX::initiator(EphemeralOnly::new(rand::make_rng::<StdRng>()), &[])
         .write_message_1()
         .unwrap();
     assert_eq!(XX::MSG1_SIZE, 65);
@@ -1900,7 +1900,7 @@ fn xx_sha512_hiss_initiator_snow_responder() {
 
 #[test]
 fn xx_sha512_snow_initiator_hiss_responder() {
-    let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
+    let mut provider = EphemeralOnly::new(rand::make_rng::<StdRng>());
     let responder_static = provider.generate::<P256>().unwrap();
     let responder_pub = provider.public(&responder_static).unwrap();
 
@@ -1924,7 +1924,7 @@ fn xx_sha512_snow_initiator_hiss_responder() {
     let msg1_len = snow_initiator.write_message(&[], &mut msg1).unwrap();
 
     // Our responder reads msg1.
-    let r_hs = XX::responder(EphemeralOnly::new(StdRng::from_os_rng()), &[])
+    let r_hs = XX::responder(EphemeralOnly::new(rand::make_rng::<StdRng>()), &[])
         .read_message_1(exact(&msg1[..msg1_len]))
         .unwrap();
 

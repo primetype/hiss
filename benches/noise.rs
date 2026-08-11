@@ -12,7 +12,7 @@
 //! both parties) to transport-ready state. Everything that is not
 //! per-handshake crypto is built in the **unmeasured** `iter_batched` setup:
 //! the long-lived static keys and the two providers, so RNG seeding —
-//! `StdRng::from_os_rng()`, a kernel-entropy syscall — is *not* timed. The
+//! `rand::make_rng::<StdRng>()`, a kernel-entropy syscall — is *not* timed. The
 //! measured routine is therefore the handshake itself: ephemeral key
 //! generation, the Diffie–Hellman operations, and the symmetric ratchet. The
 //! bulk-transport benchmark is separate.
@@ -34,12 +34,12 @@ use std::hint::black_box;
 use hiss::noise::*;
 use hiss::provider::EphemeralOnly;
 use hiss::provider::ProviderExt;
-use rand::{SeedableRng, rngs::StdRng};
+use rand::rngs::StdRng;
 
 /// A fresh software provider seeded from OS entropy. Built in unmeasured
-/// setup so the `from_os_rng()` syscall never lands in a timed routine.
+/// setup so the `make_rng()` syscall never lands in a timed routine.
 fn provider() -> EphemeralOnly<StdRng> {
-    EphemeralOnly::new(StdRng::from_os_rng())
+    EphemeralOnly::new(rand::make_rng::<StdRng>())
 }
 
 // ── hiss handshake drivers (one macro per pattern, generic over curve) ──

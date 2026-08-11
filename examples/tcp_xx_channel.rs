@@ -55,7 +55,7 @@ use hiss::curve::Curve;
 use hiss::noise::{Blake2b, ChaChaPoly, HandshakeError, P256, Transport};
 use hiss::provider::{CryptoKeyProvider, EphemeralOnly, ProviderExt};
 
-use rand::{SeedableRng, rngs::StdRng};
+use rand::rngs::StdRng;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -105,11 +105,11 @@ async fn main() -> Result<(), BoxError> {
     // async provider surface and `tokio::spawn` both require; `rand::rng()`
     // (a `!Send` `ThreadRng`) would not cross the task boundary. Seed it
     // from OS entropy.
-    let mut init_provider = EphemeralOnly::new(StdRng::from_os_rng());
+    let mut init_provider = EphemeralOnly::new(rand::make_rng::<StdRng>());
     let init_static = init_provider.generate::<P256>()?;
     let init_pub = init_provider.public(&init_static)?;
 
-    let mut resp_provider = EphemeralOnly::new(StdRng::from_os_rng());
+    let mut resp_provider = EphemeralOnly::new(rand::make_rng::<StdRng>());
     let resp_static = resp_provider.generate::<P256>()?;
     let resp_pub = resp_provider.public(&resp_static)?;
 

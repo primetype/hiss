@@ -19,7 +19,7 @@
 #     dev graph; a consumer gets none of that, and a feature that only ever
 #     arrives via a dev-dependency shows up as a build failure only here.
 #   * The README quickstart is compiled *and executed* against the exact
-#     dependency pairing the README advertises (`hiss` + `rand = "0.9"`),
+#     dependency pairing the README advertises (`hiss` + `rand = "0.10"`),
 #     so the advertised snippets cannot silently rot.
 #   * The `default-features = false` consumer is covered (eccoxide X25519
 #     backend rather than cryptoxide).
@@ -31,7 +31,7 @@
 # What it does:
 #   1. Generates a crate in a temp dir (outside this repo, so no ancestor
 #      workspace and no inherited lockfile) that depends on `hiss` by path
-#      plus `rand = "0.9"` — the dependency set the README advertises.
+#      plus `rand = "0.10"` — the dependency set the README advertises.
 #   2. Stitches the four ```rust blocks of README.md's "## Quickstart" into
 #      its main.rs, so the advertised snippets are compiled and executed
 #      against the advertised dependency set.
@@ -226,7 +226,7 @@ edition = "2024"
 
 [dependencies]
 $hiss_dep
-rand = "0.9"
+rand = "0.10"
 EOF
 
     if [ -e "$dir/Cargo.lock" ]; then
@@ -271,4 +271,4 @@ build_downstream hiss-downstream-nodefault \
 
 echo
 echo "DOWNSTREAM OK — hiss builds and the README quickstart runs from a fresh"
-echo "resolve of \`hiss\` + \`rand = \"0.9\"\`, with no lockfile."
+echo "resolve of \`hiss\` + \`rand = \"0.10\"\`, with no lockfile."

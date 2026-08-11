@@ -205,7 +205,7 @@ mod tests {
         let payload: [u8; 32] = [0x42; 32];
 
         let sealed = seal_32(
-            EphemeralOnly::new(StdRng::from_os_rng()),
+            EphemeralOnly::new(rand::make_rng::<StdRng>()),
             &device_pub,
             &payload,
         )
@@ -222,7 +222,7 @@ mod tests {
         );
 
         let opened = open_32(
-            EphemeralOnly::new(StdRng::from_os_rng()),
+            EphemeralOnly::new(rand::make_rng::<StdRng>()),
             device_key,
             &sealed,
         )
@@ -237,7 +237,7 @@ mod tests {
         let device_pub = device_key.public();
         let payload: [u8; 32] = [0x99; 32];
         let sealed = seal_32(
-            EphemeralOnly::new(StdRng::from_os_rng()),
+            EphemeralOnly::new(rand::make_rng::<StdRng>()),
             &device_pub,
             &payload,
         )
@@ -246,7 +246,7 @@ mod tests {
 
         let other_key = P256r1PrivateKey::generate(rand::rng()).unwrap();
         let result = open_32(
-            EphemeralOnly::new(StdRng::from_os_rng()),
+            EphemeralOnly::new(rand::make_rng::<StdRng>()),
             other_key,
             &sealed,
         )
@@ -264,14 +264,14 @@ mod tests {
         let payload: [u8; 32] = [0xAB; 32];
 
         let sealed_a = seal_32(
-            EphemeralOnly::new(StdRng::from_os_rng()),
+            EphemeralOnly::new(rand::make_rng::<StdRng>()),
             &device_pub,
             &payload,
         )
         .await
         .unwrap();
         let sealed_b = seal_32(
-            EphemeralOnly::new(StdRng::from_os_rng()),
+            EphemeralOnly::new(rand::make_rng::<StdRng>()),
             &device_pub,
             &payload,
         )
@@ -316,7 +316,7 @@ mod tests {
 
         // Round-trips back to the original payload.
         let opened = open_32(
-            EphemeralOnly::new(StdRng::from_os_rng()),
+            EphemeralOnly::new(rand::make_rng::<StdRng>()),
             recipient_key,
             &sealed,
         )

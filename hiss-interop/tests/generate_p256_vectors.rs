@@ -20,8 +20,9 @@
 
 use hiss::noise::{Curve, P256};
 use hiss::provider::{CryptoKeyProvider, EphemeralOnly, ProviderExt};
-use rand::{CryptoRng, RngCore};
+use rand::{TryCryptoRng, TryRng};
 use serde::{Deserialize, Serialize};
+use std::convert::Infallible;
 
 // ── Output paths ─────────────────────────────────────────────────
 //
@@ -118,22 +119,30 @@ impl ScriptedRng {
     }
 }
 
-impl RngCore for ScriptedRng {
-    fn next_u32(&mut self) -> u32 {
-        u32::from_le_bytes(self.take(4).try_into().unwrap())
+// rand_core 0.10 makes `TryRng` the base trait; the infallible `Rng` and
+// `CryptoRng` that hiss's bounds want arrive via blanket impls over
+// `Error = Infallible`. Exhausting the script still panics inside `take` —
+// infallible is the type-level claim, not a promise the script is long
+// enough.
+impl TryRng for ScriptedRng {
+    type Error = Infallible;
+
+    fn try_next_u32(&mut self) -> Result<u32, Infallible> {
+        Ok(u32::from_le_bytes(self.take(4).try_into().unwrap()))
     }
 
-    fn next_u64(&mut self) -> u64 {
-        u64::from_le_bytes(self.take(8).try_into().unwrap())
+    fn try_next_u64(&mut self) -> Result<u64, Infallible> {
+        Ok(u64::from_le_bytes(self.take(8).try_into().unwrap()))
     }
 
-    fn fill_bytes(&mut self, dst: &mut [u8]) {
+    fn try_fill_bytes(&mut self, dst: &mut [u8]) -> Result<(), Infallible> {
         let n = dst.len();
         dst.copy_from_slice(self.take(n));
+        Ok(())
     }
 }
 
-impl CryptoRng for ScriptedRng {}
+impl TryCryptoRng for ScriptedRng {}
 
 /// The P-256 public key for a fixed private scalar.
 fn public_key(seed: &[u8; 32]) -> <P256 as Curve>::PublicKey {

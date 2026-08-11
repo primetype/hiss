@@ -16,7 +16,7 @@ use super::{Error, P256Signature, P256r1PublicKey};
 use crate::curve::SharedSecret;
 
 use eccoxide::curve::sec2::p256r1::{Point, Scalar};
-use rand_core::{CryptoRng, RngCore};
+use rand_core::CryptoRng;
 use std::fmt;
 
 /// Software (`eccoxide`-backed) secp256r1 private key — the canonical
@@ -58,15 +58,17 @@ impl P256r1PrivateKey {
     /// Generate a private key from a caller-supplied CSPRNG.
     ///
     /// The caller owns the entropy source: supply your own cryptographically
-    /// secure `R: RngCore + CryptoRng`. `rand` is **not** a dependency of
-    /// `hiss`, so a consumer who wants to pass `rand::rng()` must add the
-    /// `rand` crate to their own `Cargo.toml`; for deterministic tests, pass
-    /// a seeded RNG instead. A `&mut R` is itself `RngCore + CryptoRng`, so a
-    /// borrowed RNG works too. Rejection-samples into `[1, n-1]`; only a
-    /// broken RNG can exhaust the retries.
+    /// secure `R: CryptoRng` — the trait from [`rand_core`], re-exported at
+    /// the crate root so you can name the exact version `hiss` compiled
+    /// against. `rand` is **not** a dependency of `hiss`, so a consumer who
+    /// wants to pass `rand::rng()` must add the `rand` crate to their own
+    /// `Cargo.toml`; for deterministic tests, pass a seeded RNG instead. A
+    /// `&mut R` is itself `CryptoRng`, so a borrowed RNG works too.
+    /// Rejection-samples into `[1, n-1]`; only a broken RNG can exhaust the
+    /// retries.
     pub fn generate<RNG>(mut rng: RNG) -> Result<Self, Error>
     where
-        RNG: RngCore + CryptoRng,
+        RNG: CryptoRng,
     {
         let mut bytes = [0; Self::SIZE];
         for _ in 0..Self::MAX_SCALAR_RETRIES {
@@ -189,7 +191,7 @@ mod tests {
         CryptoKeyProviderAsync, DhProviderAsync, EphemeralOnly, ProviderExt, SigningProviderAsync,
     };
     use proptest::prelude::*;
-    use rand::{SeedableRng, rngs::StdRng};
+    use rand::rngs::StdRng;
 
     fn arbitrary_secret_key() -> impl Strategy<Value = P256r1PrivateKey> {
         // Arbitrary bytes are validated as a canonical scalar; the
@@ -257,7 +259,7 @@ mod tests {
     /// [`DhProviderAsync`] trait — sign/verify and ECDH.
     #[tokio::test]
     async fn provider_sign_and_dh() {
-        let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
+        let mut provider = EphemeralOnly::new(rand::make_rng::<StdRng>());
 
         let sk1 = CryptoKeyProviderAsync::<P256>::generate_static_key_async(&mut provider)
             .await

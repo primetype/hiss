@@ -43,9 +43,9 @@ async fn manual_n_replay_matches_snow() {
     use hiss::curve::p256::P256;
     use hiss::provider::EphemeralOnly;
     use hiss::provider::ProviderExt;
-    use rand::{SeedableRng, rngs::StdRng};
+    use rand::rngs::StdRng;
 
-    let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
+    let mut provider = EphemeralOnly::new(rand::make_rng::<StdRng>());
 
     let our_static = provider.generate::<P256>().unwrap();
     let our_static_pub = provider.public(&our_static).unwrap();

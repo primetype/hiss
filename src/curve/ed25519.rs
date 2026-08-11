@@ -51,7 +51,7 @@ use std::fmt;
 
 use cryptoxide::ed25519 as ed;
 use packtool::Packed;
-use rand_core::{CryptoRng, RngCore};
+use rand_core::CryptoRng;
 
 use super::{Curve, SigningCurve};
 
@@ -218,7 +218,7 @@ impl SoftwareEd25519PrivateKey {
     /// The caller supplies the RNG, which must be cryptographically
     /// secure. This makes generation compatible with platform-provided
     /// CSPRNGs and allows reproducible tests with a seeded RNG.
-    pub fn generate<R: RngCore + CryptoRng>(mut rng: R) -> Self {
+    pub fn generate<R: CryptoRng>(mut rng: R) -> Self {
         let mut seed = [0u8; 32];
         rng.fill_bytes(&mut seed);
         Self::from_seed(seed)
@@ -285,7 +285,7 @@ mod tests {
     use crate::provider::{
         CryptoKeyProviderAsync, EphemeralOnly, ProviderExt, SigningProviderAsync,
     };
-    use rand::{SeedableRng, rngs::StdRng};
+    use rand::rngs::StdRng;
 
     // ── Direct API tests ─────────────────────────────────────────
 
@@ -405,7 +405,7 @@ mod tests {
 
     #[tokio::test]
     async fn provider_sign() {
-        let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
+        let mut provider = EphemeralOnly::new(rand::make_rng::<StdRng>());
 
         let sk1 = CryptoKeyProviderAsync::<Ed25519>::generate_static_key_async(&mut provider)
             .await

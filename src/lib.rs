@@ -36,7 +36,7 @@
 //! ```toml
 //! [dependencies]
 //! hiss = "0.2"
-//! rand = "0.9"
+//! rand = "0.10"
 //! ```
 //!
 //! ### 1. Describe the handshake you want
@@ -346,6 +346,10 @@
 //!   Prevents the compiler from eliding zero-fills via
 //!   `ptr::write_volatile` and a compiler fence.
 //!
+//! Plus one re-export, [`rand_core`] — the exact version whose
+//! `CryptoRng` this crate's public bounds name, so a consumer can name it
+//! too.
+//!
 //! Internal modules (not re-exported):
 //!
 //! * `asn1` — Minimal ASN.1 DER reader (and test-only writer) used
@@ -373,6 +377,24 @@ pub mod noise;
 pub mod provider;
 pub mod psk;
 pub mod zeroize;
+
+/// The [`rand_core`] version this crate compiled against, re-exported.
+///
+/// `hiss` names `rand_core`'s traits in its *public* bounds —
+/// [`EphemeralOnly<R>`](provider::EphemeralOnly)'s provider impls,
+/// [`Psk::generate`](psk::Psk::generate), and every
+/// `*PrivateKey::generate` all take an `R: rand_core::CryptoRng`. Those
+/// bounds are only satisfiable by an RNG from the *same* `rand_core`:
+/// two major versions in one dependency graph are two unrelated traits,
+/// with no bridging impl, and the mismatch surfaces as an unsatisfied
+/// `CryptoRng` bound rather than as a version error.
+///
+/// Re-exporting it makes that version nameable — write
+/// `hiss::rand_core::CryptoRng` in your own bounds and you cannot pick
+/// the wrong one. It also tells a consumer which `rand` to reach for
+/// without reading `hiss`'s manifest: `rand_core` 0.10 is what
+/// `rand = "0.10"` carries.
+pub use rand_core;
 
 /// Define a Noise handshake in the specification's own pattern notation
 /// — see the macro's documentation for the DSL and the generated API.

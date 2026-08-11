@@ -168,6 +168,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`rand_core` moved from 0.9 to 0.10 — a breaking change to the public API.**
+  `rand_core`'s traits are named in `hiss`'s public bounds, so this is not an
+  internal dependency bump: an RNG handed to `EphemeralOnly::new`,
+  `Psk::generate` or any `*PrivateKey::generate` must now implement the
+  **0.10** traits. Two `rand_core` majors in one graph are two unrelated
+  traits with no bridging impl, so a consumer still on `rand = "0.9"` gets an
+  unsatisfied `CryptoRng` bound rather than a version error. The fix is
+  `rand = "0.10"`, which is what `cargo add rand` has resolved to since
+  February — the pairing the README advertises was the one a new consumer
+  could *not* get.
+
+  Nothing about the protocol moves: no wire bytes, no protocol name, no
+  handshake hash. The 292 frozen known-answer replays (272 `cacophony` +
+  20 P-256) pass byte-identical, because they are driven by a scripted RNG
+  rather than by `rand`.
+
+  **The bounds simplified while passing through.** 0.10 inverts the trait
+  hierarchy — `CryptoRng: Rng` where 0.9 had `CryptoRng: RngCore` — so the
+  23 sites spelled `RngCore + CryptoRng` (18 `EphemeralOnly` provider impls
+  plus five `generate` constructors) are now plain `R: CryptoRng`. The
+  conjunction was always redundant; this only changes how it is spelled, and
+  `&mut R` still satisfies it via `rand_core`'s `DerefMut` blankets.
+
+  Two call-site renames a consumer will meet in their own code, not in
+  `hiss`'s API: `SeedableRng::from_os_rng()` is removed in favour of
+  `rand::make_rng::<R>()`, and `rand::Rng` — the extension trait — is now
+  `rand::RngExt`. `hiss`'s examples, benchmarks and tests moved with them.
+  Custom RNGs are affected more sharply: `RngCore` survives only as a
+  deprecated method-less stub, so an `impl RngCore for MyRng` no longer
+  compiles at all. Implement `TryRng` with `Error = Infallible` (plus the
+  `TryCryptoRng` marker) and let the blankets supply `Rng`/`CryptoRng` — the
+  shape the test suite's `ScriptedRng` now uses.
+
+- **`hiss::rand_core` — the crate now re-exports the `rand_core` it compiled
+  against.** Public bounds over a foreign trait were previously unnameable: a
+  consumer writing their own generic wrapper around `EphemeralOnly` had to
+  read `hiss`'s manifest to learn which `rand_core` to declare, and getting it
+  wrong surfaced as an unsatisfied trait bound with no mention of versions.
+  Writing `hiss::rand_core::CryptoRng` now makes the mismatch impossible to
+  express. This is the change that would have made the 0.9-vs-0.10 break above
+  diagnosable from the compiler output alone, which is why it lands with it.
+
 - **The `snow` interop suite moved to a new `hiss-interop` crate, and `snow`
   left `[dev-dependencies]`.** Dev-only in effect — no published API, wire
   format or vector changes — but two consequences are worth stating plainly.

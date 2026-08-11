@@ -23,7 +23,7 @@ runs; assembled, they are [`examples/quickstart.rs`](examples/quickstart.rs).
 ```toml
 [dependencies]
 hiss = "0.2"
-rand = "0.9"
+rand = "0.10"
 ```
 
 **1. Describe the handshake you want.** This one is `XX`: three messages, both sides

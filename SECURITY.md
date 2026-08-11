@@ -402,9 +402,11 @@ first, so the tests are non-vacuous).
 dependency of the published crate.
 
 - The software provider is `EphemeralOnly<R>`, owning a **caller-supplied**
-  `R: CryptoRng + RngCore`. **You must supply a cryptographically secure RNG.**
-- With `rand` 0.9, `OsRng` is fallible (`TryRngCore`) and does **not** implement
-  `RngCore`; seed a real CSPRNG, e.g. `StdRng::from_os_rng()`.
+  `R: CryptoRng` (`rand_core` 0.10, re-exported as `hiss::rand_core`).
+  **You must supply a cryptographically secure RNG.**
+- With `rand` 0.10, `SysRng` — the system source — is fallible (`TryRng`, with
+  `Error = SysError`) and so does **not** implement the infallible `CryptoRng`
+  the bound wants; seed a real CSPRNG, e.g. `rand::make_rng::<StdRng>()`.
 - P-256 key generation **rejection-samples** the secret scalar into `[1, n−1]`. On a
   broken RNG it fails with a typed `ScalarSamplingFailed` error after a bounded number
   of retries (per-iteration miss probability `< 2⁻³²`) rather than returning a biased

@@ -52,7 +52,7 @@ So what the gate adds, concretely:
    graph; a consumer gets none of that, and a feature that only ever arrives
    via a dev-dependency surfaces as a build failure only here.
 3. The README quickstart is compiled *and executed* against the exact
-   dependency pairing the README advertises (`hiss` + `rand = "0.9"`).
+   dependency pairing the README advertises (`hiss` + `rand = "0.10"`).
 4. The `# Usage` doctests `noise!` emits are compiled — over four
    patterns chosen to reach every arm of the generator, not just one
    shape: pre-message keys (local and remote), a plain PSK and a

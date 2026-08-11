@@ -44,7 +44,6 @@ use hiss::noise::{Blake2b, ChaChaPoly, HandshakeError, Transport, X25519};
 use hiss::provider::{CryptoKeyProvider, EphemeralOnly, ProviderExt};
 use hiss::psk::Psk;
 
-use rand::SeedableRng;
 use rand::rngs::StdRng;
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
@@ -78,11 +77,11 @@ fn main() -> Result<(), BoxError> {
     // The server's static key pair; its *public* half is pre-shared with
     // the device (Ceremony's `<- s` pre-message). The per-device PSK was
     // established at enrolment time.
-    let mut server_provider = Provider::new(StdRng::from_os_rng());
+    let mut server_provider = Provider::new(rand::make_rng::<StdRng>());
     let server_static = server_provider.generate::<X25519>()?;
     let server_pub = server_provider.public(&server_static)?;
 
-    let mut device_provider = Provider::new(StdRng::from_os_rng());
+    let mut device_provider = Provider::new(rand::make_rng::<StdRng>());
     let device_static = device_provider.generate::<X25519>()?;
     let device_pub = device_provider.public(&device_static)?;
 

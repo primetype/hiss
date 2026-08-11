@@ -22,12 +22,16 @@ console_error_panic_hook = "0.1"
 web-sys = { version = "0.3", features = ["Window", "Storage", "KeyboardEvent"] }
 
 # CSPRNG on wasm: getrandom (wasm_js backend) seeds a ChaCha20 stream.
-# `hiss::provider::EphemeralOnly` wants any `rand_core` CryptoRng + RngCore;
-# rand 0.9's `OsRng` only implements the *fallible* traits, so we seed a
-# `ChaCha20Rng` from `getrandom::fill` instead (see src/noise.rs::make_rng).
-getrandom = { version = "0.3", features = ["wasm_js"] }
-rand_core = "0.9"
-rand_chacha = "0.9"
+# `hiss::provider::EphemeralOnly` wants a `rand_core` 0.10 `CryptoRng` — the
+# *infallible* trait. The system source (`getrandom`/`rand`'s `SysRng`) only
+# implements the fallible `TryRng`, so we seed a `ChaCha20Rng` from
+# `getrandom::fill` instead (see src/noise.rs::make_rng).
+#
+# Keep `rand_core` in lockstep with hiss's own requirement: the trait in
+# hiss's public bounds is only satisfiable from the same major version.
+getrandom = { version = "0.4", features = ["wasm_js"] }
+rand_core = "0.10"
+rand_chacha = "0.10"
 
 # Hex rendering of wire bytes / key fingerprints, and tidy errors.
 hex = "0.4"

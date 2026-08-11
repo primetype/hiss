@@ -88,7 +88,7 @@ hex = "0.4"
 # it, so it is a required (build-time-only) dependency.
 hiss-macros = { version = "0.2.0", path = "hiss-macros" }
 packtool = "0.6"
-rand_core = "0.9"
+rand_core = "0.10"
 thiserror = "2"
 
 [features]
@@ -117,7 +117,7 @@ security-framework-sys = "2.15"
 base64 = "0.23"
 criterion = { version = "0.8.2", features = ["html_reports"] }
 proptest = "1.6"
-rand = "0.9"
+rand = "0.10"
 # Wycheproof / Noise test-vector ingestion (test-only; never in the
 # published crate — see tests/vectors/).
 serde = { version = "1", features = ["derive"] }
