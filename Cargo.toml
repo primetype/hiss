@@ -46,27 +46,36 @@ targets = ["aarch64-apple-darwin"]
 
 
 [dependencies]
-# A caret range, both ends deliberate.
+# Written as an explicit range, both ends deliberate.
 #
-# Lower bound — 0.5.1 is the floor the feature set above needs; nothing in
-# `src/` reaches for anything newer.
+# Lower bound — 0.6.0 is where the API this crate uses arrived, and the
+# reason this is no longer `>=0.5.1, <0.6`. 0.6.0 deleted `src/mac.rs` and
+# the generic `Hmac<D: Digest>`, replaced them with `hmac::Context<A:
+# Algorithm>`, and stopped auto-building the legacy root hashing modules in
+# favour of the `hashing` submodule. `src/noise/hash.rs` and
+# `src/curve/p256/mod.rs` are written against the new shape and do not
+# compile against 0.5.x. Nothing here reaches for anything newer: the files
+# carrying every API this crate touches — `hmac.rs`, `hashing/blake2b.rs`,
+# `hashing/blake2s.rs`, `hashing/sha2/mod.rs`, `chacha20poly1305.rs` — are
+# byte-identical between 0.6.0 and 0.6.2, so 0.6.1 (arm32) and 0.6.2
+# (SHAKE, ML-KEM) buy this crate nothing and are not required.
 #
-# Upper bound — `^0.5.1` means `<0.6`, and that ceiling is load-bearing, not
-# incidental. cryptoxide 0.6 deletes `src/mac.rs` and the `mac` feature
-# outright and replaces the generic `Hmac<D: Digest>` with
-# `hmac::Context<A: Algorithm>`, for which it ships exactly three algorithms:
-# `Sha1`, `Sha256`, `Sha512`. There is no HMAC-BLAKE2 of either width. So
-# crossing this bound costs hiss its own HMAC-BLAKE2: a local marker type per
-# variant plus an `hmac::Algorithm` impl over
-# `cryptoxide::hashing::blake2{b,s}::Context` — local because the orphan rule
-# forbids implementing cryptoxide's trait for cryptoxide's type. Both
-# `Blake2b::hmac` and `Blake2s::hmac` ride on it, and `Blake2b` is the
-# recommended hash.
+# Upper bound — the same ceiling `^0.6.0` already implied (`<0.7.0`),
+# spelled out rather than inferred. Note what it does *not* buy: a breaking
+# change shipped inside the 0.6.x line would still land here, exactly as
+# eccoxide 0.4.3 did. What catches that is `scripts/downstream-build.sh`
+# (a gate — see CLAUDE.md), which resolves hiss with no lockfile the way a
+# consumer does.
 #
-# Widening this bound therefore needs that code written first, plus a green
-# `scripts/downstream-build.sh` behind it — per CLAUDE.md's explicit-range
-# rule, a caret is not by itself protection.
-cryptoxide = { version = "0.5.1", default-features = false, features = ["chacha", "poly1305", "blake2", "sha2", "hmac", "ed25519"] }
+# `hmac` and `sha2` are load-bearing beyond hashing: `hmac` gates the module
+# holding `Algorithm`/`Context`/`Tag`, and `sha2` gates cryptoxide's own
+# HMAC-SHA-256/512 impls (`src/hmac.rs:153-157`). HMAC-BLAKE2 of either
+# width is *not* shipped, so `src/noise/hash.rs` carries local marker types
+# implementing `hmac::Algorithm` over `hashing::blake2{b,s}::Context` —
+# local because the orphan rule forbids implementing cryptoxide's trait for
+# cryptoxide's type. `digest` is deliberately absent: it would restore the
+# deprecated root modules and pull in `alloc` without restoring `mac`.
+cryptoxide = { version = ">=0.6.0, <0.7", default-features = false, features = ["chacha", "poly1305", "blake2", "sha2", "hmac", "ed25519"] }
 # Written as an explicit range, both ends deliberate.
 #
 # Lower bound — a hard API floor, and the reason this is not still `"0.4"`.

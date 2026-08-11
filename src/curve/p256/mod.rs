@@ -30,7 +30,7 @@ mod wycheproof;
 use super::{Curve, DhCurve, SharedSecret, SigningCurve};
 #[cfg(any(target_os = "macos", target_os = "ios", test))]
 use crate::asn1::ASN1Reader;
-use cryptoxide::{digest::Digest as _, sha2::Sha256};
+use cryptoxide::hashing::sha2::Sha256;
 use eccoxide::curve::{
     Sign,
     sec2::p256r1::{FieldElement, Point, PointAffine, Scalar},
@@ -492,10 +492,9 @@ fn point_to_bytes(point: Point) -> [u8; 65] {
 }
 
 pub(crate) fn input_to_scalar(message: impl AsRef<[u8]>) -> Scalar {
-    let mut hash = [0u8; 32];
     let mut context = Sha256::new();
-    context.input(message.as_ref());
-    context.result(&mut hash);
+    context.update_mut(message.as_ref());
+    let hash = context.finalize();
     reduce_be_mod_order(&hash)
 }
 
@@ -538,14 +537,12 @@ const HALF_ORDER: [u8; 32] = [
 
 /// HMAC-SHA256 over the concatenation of `parts`, keyed by `key`.
 fn hmac_sha256(key: &[u8; 32], parts: &[&[u8]]) -> [u8; 32] {
-    use cryptoxide::{hmac::Hmac, mac::Mac};
-    let mut mac = Hmac::new(Sha256::new(), key);
+    use cryptoxide::hmac;
+    let mut mac = hmac::Context::<Sha256>::new(key);
     for part in parts {
-        mac.input(part);
+        mac.update(part);
     }
-    let mut out = [0u8; 32];
-    mac.raw_result(&mut out);
-    out
+    mac.finalize().0
 }
 
 /// Raw ECDSA signing with a supplied nonce `k` (no low-S normalization).
@@ -588,10 +585,9 @@ pub(crate) fn ecdsa_sign_rfc6979_inner(
 
     // h1 = SHA-256(message); e = bits2int(h1) reduced mod n. For P-256 with
     // SHA-256, hlen == qlen == 256, so bits2int is the digest as an integer.
-    let mut h1 = [0u8; 32];
     let mut hasher = Sha256::new();
-    hasher.input(message);
-    hasher.result(&mut h1);
+    hasher.update_mut(message);
+    let h1 = hasher.finalize();
     let e = reduce_be_mod_order(&h1);
     let bits2octets = e.to_bytes(); // int2octets(bits2int(h1) mod n)
 

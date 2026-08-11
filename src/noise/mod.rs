@@ -902,6 +902,64 @@ mod tests {
         assert_ne!(a, b);
     }
 
+    /// HMAC-BLAKE2b over RFC 4231's *inputs* — but the values below are
+    /// **not** standards-body vectors, and must not be presented as such.
+    ///
+    /// No standards body publishes HMAC-BLAKE2 vectors: RFC 7693 defines no
+    /// HMAC, Wycheproof ships no HMAC-BLAKE2 file, and macOS's LibreSSL has
+    /// no BLAKE2 digest at all. So these are cross-generated, and pinned only
+    /// because two implementations independent of `cryptoxide` — Python's
+    /// `hmac` over `hashlib.blake2b`, and RustCrypto's `hmac::SimpleHmac`
+    /// over `blake2::Blake2b512` — agree on every one of them. The recipe was
+    /// validated first against this file's pinned BLAKE2s case-6 value, which
+    /// it reproduced exactly.
+    ///
+    /// These matter more than their BLAKE2s counterparts, because since the
+    /// move to `cryptoxide` 0.6 the RFC 2104 key schedule under them is
+    /// *hiss's own* (`noise::hash`'s private `hmac_blake2` module) rather
+    /// than the library's. `tests/primitive_diag.rs` checks the same code
+    /// against a hand-rolled ipad/opad oracle, but that oracle shares an
+    /// author with the implementation; these do not, so a shared misreading
+    /// of RFC 2104 fails here and passes there.
+    ///
+    /// The broader check on this code path is elsewhere: `mix_key` runs
+    /// `Blake2b::hmac` on every one of the 85 BLAKE2b handshake replays — 68
+    /// in `tests/noise_cacophony.rs` (34 vectors, each in both roles) and 17
+    /// in `tests/noise_kat.rs` — against implementations neither hiss nor
+    /// `snow` wrote.
+    ///
+    /// Cases 1, 2, 3 and 6 of RFC 4231 §4. Case 6's 131-byte key is the only
+    /// one of the four longer than the 128-byte block, so it is the only one
+    /// that reaches the hash-the-key branch of the key schedule — a branch no
+    /// handshake can reach, since `mix_key` always keys with a 64-byte
+    /// chaining key. It is reachable only through the public `Hash` trait.
+    #[test]
+    fn blake2b_hmac_cross_checked() {
+        assert_eq!(
+            hex::encode(Blake2b::hmac(&[0x0b; 20], b"Hi There")),
+            "358a6a184924894fc34bee5680eedf57d84a37bb38832f288e3b27dc63a98cc8\
+             c91e76da476b508bc6b2d408a248857452906e4a20b48c6b4b55d2df0fe1dd24"
+        );
+        assert_eq!(
+            hex::encode(Blake2b::hmac(b"Jefe", b"what do ya want for nothing?")),
+            "6ff884f8ddc2a6586b3c98a4cd6ebdf14ec10204b6710073eb5865ade37a2643\
+             b8807c1335d107ecdb9ffeaeb6828c4625ba172c66379efcd222c2de11727ab4"
+        );
+        assert_eq!(
+            hex::encode(Blake2b::hmac(&[0xaa; 20], &[0xdd; 50])),
+            "f43bc62c7a99353c3b2c60e8ef24fbbd42e9547866dc9c5be4edc6f4a7d4bc0a\
+             c620c2c60034d040f0dbaf86f9e9cd7891a095595eed55e2a996215f0c15c018"
+        );
+        assert_eq!(
+            hex::encode(Blake2b::hmac(
+                &[0xaa; 131],
+                b"Test Using Larger Than Block-Size Key - Hash Key First"
+            )),
+            "a54b2943b2a20227d41ca46c0945af09bc1faefb2f49894c23aebc557fb79c48\
+             89dca74408dc865086667aedee4a3185c53a49c80b814c4c5813ea0c8b38a8f8"
+        );
+    }
+
     /// FIPS 180-4 Appendix B short-message digests — a standards-body
     /// oracle, which the BLAKE2b tests above have no equivalent of.
     #[test]

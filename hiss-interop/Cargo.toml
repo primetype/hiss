@@ -47,9 +47,12 @@ criterion = { version = "0.8.2", features = ["html_reports"] }
 # are hiss's own dependencies, so a test inside hiss could name them without
 # declaring anything; from out here they need spelling. Requirements mirror
 # hiss's exactly so this crate cannot resolve a different version than the
-# code under test.
+# code under test. That mirror now tracks cryptoxide 0.6: hiss moved its floor
+# to 0.6.0 when the `mac` module and the generic `Hmac<D: Digest>` were
+# deleted, and this crate follows even though its own use — the one-shot
+# `ChaCha20Poly1305` in `tests/snow_diag.rs` — is unchanged across that break.
 eccoxide = { version = ">=0.4.3, <0.5", default-features = false, features = ["p256r1", "table"] }
-cryptoxide = { version = "0.5.1", default-features = false, features = ["chacha", "poly1305"] }
+cryptoxide = { version = ">=0.6.0, <0.7", default-features = false, features = ["chacha", "poly1305"] }
 hex = "0.4"
 rand = "0.10"
 # Vector-schema derives and the pretty-printed writes in the generator.

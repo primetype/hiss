@@ -168,6 +168,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`cryptoxide` moved from `>=0.5.1, <0.6` to `>=0.6.0, <0.7`, and `hiss` now
+  carries its own HMAC-BLAKE2.** Consumer-visible as a dependency floor, not as
+  an API change: nothing in `hiss`'s public surface moves, and no `cryptoxide`
+  type appears in any `hiss` signature. A consumer pinning `cryptoxide` 0.5.x
+  elsewhere in their graph now gets two majors of it, or a resolution failure.
+
+  cryptoxide 0.6.0 deleted the `mac` module and the generic `Hmac<D: Digest>`,
+  replacing them with `hmac::Context<A: Algorithm>` — for which it ships
+  `Algorithm` impls covering exactly `Sha1`, `Sha256` and `Sha512`. There is no
+  HMAC-BLAKE2 of either width, and the orphan rule forbids implementing
+  cryptoxide's trait for cryptoxide's type. So `src/noise/hash.rs` now holds a
+  private module with a marker type per BLAKE2 variant, and `hiss` owns the
+  RFC 2104 key schedule behind `Blake2b::hmac` and `Blake2s::hmac` — the key
+  padding, the ipad/opad derivation and the inner/outer contexts — which it
+  previously delegated. `Blake2b` is Noise's recommended hash, so this is the
+  most load-bearing code in the change. HMAC-SHA-256/512 still delegate to
+  cryptoxide; the four `hash`/`hash_two` implementations moved to the
+  `hashing::*` submodules, which is a rename.
+
+  Nothing about the protocol moves: no wire bytes, no protocol name, no
+  handshake hash. The 292 frozen known-answer replays (272 `cacophony` +
+  20 P-256) pass byte-identical, and live interop against `snow` is unchanged
+  across all four hashes.
+
+  **What stands behind it.** RFC 4231 cases 1/2/3/6 for HMAC-SHA-256 and
+  HMAC-SHA-512, the same four inputs cross-generated for HMAC-BLAKE2s, and
+  RFC 6979 A.2.5 for the P-256 HMAC-DRBG, whose digest and HMAC calls moved
+  with everything else. New for this change: `blake2b_hmac_cross_checked`
+  gives HMAC-BLAKE2b the cross-generated coverage BLAKE2s already had —
+  values agreed on by Python's `hmac` over `hashlib.blake2b` and RustCrypto's
+  `hmac::SimpleHmac` over `blake2::Blake2b512`, neither of which shares an
+  author with `hiss`. Its case 6 closes a real gap: a key longer than
+  BLAKE2b's 128-byte block reaches the hash-the-key branch, and **no handshake
+  can get there** — `mix_key` only ever keys HMAC with a 64-byte chaining key,
+  so none of the 292 replays touches it. The branch is reachable only through
+  the public `Hash` trait. `tests/primitive_diag.rs`'s hand-rolled ipad/opad
+  oracle grew a matching 131-byte-key case.
+
+  No MSRV change: cryptoxide's own MSRV is 1.78, well under `hiss`'s 1.96.
+
 - **`rand_core` moved from 0.9 to 0.10 — a breaking change to the public API.**
   `rand_core`'s traits are named in `hiss`'s public bounds, so this is not an
   internal dependency bump: an RNG handed to `EphemeralOnly::new`,

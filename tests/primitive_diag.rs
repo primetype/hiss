@@ -11,27 +11,54 @@
 use hiss::noise::Blake2b;
 use hiss::noise::hash::Hash;
 
-/// Verify our HMAC-BLAKE2b matches a manual ipad/opad implementation
-/// (RFC 2104's construction, written out longhand here as the oracle).
-#[test]
-fn hmac_blake2b_matches_manual_ipad_opad() {
-    let key = b"test-key-for-hmac";
-    let data = b"test-data-for-hmac";
-
-    let our_hmac = Blake2b::hmac(key, data);
-
-    // Manual HMAC using ipad/opad, straight from RFC 2104.
+/// HMAC-BLAKE2b written out longhand from RFC 2104, as an oracle.
+///
+/// Built only from `Blake2b::hash` and `Blake2b::hash_two`, which the 85
+/// BLAKE2b handshake replays pin independently of the key schedule — so this
+/// cannot agree with a broken `Blake2b::hmac` by construction.
+fn manual_hmac_blake2b(key: &[u8], data: &[u8]) -> Vec<u8> {
+    // BLAKE2b's block is 128 bytes. RFC 2104: K' = H(K) when the key is
+    // longer than the block, otherwise K itself; either way zero-padded to
+    // the block by the `vec![]` initialisers below.
     let block_len = 128;
+    let k = if key.len() > block_len {
+        Blake2b::hash(key)
+    } else {
+        key.to_vec()
+    };
+
     let mut ipad = vec![0x36u8; block_len];
     let mut opad = vec![0x5cu8; block_len];
-    for i in 0..key.len() {
-        ipad[i] ^= key[i];
-        opad[i] ^= key[i];
+    for i in 0..k.len() {
+        ipad[i] ^= k[i];
+        opad[i] ^= k[i];
     }
     let inner = Blake2b::hash_two(&ipad, data);
-    let manual_hmac = Blake2b::hash_two(&opad, &inner);
+    Blake2b::hash_two(&opad, &inner)
+}
 
-    assert_eq!(our_hmac, manual_hmac);
+/// Verify our HMAC-BLAKE2b matches a manual ipad/opad implementation
+/// (RFC 2104's construction, written out longhand as the oracle).
+///
+/// Two cases, and the second is the point: a key longer than BLAKE2b's
+/// 128-byte block reaches the hash-the-key branch of the key schedule, which
+/// no Noise handshake can — `mix_key` only ever keys HMAC with a HASHLEN
+/// chaining key (64 bytes), so none of the 292 replays touches it. The
+/// branch is reachable from consumer code through the public `Hash` trait.
+#[test]
+fn hmac_blake2b_matches_manual_ipad_opad() {
+    // Short key: 17 bytes, well under the block.
+    let key = b"test-key-for-hmac";
+    let data = b"test-data-for-hmac";
+    assert_eq!(Blake2b::hmac(key, data), manual_hmac_blake2b(key, data));
+
+    // Long key: 131 bytes, over the 128-byte block, so K' = H(K).
+    let long_key = [0xaa_u8; 131];
+    let long_data = b"Test Using Larger Than Block-Size Key - Hash Key First";
+    assert_eq!(
+        Blake2b::hmac(&long_key, long_data),
+        manual_hmac_blake2b(&long_key, long_data)
+    );
 }
 
 /// Verify eccoxide ECDH against NIST ECCCDH P-256 test vector (Count=0).

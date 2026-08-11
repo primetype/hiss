@@ -365,9 +365,9 @@ dependencies = [
 
 [[package]]
 name = "cryptoxide"
-version = "0.5.3"
+version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "850970a274ad3f4cb46366499c0e1f811aa717ea2514329b1dfee2aa377f68b4"
+checksum = "93f80e26fec88f5ae9450cd5f4e59f5c6421abafc919ea68a3edd521f9580c9b"
 
 [[package]]
 name = "ctr"
