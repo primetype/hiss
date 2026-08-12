@@ -1,8 +1,8 @@
 [workspace]
 members = ["hiss-macros"]
-# The browser playground and the snow interop suite are each their own
-# independent crate/workspace.
-exclude = ["demo", "hiss-interop"]
+# The browser playground, the snow interop suite and the AES-GCM validation
+# lab are each their own independent crate/workspace.
+exclude = ["demo", "hiss-interop", "hiss-aesgcm-lab"]
 
 [package]
 name = "hiss"
@@ -21,12 +21,15 @@ homepage = "https://github.com/primetype/hiss"
 documentation = "https://docs.rs/hiss"
 keywords = ["noise", "handshake", "secure-enclave", "x25519", "keychain"]
 categories = ["cryptography", "network-programming"]
-# `demo/` (browser playground) and `hiss-interop/` (the `snow` comparison
-# suite) are separate, non-published crates that depend on this one by path;
-# `hiss-macros` is published separately. Keep all three out of the packaged
-# crate. NOTE: `demo/` does not currently build — it is generic over pattern
-# and curve, which `noise!` cannot express.
-exclude = ["/demo", "/hiss-macros", "/hiss-interop"]
+# `demo/` (browser playground), `hiss-interop/` (the `snow` comparison suite)
+# and `hiss-aesgcm-lab/` (the AES-GCM validation lab) are separate,
+# non-published crates that depend on this one by path; `hiss-macros` is
+# published separately. Keep all four out of the packaged crate. NOTE: `demo/`
+# does not currently build — it is generic over pattern and curve, which
+# `noise!` cannot express. NOTE: `hiss-aesgcm-lab/` carries a **git**
+# dependency; it must never appear in this manifest's `[dependencies]` or in a
+# root `[patch]`, or hiss stops being publishable.
+exclude = ["/demo", "/hiss-macros", "/hiss-interop", "/hiss-aesgcm-lab"]
 
 # docs.rs builds with every feature and passes `--cfg docsrs`, so the
 # `#[doc(cfg(...))]` feature/platform badges (gated behind

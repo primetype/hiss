@@ -91,6 +91,14 @@ Interop workflow before cutting a release**; it is not a gate and does not
 block, but a red run means the comparison harness — usually a moved `snow` —
 needs attention before the next vector regeneration.
 
+`hiss-aesgcm-lab/` (out-of-workspace, unpublished, own committed lockfile)
+validates Noise AESGCM against an unreleased, `rev`-pinned cryptoxide before
+hiss commits to shipping it. Its workflow (`aesgcm-lab.yml`: weekly cron,
+manual dispatch, no push trigger — the pinned rev cannot move) runs a
+`{ubuntu-latest, macos-latest}` matrix to reach both of cryptoxide's AES
+backends. No gate depends on it, and it is **temporary**: it dissolves into
+hiss when cryptoxide releases AES-GCM. See `hiss-aesgcm-lab/README.md`.
+
 ### MSRV policy
 
 The MSRV is declared in `Cargo.toml` (`rust-version`) and pinned by the `msrv`

@@ -11,3 +11,9 @@ Cargo.lock
 # the same reason; the scheduled Interop run does `cargo update` first so the
 # pin never hides an upstream release.
 !hiss-interop/Cargo.lock
+# `hiss-aesgcm-lab` has the strongest claim of the three: it exists to test one
+# frozen upstream cryptoxide commit, and a `rev`-pinned git dependency without
+# a committed lock re-resolves its transitive graph freely. Its scheduled run
+# deliberately does NOT `cargo update` — that would defeat the pin, which is
+# the whole point of the crate.
+!hiss-aesgcm-lab/Cargo.lock
