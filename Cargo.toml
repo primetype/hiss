@@ -1,11 +1,12 @@
 [workspace]
 members = ["hiss-macros"]
-# The browser playground is its own independent crate/workspace.
-exclude = ["demo"]
+# The browser playground, the snow interop suite and the AES-GCM validation
+# lab are each their own independent crate/workspace.
+exclude = ["demo", "hiss-interop", "hiss-aesgcm-lab"]
 
 [package]
 name = "hiss"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 # MSRV policy: pinned to a recent stable release, floored at `stable - 3` —
 # i.e. bump only once it falls more than three releases behind current
@@ -20,40 +21,93 @@ homepage = "https://github.com/primetype/hiss"
 documentation = "https://docs.rs/hiss"
 keywords = ["noise", "handshake", "secure-enclave", "x25519", "keychain"]
 categories = ["cryptography", "network-programming"]
-# The browser playground (`demo/`) is a separate, non-published crate that
-# depends on this one by path; `hiss-macros` is published separately. Keep
-# both out of the packaged crate.
-exclude = ["/demo", "/hiss-macros"]
+# `demo/` (browser playground), `hiss-interop/` (the `snow` comparison suite)
+# and `hiss-aesgcm-lab/` (the AES-GCM validation lab) are separate,
+# non-published crates that depend on this one by path; `hiss-macros` is
+# published separately. Keep all four out of the packaged crate. NOTE: `demo/`
+# does not currently build — it is generic over pattern and curve, which
+# `noise!` cannot express. NOTE: `hiss-aesgcm-lab/` carries a **git**
+# dependency; it must never appear in this manifest's `[dependencies]` or in a
+# root `[patch]`, or hiss stops being publishable.
+exclude = ["/demo", "/hiss-macros", "/hiss-interop", "/hiss-aesgcm-lab"]
 
-# docs.rs builds with every feature so the `async-io` driver is documented,
-# and passes `--cfg docsrs` so the `#[doc(cfg(...))]` feature/platform badges
-# (gated behind `cfg_attr(docsrs, ...)`) render. Apple-only items still only
-# appear on an Apple target; the default docs.rs (Linux) build omits them.
+# docs.rs builds with every feature and passes `--cfg docsrs`, so the
+# `#[doc(cfg(...))]` feature/platform badges (gated behind
+# `cfg_attr(docsrs, ...)`) render.
+#
+# Apple-only items (`AppleSecureEnclave`, the Secure Enclave provider) do not
+# exist on a Linux build, so the default docs.rs target omits them entirely.
+# Building an Apple target as well puts them in the platform selector; without
+# this the Secure Enclave support is undocumented on docs.rs no matter what the
+# source says. `default-target` is pinned explicitly so adding `targets` does
+# not silently promote the first entry to the default.
 [package.metadata.docs.rs]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
+default-target = "x86_64-unknown-linux-gnu"
+targets = ["aarch64-apple-darwin"]
 
 
 [dependencies]
-cryptoxide = { version = "0.5.1", default-features = false, features = ["chacha", "poly1305", "blake2", "sha2", "hmac", "ed25519"] }
-eccoxide = { version = "0.4", default-features = false, features = ["p256r1", "table", "x25519", "x448"] }
+# Written as an explicit range, both ends deliberate.
+#
+# Lower bound — 0.6.0 is where the API this crate uses arrived, and the
+# reason this is no longer `>=0.5.1, <0.6`. 0.6.0 deleted `src/mac.rs` and
+# the generic `Hmac<D: Digest>`, replaced them with `hmac::Context<A:
+# Algorithm>`, and stopped auto-building the legacy root hashing modules in
+# favour of the `hashing` submodule. `src/noise/hash.rs` and
+# `src/curve/p256/mod.rs` are written against the new shape and do not
+# compile against 0.5.x. Nothing here reaches for anything newer: the files
+# carrying every API this crate touches — `hmac.rs`, `hashing/blake2b.rs`,
+# `hashing/blake2s.rs`, `hashing/sha2/mod.rs`, `chacha20poly1305.rs` — are
+# byte-identical between 0.6.0 and 0.6.2, so 0.6.1 (arm32) and 0.6.2
+# (SHAKE, ML-KEM) buy this crate nothing and are not required.
+#
+# Upper bound — the same ceiling `^0.6.0` already implied (`<0.7.0`),
+# spelled out rather than inferred. Note what it does *not* buy: a breaking
+# change shipped inside the 0.6.x line would still land here, exactly as
+# eccoxide 0.4.3 did. What catches that is `scripts/downstream-build.sh`
+# (a gate — see CLAUDE.md), which resolves hiss with no lockfile the way a
+# consumer does.
+#
+# `hmac` and `sha2` are load-bearing beyond hashing: `hmac` gates the module
+# holding `Algorithm`/`Context`/`Tag`, and `sha2` gates cryptoxide's own
+# HMAC-SHA-256/512 impls (`src/hmac.rs:153-157`). HMAC-BLAKE2 of either
+# width is *not* shipped, so `src/noise/hash.rs` carries local marker types
+# implementing `hmac::Algorithm` over `hashing::blake2{b,s}::Context` —
+# local because the orphan rule forbids implementing cryptoxide's trait for
+# cryptoxide's type. `digest` is deliberately absent: it would restore the
+# deprecated root modules and pull in `alloc` without restoring `mac`.
+cryptoxide = { version = ">=0.6.0, <0.7", default-features = false, features = ["chacha", "poly1305", "blake2", "sha2", "hmac", "ed25519"] }
+# Written as an explicit range, both ends deliberate.
+#
+# Lower bound — a hard API floor, and the reason this is not still `"0.4"`.
+# eccoxide 0.4.3 changed `PointAffine::decompress` from `Option` to the
+# constant-time `CtOption`, so `src/curve/p256/mod.rs` calls `.into_option()`
+# and no longer compiles against 0.4.0–0.4.2.
+#
+# Upper bound — the same ceiling `^0.4` already implied (`<0.5.0`), spelled
+# out rather than inferred. Note what it does *not* buy: 0.4.3 was itself a
+# breaking change shipped in a patch release, so a future 0.4.x could break
+# this crate the same way. What catches that is `scripts/downstream-build.sh`
+# (a gate — see CLAUDE.md), which resolves hiss with no lockfile the way a
+# consumer does. Narrow this to `<0.4.4` if that risk should instead be borne
+# by the requirement, at the cost of needing a hiss release before consumers
+# can pick up any eccoxide 0.4.x fix.
+eccoxide = { version = ">=0.4.3, <0.5", default-features = false, features = ["p256r1", "table", "x25519", "x448"] }
 hex = "0.4"
 # The `noise!` pattern-DSL macro — the built-in patterns are defined with
 # it, so it is a required (build-time-only) dependency.
-hiss-macros = { version = "0.1.0", path = "hiss-macros" }
+hiss-macros = { version = "0.2.0", path = "hiss-macros" }
 packtool = "0.6"
-rand_core = "0.9"
+rand_core = "0.10"
 thiserror = "2"
-# Only pulled in by the `async-io` feature (the `tokio::io` handshake
-# layer). On macOS/iOS tokio is already a non-optional platform dep below
-# (for the Apple Secure Enclave offload); there the feature merely adds
-# `io-util` on top of `rt`.
-tokio = { version = "1.50", default-features = false, optional = true }
 
 [features]
 # X25519's software DH backend defaults to `cryptoxide`'s `x25519`: it
-# benchmarks faster than the `eccoxide` Montgomery ladder (and beats snow in
-# the `noise` bench). Build with `--no-default-features` to fall back to
+# benchmarks faster than the `eccoxide` Montgomery ladder (the cross-library
+# comparison against snow lives in `hiss-interop/benches/comparison.rs`).
+# Build with `--no-default-features` to fall back to
 # `eccoxide` (the ladder shared with X448) — output is byte-for-byte
 # identical, so the choice only affects which dependency carries the
 # primitive. The backends are additive, not mutually exclusive (so
@@ -61,10 +115,6 @@ tokio = { version = "1.50", default-features = false, optional = true }
 # wins.
 default = ["x25519-cryptoxide"]
 x25519-cryptoxide = ["cryptoxide/x25519"]
-# The blocking `std::io` handshake (`io_sync`) is always available and
-# needs no runtime. `async-io` adds the `tokio::io` mirror (`io_async`),
-# pulling in tokio with its I/O extension traits.
-async-io = ["dep:tokio", "tokio/io-util"]
 
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 core-foundation = { version = "0.10", features = [] }
@@ -74,22 +124,16 @@ core-foundation = { version = "0.10", features = [] }
 # empty features in this version, so we don't list them.
 security-framework = { version = "3.5", features = ["OSX_10_15"] }
 security-framework-sys = "2.15"
-# The Secure Enclave / Security-framework calls are synchronous, blocking
-# C FFI. The async `CryptoProvider` impl offloads them to Tokio's blocking
-# thread pool (`spawn_blocking`) so they never block the async executor.
-tokio = { version = "1.50", default-features = false, features = ["rt"] }
 
 [dev-dependencies]
-base64 = "0.22"
+base64 = "0.23"
 criterion = { version = "0.8.2", features = ["html_reports"] }
 proptest = "1.6"
-rand = "0.9"
+rand = "0.10"
 # Wycheproof / Noise test-vector ingestion (test-only; never in the
 # published crate — see tests/vectors/).
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-snow = { version = "0.10.0", features = ["default-resolver", "use-p256", "use-chacha20poly1305", "use-blake2"] }
-tempfile = "3.12"
 tokio = { version = "1.50", features = ["macros", "rt", "rt-multi-thread", "net", "signal", "time", "sync", "io-util", "fs"] }
 # Compile-fail (UI) harness for the `noise!` parser diagnostics
 # (`tests/macro_ui.rs` + `tests/ui/`). Test-only; hosted in the root crate
@@ -103,7 +147,6 @@ harness = false
 
 [[example]]
 name = "tcp_xx_channel"
-required-features = ["async-io"]
 
 [[example]]
 name = "tcp_ikpsk1_ceremony"

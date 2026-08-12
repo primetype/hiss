@@ -40,7 +40,7 @@ use std::fmt;
 
 use eccoxide::protocol::x448;
 use packtool::Packed;
-use rand_core::{CryptoRng, RngCore};
+use rand_core::CryptoRng;
 
 use super::{Curve, DhCurve, SharedSecret};
 
@@ -153,7 +153,7 @@ impl SoftwareX448PrivateKey {
     /// The caller supplies the RNG, which must be cryptographically secure.
     /// This makes generation compatible with platform-provided CSPRNGs and
     /// allows reproducible tests with a seeded RNG.
-    pub fn generate<R: RngCore + CryptoRng>(mut rng: R) -> Self {
+    pub fn generate<R: CryptoRng>(mut rng: R) -> Self {
         let mut secret = [0u8; 56];
         rng.fill_bytes(&mut secret);
         Self { secret }

@@ -1,6 +1,6 @@
 [package]
 name = "hiss-macros"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 # Keep in lockstep with the `hiss` crate's MSRV policy (see ../Cargo.toml).
 rust-version = "1.96"
@@ -20,4 +20,4 @@ proc-macro = true
 [dependencies]
 proc-macro2 = "1"
 quote = "1"
-syn = "2"
+syn = "3"

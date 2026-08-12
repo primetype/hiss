@@ -1,0 +1,83 @@
+name: Interop
+
+# Runs the `snow` cross-implementation suite and the comparison benchmark,
+# both of which live in `hiss-interop/` — an unpublished, out-of-workspace
+# crate that depends on hiss by path. See hiss-interop/README.md.
+#
+# This is a workflow of its own rather than a job in `Check`, for the same
+# reason `Downstream` is: it needs a `schedule:` trigger, and `Check` is the
+# trigger for `Test` and `Coverage` (both `workflow_run: workflows:
+# ["Check"]`), so a cron on `Check` would drag the whole pipeline through a
+# full run on every tick. A separate workflow name is not matched by those
+# filters, so the cron costs exactly the job below.
+#
+# **This is not a release gate.** Nothing here runs under hiss's `cargo test`,
+# and CLAUDE.md's gate table deliberately does not list it. A red run is a
+# finding about this harness or about `snow` — not a hiss regression: hiss's
+# own conformance is pinned by frozen vectors that involve no second
+# implementation at runtime.
+
+on:
+  # `main` only, and deliberately NOT `pull_request`: "occasional" is the
+  # point, and PR runs are what would make this expensive. Pushes to main are
+  # nearly free and bound the blast radius — an API change that breaks the
+  # harness surfaces within one merge rather than up to seven days.
+  push:
+    branches: [main]
+  # What no push to this repo would ever reveal: a new `snow` release. The
+  # scheduled run defeats the committed lockfile on purpose (see below).
+  schedule:
+    - cron: "43 6 * * 1"
+  # The release convention: dispatch this and let it finish before cutting a
+  # release. It does not block one — it is just the moment its answer is worth
+  # most.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: interop-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+defaults:
+  run:
+    working-directory: hiss-interop
+
+jobs:
+  interop:
+    name: snow interop suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+
+      # `hiss-interop/Cargo.lock` is committed, so local and dispatch runs are
+      # reproducible and the comparison bench stays comparable across time.
+      # That would also make the cron blind to snow releases, which is half
+      # the reason the cron exists — so the scheduled run, and only the
+      # scheduled run, resolves fresh first.
+      - name: update dependencies (scheduled runs only)
+        if: github.event_name == 'schedule'
+        run: cargo update
+
+      # Default features: hiss's cryptoxide X25519 backend.
+      - name: cargo test (default features)
+        run: cargo test
+
+      # hiss's eccoxide Montgomery ladder. Run for interop completeness — the
+      # comparison should exercise snow against both of hiss's backends. It is
+      # not what proves the two agree byte-for-byte; that is hiss's own
+      # per-commit matrix (see hiss-interop/README.md).
+      - name: cargo test (eccoxide X25519 ladder)
+        run: cargo test --no-default-features
+
+      # Build-only: benchmark numbers from a shared CI runner are not
+      # meaningful, but a comparison bench that stops compiling is a real
+      # break — and it is the one place the duplicated `*_hiss` macros can
+      # drift away from hiss's own bench.
+      - name: cargo bench --no-run
+        run: cargo bench --no-run

@@ -1,84 +1,62 @@
 //! End-to-end Noise handshake over **X448** (the `448` DH function),
 //! hiss ↔ hiss.
 //!
-//! `snow`'s default resolver has no `448`, so — unlike X25519
-//! ([`snow_interop_25519`]) — there is no cross-implementation interop to run
-//! here. Instead this drives a full **XX** handshake between two hiss parties
+//! `snow`'s default resolver has no `448`, so — unlike X25519, whose
+//! cross-implementation interop lives in `hiss-interop` — there is no such
+//! interop to run here. Instead this drives a full **XX** handshake between two hiss parties
 //! over X448 and confirms the things interop would: both statics are revealed
 //! correctly, the parties agree on the handshake hash (session id), and
 //! transport messages round-trip in both directions. The X448 DH primitive
 //! itself is pinned against the authoritative RFC 7748 known-answer vectors in
 //! `curve::x448`'s unit tests.
 
-mod common;
-use common::PeerStream;
-
-use hiss::noise::*;
+use hiss::noise::{Blake2b, ChaChaPoly, X448};
 use hiss::provider::{EphemeralOnly, ProviderExt};
-use rand::{SeedableRng, rngs::StdRng};
+use rand::rngs::StdRng;
 
 // The bare pattern markers are curve-agnostic; spell the X448 suite out.
-type Xx448 = Noise<pattern::XX, X448, ChaChaPoly, Blake2b>;
+//
+// The declared identifier *is* the Noise pattern name: it becomes
+// `Pattern::NAME`, which goes into the protocol name mixed into the initial
+// handshake hash. So this must be `XX` — a descriptive alias like `Xx448`
+// would silently produce `Noise_Xx448_448_ChaChaPoly_BLAKE2b` and interop
+// with nothing.
+hiss::noise! { pub XX<X448, ChaChaPoly, Blake2b> { -> e <- e, ee, s, es -> s, se } }
 
 #[test]
 fn xx_round_trip_hiss_to_hiss_over_x448() {
-    let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
+    let mut provider = EphemeralOnly::new(rand::make_rng::<StdRng>());
     let initiator_static = provider.generate::<X448>().unwrap();
     let initiator_pub = provider.public(&initiator_static).unwrap();
     let responder_static = provider.generate::<X448>().unwrap();
     let responder_pub = provider.public(&responder_static).unwrap();
 
-    let i_stream = PeerStream::new();
-    let r_stream = PeerStream::new();
-
-    let i_hs = SyncHandshake::<Xx448, Initiator, _, _, _, _>::initiate(
-        EphemeralOnly::new(StdRng::from_os_rng()),
-        &[],
-        i_stream.clone(),
-    );
-    let r_hs = SyncHandshake::<Xx448, Responder, _, _, _, _>::respond(
-        EphemeralOnly::new(StdRng::from_os_rng()),
-        &[],
-        r_stream.clone(),
-    );
+    // XX has no pre-messages, so both constructors are infallible and take
+    // nothing but a provider and the prologue.
+    let i_hs = XX::initiator(EphemeralOnly::new(rand::make_rng::<StdRng>()), &[]);
+    let r_hs = XX::responder(EphemeralOnly::new(rand::make_rng::<StdRng>()), &[]);
 
     // msg1: -> e (bare ephemeral, cipher never keyed)
-    let i_hs = i_hs.e().unwrap();
-    let msg1 = i_stream.take_written();
-    r_stream.feed(&msg1);
-    let (_, recv) = r_hs.recv().e().unwrap();
+    let (msg1, i_hs) = i_hs.write_message_1().unwrap();
+    let r_hs = r_hs.read_message_1(&msg1).unwrap();
 
     // msg2: <- e, ee, s, es (responder's static is sent encrypted, after ee)
-    let r_hs = recv
-        .e()
-        .unwrap()
-        .ee()
-        .unwrap()
-        .s(responder_static)
-        .unwrap()
-        .es()
-        .unwrap();
-    let msg2 = r_stream.take_written();
-    i_stream.feed(&msg2);
+    let (msg2, r_hs) = r_hs.write_message_2(responder_static).unwrap();
 
     // Initiator reads msg2; the `s` reveals the responder static.
-    let (_, recv) = i_hs.recv().e().unwrap();
-    let recv = recv.ee().unwrap();
-    let (revealed_responder, recv) = recv.s().unwrap();
-    assert_eq!(revealed_responder.as_bytes(), responder_pub.as_bytes());
-    let i_hs = recv.es().unwrap();
+    let i_hs = i_hs.read_message_2(&msg2).unwrap();
+    assert_eq!(i_hs.remote_static().as_bytes(), responder_pub.as_bytes());
 
-    // msg3: -> s, se (initiator's static is sent encrypted, after ee)
-    let i_chain = i_hs.s(initiator_static).unwrap().se().unwrap();
-    let (mut i_transport, _) = i_chain.into_parts();
-    let msg3 = i_stream.take_written();
-    r_stream.feed(&msg3);
+    // msg3: -> s, se (initiator's static is sent encrypted, after ee) —
+    // the final message, so writing it yields the transport.
+    let (msg3, mut i_transport) = i_hs.write_message_3(initiator_static).unwrap();
 
     // Responder reads msg3; the `s` reveals the initiator static.
-    let (revealed_initiator, recv) = r_hs.recv().s().unwrap();
-    assert_eq!(revealed_initiator.as_bytes(), initiator_pub.as_bytes());
-    let r_chain = recv.se().unwrap();
-    let (mut r_transport, _) = r_chain.into_parts();
+    let mut r_transport = r_hs.read_message_3(&msg3).unwrap();
+    assert_eq!(
+        r_transport.remote_static().unwrap().as_bytes(),
+        initiator_pub.as_bytes(),
+    );
 
     // Both sides derived the same handshake hash.
     assert_eq!(

@@ -1,17 +1,16 @@
-//! Shared per-token crypto for the handshake drivers.
+//! Shared per-token crypto for the handshake.
 //!
 //! These provider-driven free functions perform the Noise per-token
-//! cryptography on the runtime [`HandshakeInner`] state. The async
-//! driver (`AsyncHandshake` (feature `async-io`)) and the
-//! internal seal helpers ([`seal`](super::seal)) call them directly; the
-//! blocking driver ([`SyncHandshake`](super::io_sync::SyncHandshake))
-//! reuses the provider-free helpers here (`recv_e`/`recv_s`/`send_s`/
-//! `send_payload`/`recv_payload`/`do_psk`/`recv_to_transport`) and has
-//! its own synchronous mirrors of the DH/ephemeral steps that call the
-//! provider.
+//! cryptography on the runtime [`HandshakeInner`] state. The internal
+//! Apple seal helpers ([`seal`](super::seal)) call them directly; the
+//! state machines [`noise!`](crate::noise!) generates reuse the
+//! provider-free helpers here (`recv_e`/`recv_s`/`send_s`/
+//! `send_payload`/`recv_payload`/`do_psk`/`recv_to_transport`) through
+//! [`support`](super::support), which carries its own synchronous
+//! mirrors of the DH/ephemeral steps that call the provider.
 //!
 //! Each function reads/writes the borrowed [`SendBuffer`]/[`RecvBuffer`]
-//! scratch the driver hands it, and threads the symmetric state forward.
+//! scratch its caller hands it, and threads the symmetric state forward.
 //! Role-dependent DH tokens (`Es`, `Se`) have separate
 //! initiator/responder functions.
 //!
@@ -25,8 +24,8 @@
 //! dropped** — it must never be reused or the failed step retried.
 //! Continuing would silently diverge the transcript from the peer and
 //! could undermine the security of the session. This invariant is not
-//! re-checked at runtime; it is enforced only by ownership (the drivers
-//! own the handshake and tear it down on the first error).
+//! re-checked at runtime; it is enforced only by ownership (every token
+//! method consumes the handshake, so a failed step drops it).
 
 use super::Protocol;
 use super::buffers::{RecvBuffer, SendBuffer};
@@ -37,12 +36,12 @@ use super::hash::Hash;
 use super::role::Role;
 use super::transport::Transport;
 use crate::curve::Curve;
-// `DhCurve`/`DhProviderAsync` are used only by the DH free functions below,
-// which are gated to the async driver and/or the Apple seal helpers.
-#[cfg(any(feature = "async-io", target_os = "macos", target_os = "ios", test))]
+// `DhCurve`/`DhProviderAsync` are used only by the async DH free functions
+// below, which are gated to the Apple seal helpers.
+#[cfg(any(target_os = "macos", target_os = "ios", test))]
 use crate::curve::DhCurve;
 use crate::provider::CryptoKeyProvider;
-#[cfg(any(feature = "async-io", target_os = "macos", target_os = "ios", test))]
+#[cfg(any(target_os = "macos", target_os = "ios", test))]
 use crate::provider::DhProviderAsync;
 
 // ═══════════════════════════════════════════════════════════════
@@ -50,8 +49,8 @@ use crate::provider::DhProviderAsync;
 // ═══════════════════════════════════════════════════════════════
 //
 // The Noise spec requires calling EncryptAndHash(payload) after
-// processing all tokens in each handshake message. The classic drivers
-// and the seal helpers always pass the empty payload, whose tail is a
+// processing all tokens in each handshake message. A message with no
+// declared payload passes the empty one, whose tail is a
 // bare TAG_SIZE-byte authentication tag once the cipher is keyed; the
 // macro-generated states thread a message's declared `[N]` application
 // payload through the same call, so exactly one encrypt-and-hash closes
@@ -118,8 +117,8 @@ where
 
 /// Split the symmetric state into the post-handshake [`Transport`].
 ///
-/// Called by both drivers (and the seal helpers) once the final token
-/// of the last message has been processed.
+/// Called by the generated state machines (and the seal helpers) once
+/// the final token of the last message has been processed.
 pub(crate) fn recv_to_transport<Proto, R, CP>(
     inner: HandshakeInner<Proto::Curve, Proto::Cipher, Proto::Hash, CP>,
 ) -> Transport<Proto>
@@ -144,10 +143,10 @@ where
 //  Shared token logic
 // ═══════════════════════════════════════════════════════════════
 
-// `send_e` is consumed by the async driver (`io_async`) and the Apple seal
-// helpers (`seal`); the sync driver has its own `sync_send_e`. Gate it to the
-// union of those callers so a default non-Apple build carries no dead code.
-#[cfg(any(feature = "async-io", target_os = "macos", target_os = "ios", test))]
+// This async `send_e` is consumed by the Apple seal helpers (`seal`);
+// `support` carries the synchronous mirror the generated state machines use.
+// Gate it to those callers so a default non-Apple build carries no dead code.
+#[cfg(any(target_os = "macos", target_os = "ios", test))]
 pub(crate) async fn send_e<Cu, Ci, H, CP>(
     inner: &mut HandshakeInner<Cu, Ci, H, CP>,
     buffer: &mut SendBuffer<'_>,
@@ -278,41 +277,9 @@ where
     Ok(revealed)
 }
 
-// `do_ee` / `do_se_*` / `do_ss` are consumed only by the async driver
-// (`io_async`); the sync driver mirrors the DH steps itself. Gate them to the
-// async-io feature so a default build does not carry dead code. (`do_es_*`
-// below get a wider gate — the seal helpers use them too.)
-#[cfg(feature = "async-io")]
-pub(crate) async fn do_ee<Cu, Ci, H, CP>(
-    inner: &mut HandshakeInner<Cu, Ci, H, CP>,
-) -> Result<(), HandshakeError>
-where
-    Cu: DhCurve,
-    Cu::SharedSecret: AsRef<[u8]>,
-    Ci: Cipher,
-    H: Hash,
-    CP: DhProviderAsync<Cu>,
-{
-    let e = inner
-        .e
-        .as_ref()
-        .ok_or(HandshakeError::MissingEphemeralKey)?;
-    let re = inner
-        .re
-        .as_ref()
-        .ok_or(HandshakeError::MissingRemoteEphemeral)?;
-    let ss = inner
-        .provider
-        .dh_async(e, re)
-        .await
-        .map_err(|e| HandshakeError::Crypto(Box::new(e)))?;
-    inner.symmetric.mix_key(ss.as_ref());
-    Ok(())
-}
-
-// `do_es_*` are consumed by the async driver AND the Apple seal helpers, so
-// gate them to the union of those callers (not just async-io).
-#[cfg(any(feature = "async-io", target_os = "macos", target_os = "ios", test))]
+// `do_es_*` are consumed by the Apple seal helpers only, now that the async
+// driver is gone; `test` keeps them reachable off-platform.
+#[cfg(any(target_os = "macos", target_os = "ios", test))]
 pub(crate) async fn do_es_initiator<Cu, Ci, H, CP>(
     inner: &mut HandshakeInner<Cu, Ci, H, CP>,
 ) -> Result<(), HandshakeError>
@@ -340,7 +307,7 @@ where
     Ok(())
 }
 
-#[cfg(any(feature = "async-io", target_os = "macos", target_os = "ios", test))]
+#[cfg(any(target_os = "macos", target_os = "ios", test))]
 pub(crate) async fn do_es_responder<Cu, Ci, H, CP>(
     inner: &mut HandshakeInner<Cu, Ci, H, CP>,
 ) -> Result<(), HandshakeError>
@@ -359,84 +326,6 @@ where
     let ss = inner
         .provider
         .dh_async(s, re)
-        .await
-        .map_err(|e| HandshakeError::Crypto(Box::new(e)))?;
-    inner.symmetric.mix_key(ss.as_ref());
-    Ok(())
-}
-
-#[cfg(feature = "async-io")]
-pub(crate) async fn do_se_initiator<Cu, Ci, H, CP>(
-    inner: &mut HandshakeInner<Cu, Ci, H, CP>,
-) -> Result<(), HandshakeError>
-where
-    Cu: DhCurve,
-    Cu::SharedSecret: AsRef<[u8]>,
-    Ci: Cipher,
-    H: Hash,
-    CP: DhProviderAsync<Cu>,
-{
-    let s = inner.s.as_ref().ok_or(HandshakeError::MissingStaticKey)?;
-    let re = inner
-        .re
-        .as_ref()
-        .ok_or(HandshakeError::MissingRemoteEphemeral)?;
-    let ss = inner
-        .provider
-        .dh_async(s, re)
-        .await
-        .map_err(|e| HandshakeError::Crypto(Box::new(e)))?;
-    inner.symmetric.mix_key(ss.as_ref());
-    Ok(())
-}
-
-#[cfg(feature = "async-io")]
-pub(crate) async fn do_se_responder<Cu, Ci, H, CP>(
-    inner: &mut HandshakeInner<Cu, Ci, H, CP>,
-) -> Result<(), HandshakeError>
-where
-    Cu: DhCurve,
-    Cu::SharedSecret: AsRef<[u8]>,
-    Ci: Cipher,
-    H: Hash,
-    CP: DhProviderAsync<Cu>,
-{
-    let e = inner
-        .e
-        .as_ref()
-        .ok_or(HandshakeError::MissingEphemeralKey)?;
-    let rs = inner
-        .rs
-        .as_ref()
-        .ok_or(HandshakeError::MissingRemoteStatic)?;
-    let ss = inner
-        .provider
-        .dh_async(e, rs)
-        .await
-        .map_err(|e| HandshakeError::Crypto(Box::new(e)))?;
-    inner.symmetric.mix_key(ss.as_ref());
-    Ok(())
-}
-
-#[cfg(feature = "async-io")]
-pub(crate) async fn do_ss<Cu, Ci, H, CP>(
-    inner: &mut HandshakeInner<Cu, Ci, H, CP>,
-) -> Result<(), HandshakeError>
-where
-    Cu: DhCurve,
-    Cu::SharedSecret: AsRef<[u8]>,
-    Ci: Cipher,
-    H: Hash,
-    CP: DhProviderAsync<Cu>,
-{
-    let s = inner.s.as_ref().ok_or(HandshakeError::MissingStaticKey)?;
-    let rs = inner
-        .rs
-        .as_ref()
-        .ok_or(HandshakeError::MissingRemoteStatic)?;
-    let ss = inner
-        .provider
-        .dh_async(s, rs)
         .await
         .map_err(|e| HandshakeError::Crypto(Box::new(e)))?;
     inner.symmetric.mix_key(ss.as_ref());

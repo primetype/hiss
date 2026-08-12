@@ -2,15 +2,13 @@
 //!
 //! Where `src/noise/mod.rs` has hand-picked single-corruption tests, this
 //! file sweeps the adversarial space deterministically (via the
-//! [`ScriptedRng`] ephemeral-injection harness) across all eleven supported
-//! patterns:
+//! [`ScriptedRng`] ephemeral-injection harness) across the eleven patterns
+//! swept here:
 //!
 //! * **tamper** — flip *every* byte of *every* handshake message → the
 //!   receiver must reject (invalid curve point at the `e` token, or an
 //!   AEAD tag failure once the diverged transcript hash / DH feeds a
 //!   keyed token);
-//! * **truncation / wrong length** — *every* prefix length (and an
-//!   over-long message) → rejected by the message-length check;
 //! * **transport tamper** — flip *every* byte of a transport ciphertext
 //!   → `DecryptionFailed`;
 //! * **nonce sequencing** — replayed and out-of-order transport messages
@@ -20,30 +18,48 @@
 //! Each driver runs a full hiss↔hiss handshake; the sender side is
 //! deterministic (fixed statics + scripted ephemerals) so a failure
 //! pinpoints the exact pattern/message/byte.
+//!
+//! # What happened to the truncation sweeps
+//!
+//! This file used to sweep every truncated prefix and an over-long variant
+//! of every handshake message, asserting each was rejected at run time.
+//! Those sweeps are gone, and **not** because the property stopped
+//! mattering — because it stopped being expressible.
+//!
+//! `read_message_N` takes `&[u8; MSGn_SIZE]`. A short or long buffer is not
+//! a value the function can be handed: it is a type error at the call site,
+//! caught at compile time rather than rejected at run time. There is no way
+//! to write the old assertion, and a test that constructed the array anyway
+//! would only be exercising its own harness.
+//!
+//! The property is now pinned where it lives — as a `compile_fail` doctest
+//! on [`hiss::noise!`] proving a wrong-length buffer does not compile.
+//! Length checking on the wire has moved to the caller, which reads exactly
+//! `MSGn_SIZE` bytes because that constant is what framing is for.
 
 mod common;
-use common::{PeerStream, ScriptedRng, private_key, public_key};
+use common::{ScriptedRng, private_key, public_key};
 
 use hiss::noise::*;
 use hiss::provider::EphemeralOnly;
 use hiss::psk::Psk;
 use rand::{SeedableRng, rngs::StdRng};
 
-// Each case below exercises one Noise pattern over the crate's default suite.
-// The public API has no suite-bound aliases — `N`, `XX`, … are *patterns*
-// (under `noise::pattern`), not whole `Noise<P, Cu, Ci, H>` protocols — so the
-// full protocol is bound locally, one per pattern, named for the pattern tested.
-type N = Noise<pattern::N, P256, ChaChaPoly, Blake2b>;
-type K = Noise<pattern::K, P256, ChaChaPoly, Blake2b>;
-type Kpsk0 = Noise<pattern::Kpsk0, P256, ChaChaPoly, Blake2b>;
-type IKpsk1 = Noise<pattern::IKpsk1, P256, ChaChaPoly, Blake2b>;
-type IK = Noise<pattern::IK, P256, ChaChaPoly, Blake2b>;
-type NK = Noise<pattern::NK, P256, ChaChaPoly, Blake2b>;
-type IX = Noise<pattern::IX, P256, ChaChaPoly, Blake2b>;
-type XK = Noise<pattern::XK, P256, ChaChaPoly, Blake2b>;
-type NN = Noise<pattern::NN, P256, ChaChaPoly, Blake2b>;
-type XX = Noise<pattern::XX, P256, ChaChaPoly, Blake2b>;
-type X = Noise<pattern::X, P256, ChaChaPoly, Blake2b>;
+// One `noise!` declaration per pattern, over the crate's default suite. The
+// declared identifier is the Noise pattern name (it reaches the protocol
+// name mixed into the initial handshake hash), so these are the canonical
+// spellings.
+hiss::noise! { pub N<P256, ChaChaPoly, Blake2b>      { <- s ... -> e, es } }
+hiss::noise! { pub K<P256, ChaChaPoly, Blake2b>      { -> s <- s ... -> e, es, ss } }
+hiss::noise! { pub Kpsk0<P256, ChaChaPoly, Blake2b>  { -> s <- s ... -> psk, e, es, ss } }
+hiss::noise! { pub IKpsk1<P256, ChaChaPoly, Blake2b> { <- s ... -> e, es, s, ss, psk <- e, ee, se } }
+hiss::noise! { pub IK<P256, ChaChaPoly, Blake2b>     { <- s ... -> e, es, s, ss <- e, ee, se } }
+hiss::noise! { pub NK<P256, ChaChaPoly, Blake2b>     { <- s ... -> e, es <- e, ee } }
+hiss::noise! { pub IX<P256, ChaChaPoly, Blake2b>     { -> e, s <- e, ee, se, s, es } }
+hiss::noise! { pub XK<P256, ChaChaPoly, Blake2b>     { <- s ... -> e, es <- e, ee -> s, se } }
+hiss::noise! { pub NN<P256, ChaChaPoly, Blake2b>     { -> e <- e, ee } }
+hiss::noise! { pub XX<P256, ChaChaPoly, Blake2b>     { -> e <- e, ee, s, es -> s, se } }
+hiss::noise! { pub X<P256, ChaChaPoly, Blake2b>      { <- s ... -> e, es, s, ss } }
 
 // Fixed inputs — distinct values per role; all valid P-256 scalars.
 const INIT_STATIC: [u8; 32] = [0xA1; 32];
@@ -52,502 +68,307 @@ const RESP_STATIC: [u8; 32] = [0xC3; 32];
 const RESP_EPHEMERAL: [u8; 32] = [0xD4; 32];
 const PSK_BYTES: [u8; 32] = [0xE5; 32];
 
-// On-wire handshake-message sizes (65-byte ephemeral / encrypted static,
-// 16-byte AEAD tags).
-const ONE_MSG: usize = 81; // N / K / Kpsk0 msg1
-const IK_MSG1: usize = 162; // IK / IKpsk1 msg1: e + encrypted s + tags
-const IK_MSG2: usize = 81; // IK / IKpsk1 msg2: e + tag
-const NK_MSG1: usize = 81; // NK msg1: e + es (keys cipher) + tag
-const NK_MSG2: usize = 81; // NK msg2: e + ee + tag
-const IX_MSG1: usize = 130; // IX msg1: e + s (both plaintext, no DH yet)
-const IX_MSG2: usize = 162; // IX msg2: e + ee/se key cipher + encrypted s + es + tag
-const XK_MSG1: usize = 81; // XK msg1: e + es (keys cipher) + tag
-const XK_MSG2: usize = 81; // XK msg2: e + ee (keyed) + tag
-const XK_MSG3: usize = 97; // XK msg3: encrypted s (keyed) + se + tag
-const NN_MSG1: usize = 65; // NN msg1: bare e (cipher never keyed → no tag)
-const NN_MSG2: usize = 81; // NN msg2: e + ee (keys cipher) + tag
-const XX_MSG1: usize = 65; // XX msg1: bare e (cipher never keyed → no tag)
-const XX_MSG2: usize = 162; // XX msg2: e + ee keys cipher + encrypted s + es + tag
-const XX_MSG3: usize = 97; // XX msg3: encrypted s (keyed) + se + tag
-const X_MSG1: usize = 162; // X msg1: e + es (keys cipher) + encrypted s + ss + tag
-
 /// Transform applied to a handshake message before the peer reads it.
-type Xform<'a> = dyn Fn(usize, Vec<u8>) -> Vec<u8> + 'a;
+///
+/// In place, over the fixed-size array the writer produced: on this API a
+/// message cannot change length, so only its bytes are in play.
+type Xform<'a> = dyn Fn(usize, &mut [u8]) + 'a;
 
-fn identity(_: usize, m: Vec<u8>) -> Vec<u8> {
-    m
-}
+fn identity(_: usize, _: &mut [u8]) {}
 
-fn flip(mut m: Vec<u8>, byte: usize) -> Vec<u8> {
+fn flip(m: &mut [u8], byte: usize) {
     m[byte] ^= 0xFF;
-    m
 }
 
 // ── Per-pattern handshake drivers ────────────────────────────────
 //
 // Sender steps `.unwrap()` (must succeed — only the wire bytes are
-// attacked, never the sender); receiver steps `?` so any rejection
+// attacked, never the sender); receiver steps `map_err` so any rejection
 // surfaces as `Err(())`.
 
-/// Confirm both endpoints consumed exactly what they were fed; leftover
-/// bytes mean an over-long (trailing-garbage) message desynced the
-/// stream.
-fn fully_drained(a: &PeerStream, b: &PeerStream) -> Result<(), ()> {
-    if a.remaining() == 0 && b.remaining() == 0 {
-        Ok(())
-    } else {
-        Err(())
-    }
-}
-
 fn run_n(xform: &Xform<'_>) -> Result<(), ()> {
-    let i_stream = PeerStream::new();
-    let i = SyncHandshake::<N, Initiator, _, _, _, _>::initiate(
+    let (mut msg1, _i_t) = N::initiator(
         EphemeralOnly::new(ScriptedRng::new(&[&INIT_EPHEMERAL])),
         &[],
-        i_stream.clone(),
+        public_key(&RESP_STATIC),
     )
-    .set_rs(public_key(&RESP_STATIC));
-    let _ = i.e().unwrap().es().unwrap();
-    let msg1 = xform(0, i_stream.take_written());
+    .write_message_1()
+    .unwrap();
+    xform(0, &mut msg1);
 
-    let r_stream = PeerStream::new();
-    r_stream.feed(&msg1);
-    let r = SyncHandshake::<N, Responder, _, _, _, _>::respond(
+    N::responder(
         EphemeralOnly::new(StdRng::seed_from_u64(1)),
         &[],
-        r_stream.clone(),
+        private_key(&RESP_STATIC),
     )
-    .set_s(private_key(&RESP_STATIC))
+    .map_err(|_| ())?
+    .read_message_1(&msg1)
     .map_err(|_| ())?;
-    let (_, recv) = r.recv().e().map_err(|_| ())?;
-    recv.es().map_err(|_| ())?;
-    fully_drained(&i_stream, &r_stream)
+    Ok(())
 }
 
 fn run_k(xform: &Xform<'_>) -> Result<(), ()> {
-    let i_stream = PeerStream::new();
-    let i = SyncHandshake::<K, Initiator, _, _, _, _>::initiate(
+    let (mut msg1, _i_t) = K::initiator(
         EphemeralOnly::new(ScriptedRng::new(&[&INIT_EPHEMERAL])),
         &[],
-        i_stream.clone(),
+        private_key(&INIT_STATIC),
+        public_key(&RESP_STATIC),
     )
-    .set_s(private_key(&INIT_STATIC))
     .unwrap()
-    .set_rs(public_key(&RESP_STATIC));
-    let _ = i.e().unwrap().es().unwrap().ss().unwrap();
-    let msg1 = xform(0, i_stream.take_written());
+    .write_message_1()
+    .unwrap();
+    xform(0, &mut msg1);
 
-    let r_stream = PeerStream::new();
-    r_stream.feed(&msg1);
-    let r = SyncHandshake::<K, Responder, _, _, _, _>::respond(
+    K::responder(
         EphemeralOnly::new(StdRng::seed_from_u64(2)),
         &[],
-        r_stream.clone(),
+        public_key(&INIT_STATIC),
+        private_key(&RESP_STATIC),
     )
-    .set_rs(public_key(&INIT_STATIC))
-    .set_s(private_key(&RESP_STATIC))
+    .map_err(|_| ())?
+    .read_message_1(&msg1)
     .map_err(|_| ())?;
-    let (_, recv) = r.recv().e().map_err(|_| ())?;
-    recv.es().map_err(|_| ())?.ss().map_err(|_| ())?;
-    fully_drained(&i_stream, &r_stream)
+    Ok(())
 }
 
 fn run_kpsk0(xform: &Xform<'_>) -> Result<(), ()> {
     let psk = Psk::from_bytes(PSK_BYTES);
-    let i_stream = PeerStream::new();
-    let i = SyncHandshake::<Kpsk0, Initiator, _, _, _, _>::initiate(
+    let (mut msg1, _i_t) = Kpsk0::initiator(
         EphemeralOnly::new(ScriptedRng::new(&[&INIT_EPHEMERAL])),
         &[],
-        i_stream.clone(),
+        private_key(&INIT_STATIC),
+        public_key(&RESP_STATIC),
     )
-    .set_s(private_key(&INIT_STATIC))
     .unwrap()
-    .set_rs(public_key(&RESP_STATIC));
-    let _ = i
-        .psk(&psk)
-        .unwrap()
-        .e()
-        .unwrap()
-        .es()
-        .unwrap()
-        .ss()
-        .unwrap();
-    let msg1 = xform(0, i_stream.take_written());
+    .write_message_1(&psk)
+    .unwrap();
+    xform(0, &mut msg1);
 
-    let r_stream = PeerStream::new();
-    r_stream.feed(&msg1);
-    let r = SyncHandshake::<Kpsk0, Responder, _, _, _, _>::respond(
+    Kpsk0::responder(
         EphemeralOnly::new(StdRng::seed_from_u64(3)),
         &[],
-        r_stream.clone(),
+        public_key(&INIT_STATIC),
+        private_key(&RESP_STATIC),
     )
-    .set_rs(public_key(&INIT_STATIC))
-    .set_s(private_key(&RESP_STATIC))
+    .map_err(|_| ())?
+    .read_message_1(&msg1, &psk)
     .map_err(|_| ())?;
-    let recv = r.recv().psk(&psk).map_err(|_| ())?;
-    let (_, recv) = recv.e().map_err(|_| ())?;
-    recv.es().map_err(|_| ())?.ss().map_err(|_| ())?;
-    fully_drained(&i_stream, &r_stream)
+    Ok(())
 }
 
 fn run_ikpsk1(xform: &Xform<'_>) -> Result<(), ()> {
     let psk = Psk::from_bytes(PSK_BYTES);
-    let i_stream = PeerStream::new();
-    let i = SyncHandshake::<IKpsk1, Initiator, _, _, _, _>::initiate(
+    let (mut msg1, i_hs) = IKpsk1::initiator(
         EphemeralOnly::new(ScriptedRng::new(&[&INIT_EPHEMERAL])),
         &[],
-        i_stream.clone(),
+        public_key(&RESP_STATIC),
     )
-    .set_rs(public_key(&RESP_STATIC));
-    let i = i
-        .e()
-        .unwrap()
-        .es()
-        .unwrap()
-        .s(private_key(&INIT_STATIC))
-        .unwrap()
-        .ss()
-        .unwrap()
-        .psk(&psk)
-        .unwrap();
-    let msg1 = xform(0, i_stream.take_written());
+    .write_message_1(private_key(&INIT_STATIC), &psk)
+    .unwrap();
+    xform(0, &mut msg1);
 
-    // Responder reads msg1.
-    let r_stream = PeerStream::new();
-    r_stream.feed(&msg1);
-    let r = SyncHandshake::<IKpsk1, Responder, _, _, _, _>::respond(
+    let r_hs = IKpsk1::responder(
         EphemeralOnly::new(ScriptedRng::new(&[&RESP_EPHEMERAL])),
         &[],
-        r_stream.clone(),
+        private_key(&RESP_STATIC),
     )
-    .set_s(private_key(&RESP_STATIC))
+    .map_err(|_| ())?
+    .read_message_1(&msg1, &psk)
     .map_err(|_| ())?;
-    let (_, recv) = r.recv().e().map_err(|_| ())?;
-    let recv = recv.es().map_err(|_| ())?;
-    let (_, recv) = recv.s().map_err(|_| ())?;
-    let recv = recv.ss().map_err(|_| ())?;
-    let r = recv.psk(&psk).map_err(|_| ())?;
 
-    // Responder sends msg2 (genuine).
-    let _ = r.e().unwrap().ee().unwrap().se().unwrap();
-    let msg2 = xform(1, r_stream.take_written());
+    let (mut msg2, _r_t) = r_hs.write_message_2().unwrap();
+    xform(1, &mut msg2);
 
-    // Initiator reads msg2.
-    i_stream.feed(&msg2);
-    let (_, recv) = i.recv().e().map_err(|_| ())?;
-    recv.ee().map_err(|_| ())?.se().map_err(|_| ())?;
-    fully_drained(&i_stream, &r_stream)
+    i_hs.read_message_2(&msg2).map_err(|_| ())?;
+    Ok(())
 }
 
 fn run_ik(xform: &Xform<'_>) -> Result<(), ()> {
-    let i_stream = PeerStream::new();
-    let i = SyncHandshake::<IK, Initiator, _, _, _, _>::initiate(
+    let (mut msg1, i_hs) = IK::initiator(
         EphemeralOnly::new(ScriptedRng::new(&[&INIT_EPHEMERAL])),
         &[],
-        i_stream.clone(),
+        public_key(&RESP_STATIC),
     )
-    .set_rs(public_key(&RESP_STATIC));
-    let i = i
-        .e()
-        .unwrap()
-        .es()
-        .unwrap()
-        .s(private_key(&INIT_STATIC))
-        .unwrap()
-        .ss()
-        .unwrap();
-    let msg1 = xform(0, i_stream.take_written());
+    .write_message_1(private_key(&INIT_STATIC))
+    .unwrap();
+    xform(0, &mut msg1);
 
-    // Responder reads msg1.
-    let r_stream = PeerStream::new();
-    r_stream.feed(&msg1);
-    let r = SyncHandshake::<IK, Responder, _, _, _, _>::respond(
+    let r_hs = IK::responder(
         EphemeralOnly::new(ScriptedRng::new(&[&RESP_EPHEMERAL])),
         &[],
-        r_stream.clone(),
+        private_key(&RESP_STATIC),
     )
-    .set_s(private_key(&RESP_STATIC))
+    .map_err(|_| ())?
+    .read_message_1(&msg1)
     .map_err(|_| ())?;
-    let (_, recv) = r.recv().e().map_err(|_| ())?;
-    let recv = recv.es().map_err(|_| ())?;
-    let (_, recv) = recv.s().map_err(|_| ())?;
-    let r = recv.ss().map_err(|_| ())?;
 
-    // Responder sends msg2 (genuine).
-    let _ = r.e().unwrap().ee().unwrap().se().unwrap();
-    let msg2 = xform(1, r_stream.take_written());
+    let (mut msg2, _r_t) = r_hs.write_message_2().unwrap();
+    xform(1, &mut msg2);
 
-    // Initiator reads msg2.
-    i_stream.feed(&msg2);
-    let (_, recv) = i.recv().e().map_err(|_| ())?;
-    recv.ee().map_err(|_| ())?.se().map_err(|_| ())?;
-    fully_drained(&i_stream, &r_stream)
+    i_hs.read_message_2(&msg2).map_err(|_| ())?;
+    Ok(())
 }
 
 fn run_nk(xform: &Xform<'_>) -> Result<(), ()> {
-    // NK initiator is anonymous: no static, responder static known.
-    let i_stream = PeerStream::new();
-    let i = SyncHandshake::<NK, Initiator, _, _, _, _>::initiate(
+    let (mut msg1, i_hs) = NK::initiator(
         EphemeralOnly::new(ScriptedRng::new(&[&INIT_EPHEMERAL])),
         &[],
-        i_stream.clone(),
+        public_key(&RESP_STATIC),
     )
-    .set_rs(public_key(&RESP_STATIC));
-    let i = i.e().unwrap().es().unwrap();
-    let msg1 = xform(0, i_stream.take_written());
+    .write_message_1()
+    .unwrap();
+    xform(0, &mut msg1);
 
-    // Responder reads msg1.
-    let r_stream = PeerStream::new();
-    r_stream.feed(&msg1);
-    let r = SyncHandshake::<NK, Responder, _, _, _, _>::respond(
+    let r_hs = NK::responder(
         EphemeralOnly::new(ScriptedRng::new(&[&RESP_EPHEMERAL])),
         &[],
-        r_stream.clone(),
+        private_key(&RESP_STATIC),
     )
-    .set_s(private_key(&RESP_STATIC))
+    .map_err(|_| ())?
+    .read_message_1(&msg1)
     .map_err(|_| ())?;
-    let (_, recv) = r.recv().e().map_err(|_| ())?;
-    let r = recv.es().map_err(|_| ())?;
 
-    // Responder sends msg2 (genuine).
-    let _ = r.e().unwrap().ee().unwrap();
-    let msg2 = xform(1, r_stream.take_written());
+    let (mut msg2, _r_t) = r_hs.write_message_2().unwrap();
+    xform(1, &mut msg2);
 
-    // Initiator reads msg2.
-    i_stream.feed(&msg2);
-    let (_, recv) = i.recv().e().map_err(|_| ())?;
-    recv.ee().map_err(|_| ())?;
-    fully_drained(&i_stream, &r_stream)
+    i_hs.read_message_2(&msg2).map_err(|_| ())?;
+    Ok(())
 }
 
 fn run_ix(xform: &Xform<'_>) -> Result<(), ()> {
-    // IX has no pre-messages: both statics are transmitted in-handshake
-    // via `s` tokens, so neither side has a pre-message setter.
-    let i_stream = PeerStream::new();
-    let i = SyncHandshake::<IX, Initiator, _, _, _, _>::initiate(
+    let (mut msg1, i_hs) = IX::initiator(
         EphemeralOnly::new(ScriptedRng::new(&[&INIT_EPHEMERAL])),
         &[],
-        i_stream.clone(),
-    );
-    let i = i.e().unwrap().s(private_key(&INIT_STATIC)).unwrap();
-    let msg1 = xform(0, i_stream.take_written());
+    )
+    .write_message_1(private_key(&INIT_STATIC))
+    .unwrap();
+    xform(0, &mut msg1);
 
-    // Responder reads msg1 (-> e, s); the `s` reveals the initiator static.
-    let r_stream = PeerStream::new();
-    r_stream.feed(&msg1);
-    let r = SyncHandshake::<IX, Responder, _, _, _, _>::respond(
+    let r_hs = IX::responder(
         EphemeralOnly::new(ScriptedRng::new(&[&RESP_EPHEMERAL])),
         &[],
-        r_stream.clone(),
-    );
-    let (_, recv) = r.recv().e().map_err(|_| ())?;
-    let (_, recv) = recv.s().map_err(|_| ())?;
+    )
+    .read_message_1(&msg1)
+    .map_err(|_| ())?;
 
-    // Responder sends msg2 (<- e, ee, se, s, es) — genuine.
-    let _ = recv
-        .e()
-        .unwrap()
-        .ee()
-        .unwrap()
-        .se()
-        .unwrap()
-        .s(private_key(&RESP_STATIC))
-        .unwrap()
-        .es()
-        .unwrap();
-    let msg2 = xform(1, r_stream.take_written());
+    let (mut msg2, _r_t) = r_hs.write_message_2(private_key(&RESP_STATIC)).unwrap();
+    xform(1, &mut msg2);
 
-    // Initiator reads msg2; the `s` reveals the responder static.
-    i_stream.feed(&msg2);
-    let (_, recv) = i.recv().e().map_err(|_| ())?;
-    let recv = recv.ee().map_err(|_| ())?.se().map_err(|_| ())?;
-    let (_, recv) = recv.s().map_err(|_| ())?;
-    recv.es().map_err(|_| ())?;
-    fully_drained(&i_stream, &r_stream)
+    i_hs.read_message_2(&msg2).map_err(|_| ())?;
+    Ok(())
 }
 
 fn run_xk(xform: &Xform<'_>) -> Result<(), ()> {
-    // XK pre-message `<- s`: the initiator pre-knows the responder static
-    // (`set_rs`); the responder holds its own static (`set_s`).
-    let i_stream = PeerStream::new();
-    let i = SyncHandshake::<XK, Initiator, _, _, _, _>::initiate(
+    let (mut msg1, i_hs) = XK::initiator(
         EphemeralOnly::new(ScriptedRng::new(&[&INIT_EPHEMERAL])),
         &[],
-        i_stream.clone(),
+        public_key(&RESP_STATIC),
     )
-    .set_rs(public_key(&RESP_STATIC));
+    .write_message_1()
+    .unwrap();
+    xform(0, &mut msg1);
 
-    // msg1: -> e, es
-    let i = i.e().unwrap().es().unwrap();
-    let msg1 = xform(0, i_stream.take_written());
-
-    // Responder reads msg1 (-> e, es).
-    let r_stream = PeerStream::new();
-    r_stream.feed(&msg1);
-    let r = SyncHandshake::<XK, Responder, _, _, _, _>::respond(
+    let r_hs = XK::responder(
         EphemeralOnly::new(ScriptedRng::new(&[&RESP_EPHEMERAL])),
         &[],
-        r_stream.clone(),
+        private_key(&RESP_STATIC),
     )
-    .set_s(private_key(&RESP_STATIC))
+    .map_err(|_| ())?
+    .read_message_1(&msg1)
     .map_err(|_| ())?;
-    let (_, recv) = r.recv().e().map_err(|_| ())?;
-    let r = recv.es().map_err(|_| ())?;
 
-    // msg2: <- e, ee — genuine.
-    let r = r.e().unwrap().ee().unwrap();
-    let msg2 = xform(1, r_stream.take_written());
+    let (mut msg2, r_hs) = r_hs.write_message_2().unwrap();
+    xform(1, &mut msg2);
 
-    // Initiator reads msg2 (<- e, ee).
-    i_stream.feed(&msg2);
-    let (_, recv) = i.recv().e().map_err(|_| ())?;
-    let i = recv.ee().map_err(|_| ())?;
+    let i_hs = i_hs.read_message_2(&msg2).map_err(|_| ())?;
 
-    // msg3: -> s, se — the initiator's static is sent encrypted (after ee).
-    let _ = i.s(private_key(&INIT_STATIC)).unwrap().se().unwrap();
-    let msg3 = xform(2, i_stream.take_written());
+    let (mut msg3, _i_t) = i_hs.write_message_3(private_key(&INIT_STATIC)).unwrap();
+    xform(2, &mut msg3);
 
-    // Responder reads msg3; the `s` reveals the initiator static.
-    r_stream.feed(&msg3);
-    let (_, recv) = r.recv().s().map_err(|_| ())?;
-    recv.se().map_err(|_| ())?;
-    fully_drained(&i_stream, &r_stream)
+    r_hs.read_message_3(&msg3).map_err(|_| ())?;
+    Ok(())
 }
 
 fn run_nn(xform: &Xform<'_>) -> Result<(), ()> {
-    // NN has no static keys and no pre-messages: both parties are
-    // anonymous. msg1 is a bare `-> e` (the single-`e` send finalizer).
-    let i_stream = PeerStream::new();
-    let i = SyncHandshake::<NN, Initiator, _, _, _, _>::initiate(
+    let (mut msg1, i_hs) = NN::initiator(
         EphemeralOnly::new(ScriptedRng::new(&[&INIT_EPHEMERAL])),
         &[],
-        i_stream.clone(),
-    );
-    let i = i.e().unwrap();
-    let msg1 = xform(0, i_stream.take_written());
+    )
+    .write_message_1()
+    .unwrap();
+    xform(0, &mut msg1);
 
-    // Responder reads msg1 (-> e).
-    let r_stream = PeerStream::new();
-    r_stream.feed(&msg1);
-    let r = SyncHandshake::<NN, Responder, _, _, _, _>::respond(
+    let r_hs = NN::responder(
         EphemeralOnly::new(ScriptedRng::new(&[&RESP_EPHEMERAL])),
         &[],
-        r_stream.clone(),
-    );
-    let (_, recv) = r.recv().e().map_err(|_| ())?;
+    )
+    .read_message_1(&msg1)
+    .map_err(|_| ())?;
 
-    // Responder sends msg2 (<- e, ee), genuine.
-    let _ = recv.e().unwrap().ee().unwrap();
-    let msg2 = xform(1, r_stream.take_written());
+    let (mut msg2, _r_t) = r_hs.write_message_2().unwrap();
+    xform(1, &mut msg2);
 
-    // Initiator reads msg2.
-    i_stream.feed(&msg2);
-    let (_, recv) = i.recv().e().map_err(|_| ())?;
-    recv.ee().map_err(|_| ())?;
-    fully_drained(&i_stream, &r_stream)
+    i_hs.read_message_2(&msg2).map_err(|_| ())?;
+    Ok(())
 }
 
 fn run_xx(xform: &Xform<'_>) -> Result<(), ()> {
-    // XX has no pre-messages: neither static is pre-known. Both parties
-    // transmit their statics in-handshake, encrypted (after `ee`).
-    // msg1 is a bare `-> e` (the single-`e` send finalizer).
-    let i_stream = PeerStream::new();
-    let i = SyncHandshake::<XX, Initiator, _, _, _, _>::initiate(
+    let (mut msg1, i_hs) = XX::initiator(
         EphemeralOnly::new(ScriptedRng::new(&[&INIT_EPHEMERAL])),
         &[],
-        i_stream.clone(),
-    );
-    let i = i.e().unwrap();
-    let msg1 = xform(0, i_stream.take_written());
+    )
+    .write_message_1()
+    .unwrap();
+    xform(0, &mut msg1);
 
-    // Responder reads msg1 (-> e).
-    let r_stream = PeerStream::new();
-    r_stream.feed(&msg1);
-    let r = SyncHandshake::<XX, Responder, _, _, _, _>::respond(
+    let r_hs = XX::responder(
         EphemeralOnly::new(ScriptedRng::new(&[&RESP_EPHEMERAL])),
         &[],
-        r_stream.clone(),
-    );
-    let (_, recv) = r.recv().e().map_err(|_| ())?;
+    )
+    .read_message_1(&msg1)
+    .map_err(|_| ())?;
 
-    // msg2: <- e, ee, s, es — the responder's static is sent encrypted
-    // (after ee), genuine.
-    let r = recv
-        .e()
-        .unwrap()
-        .ee()
-        .unwrap()
-        .s(private_key(&RESP_STATIC))
-        .unwrap()
-        .es()
-        .unwrap();
-    let msg2 = xform(1, r_stream.take_written());
+    let (mut msg2, r_hs) = r_hs.write_message_2(private_key(&RESP_STATIC)).unwrap();
+    xform(1, &mut msg2);
 
-    // Initiator reads msg2 (<- e, ee, s, es); the `s` reveals the
-    // responder static.
-    i_stream.feed(&msg2);
-    let (_, recv) = i.recv().e().map_err(|_| ())?;
-    let recv = recv.ee().map_err(|_| ())?;
-    let (_, recv) = recv.s().map_err(|_| ())?;
-    let i = recv.es().map_err(|_| ())?;
+    let i_hs = i_hs.read_message_2(&msg2).map_err(|_| ())?;
 
-    // msg3: -> s, se — the initiator's static is sent encrypted (after ee).
-    let _ = i.s(private_key(&INIT_STATIC)).unwrap().se().unwrap();
-    let msg3 = xform(2, i_stream.take_written());
+    let (mut msg3, _i_t) = i_hs.write_message_3(private_key(&INIT_STATIC)).unwrap();
+    xform(2, &mut msg3);
 
-    // Responder reads msg3; the `s` reveals the initiator static.
-    r_stream.feed(&msg3);
-    let (_, recv) = r.recv().s().map_err(|_| ())?;
-    recv.se().map_err(|_| ())?;
-    fully_drained(&i_stream, &r_stream)
+    r_hs.read_message_3(&msg3).map_err(|_| ())?;
+    Ok(())
 }
 
 fn run_x(xform: &Xform<'_>) -> Result<(), ()> {
-    // X pre-message `<- s`: the initiator pre-knows the responder static
-    // (`set_rs`); its own static is transmitted in msg1 (encrypted, after
-    // `es`) via the `s` token — IK's msg1 with no responder reply.
-    let i_stream = PeerStream::new();
-    let i = SyncHandshake::<X, Initiator, _, _, _, _>::initiate(
+    let (mut msg1, _i_t) = X::initiator(
         EphemeralOnly::new(ScriptedRng::new(&[&INIT_EPHEMERAL])),
         &[],
-        i_stream.clone(),
+        public_key(&RESP_STATIC),
     )
-    .set_rs(public_key(&RESP_STATIC));
-    let _ = i
-        .e()
-        .unwrap()
-        .es()
-        .unwrap()
-        .s(private_key(&INIT_STATIC))
-        .unwrap()
-        .ss()
-        .unwrap();
-    let msg1 = xform(0, i_stream.take_written());
+    .write_message_1(private_key(&INIT_STATIC))
+    .unwrap();
+    xform(0, &mut msg1);
 
-    // Responder reads msg1 (-> e, es, s, ss); the `s` reveals the initiator
-    // static. The responder sends nothing (one-way), so its RNG is unused.
-    let r_stream = PeerStream::new();
-    r_stream.feed(&msg1);
-    let r = SyncHandshake::<X, Responder, _, _, _, _>::respond(
+    X::responder(
         EphemeralOnly::new(StdRng::seed_from_u64(4)),
         &[],
-        r_stream.clone(),
+        private_key(&RESP_STATIC),
     )
-    .set_s(private_key(&RESP_STATIC))
+    .map_err(|_| ())?
+    .read_message_1(&msg1)
     .map_err(|_| ())?;
-    let (_, recv) = r.recv().e().map_err(|_| ())?;
-    let recv = recv.es().map_err(|_| ())?;
-    let (_, recv) = recv.s().map_err(|_| ())?;
-    recv.ss().map_err(|_| ())?;
-    fully_drained(&i_stream, &r_stream)
+    Ok(())
 }
 
-// ── Sweep helpers ────────────────────────────────────────────────
+// ── Sweep helper ─────────────────────────────────────────────────
 
 /// Assert that the genuine handshake completes, then that flipping any
-/// single byte of message `msg_idx` (of length `len`) is rejected, and
-/// that every truncated prefix and an over-long variant are rejected.
+/// single byte of message `msg_idx` is rejected.
+///
+/// `len` comes from the generated `MSGn_SIZE` const rather than a
+/// hand-maintained table, so the sweep cannot silently under-cover a
+/// message whose wire size changed.
 fn sweep<F>(label: &str, msg_idx: usize, len: usize, run: F)
 where
     F: Fn(Box<Xform<'static>>) -> Result<(), ()>,
@@ -558,132 +379,142 @@ where
     );
 
     for byte in 0..len {
-        let res = run(Box::new(
-            move |idx, m| if idx == msg_idx { flip(m, byte) } else { m },
-        ));
-        assert!(res.is_err(), "{label}: flip of byte {byte} not rejected");
-    }
-
-    for prefix in 0..len {
         let res = run(Box::new(move |idx, m| {
             if idx == msg_idx {
-                m[..prefix].to_vec()
-            } else {
-                m
+                flip(m, byte)
             }
         }));
-        assert!(res.is_err(), "{label}: truncation to {prefix} not rejected");
+        assert!(res.is_err(), "{label}: flip of byte {byte} not rejected");
     }
-
-    let over = run(Box::new(move |idx, mut m| {
-        if idx == msg_idx {
-            m.push(0);
-        }
-        m
-    }));
-    assert!(over.is_err(), "{label}: over-length message not rejected");
 }
 
-// ── Tamper + truncation sweeps, per pattern ──────────────────────
+// ── Tamper sweeps, per pattern ───────────────────────────────────
 
 #[test]
-fn n_msg1_tamper_truncation_sweep() {
-    sweep("N msg1", 0, ONE_MSG, |xf| run_n(&*xf));
+fn n_msg1_tamper_sweep() {
+    sweep("N msg1", 0, N::MSG1_SIZE, |xf| run_n(&*xf));
 }
 
 #[test]
-fn k_msg1_tamper_truncation_sweep() {
-    sweep("K msg1", 0, ONE_MSG, |xf| run_k(&*xf));
+fn k_msg1_tamper_sweep() {
+    sweep("K msg1", 0, K::MSG1_SIZE, |xf| run_k(&*xf));
 }
 
 #[test]
-fn kpsk0_msg1_tamper_truncation_sweep() {
-    sweep("Kpsk0 msg1", 0, ONE_MSG, |xf| run_kpsk0(&*xf));
+fn kpsk0_msg1_tamper_sweep() {
+    sweep("Kpsk0 msg1", 0, Kpsk0::MSG1_SIZE, |xf| run_kpsk0(&*xf));
 }
 
 #[test]
-fn ikpsk1_msg1_tamper_truncation_sweep() {
-    sweep("IKpsk1 msg1", 0, IK_MSG1, |xf| run_ikpsk1(&*xf));
+fn ikpsk1_msg1_tamper_sweep() {
+    sweep("IKpsk1 msg1", 0, IKpsk1::MSG1_SIZE, |xf| run_ikpsk1(&*xf));
 }
 
 #[test]
-fn ikpsk1_msg2_tamper_truncation_sweep() {
-    sweep("IKpsk1 msg2", 1, IK_MSG2, |xf| run_ikpsk1(&*xf));
+fn ikpsk1_msg2_tamper_sweep() {
+    sweep("IKpsk1 msg2", 1, IKpsk1::MSG2_SIZE, |xf| run_ikpsk1(&*xf));
 }
 
 #[test]
-fn ik_msg1_tamper_truncation_sweep() {
-    sweep("IK msg1", 0, IK_MSG1, |xf| run_ik(&*xf));
+fn ik_msg1_tamper_sweep() {
+    sweep("IK msg1", 0, IK::MSG1_SIZE, |xf| run_ik(&*xf));
 }
 
 #[test]
-fn ik_msg2_tamper_truncation_sweep() {
-    sweep("IK msg2", 1, IK_MSG2, |xf| run_ik(&*xf));
+fn ik_msg2_tamper_sweep() {
+    sweep("IK msg2", 1, IK::MSG2_SIZE, |xf| run_ik(&*xf));
 }
 
 #[test]
-fn nk_msg1_tamper_truncation_sweep() {
-    sweep("NK msg1", 0, NK_MSG1, |xf| run_nk(&*xf));
+fn nk_msg1_tamper_sweep() {
+    sweep("NK msg1", 0, NK::MSG1_SIZE, |xf| run_nk(&*xf));
 }
 
 #[test]
-fn nk_msg2_tamper_truncation_sweep() {
-    sweep("NK msg2", 1, NK_MSG2, |xf| run_nk(&*xf));
+fn nk_msg2_tamper_sweep() {
+    sweep("NK msg2", 1, NK::MSG2_SIZE, |xf| run_nk(&*xf));
 }
 
 #[test]
-fn ix_msg1_tamper_truncation_sweep() {
-    sweep("IX msg1", 0, IX_MSG1, |xf| run_ix(&*xf));
+fn ix_msg1_tamper_sweep() {
+    sweep("IX msg1", 0, IX::MSG1_SIZE, |xf| run_ix(&*xf));
 }
 
 #[test]
-fn ix_msg2_tamper_truncation_sweep() {
-    sweep("IX msg2", 1, IX_MSG2, |xf| run_ix(&*xf));
+fn ix_msg2_tamper_sweep() {
+    sweep("IX msg2", 1, IX::MSG2_SIZE, |xf| run_ix(&*xf));
 }
 
 #[test]
-fn xk_msg1_tamper_truncation_sweep() {
-    sweep("XK msg1", 0, XK_MSG1, |xf| run_xk(&*xf));
+fn xk_msg1_tamper_sweep() {
+    sweep("XK msg1", 0, XK::MSG1_SIZE, |xf| run_xk(&*xf));
 }
 
 #[test]
-fn xk_msg2_tamper_truncation_sweep() {
-    sweep("XK msg2", 1, XK_MSG2, |xf| run_xk(&*xf));
+fn xk_msg2_tamper_sweep() {
+    sweep("XK msg2", 1, XK::MSG2_SIZE, |xf| run_xk(&*xf));
 }
 
 #[test]
-fn xk_msg3_tamper_truncation_sweep() {
-    sweep("XK msg3", 2, XK_MSG3, |xf| run_xk(&*xf));
+fn xk_msg3_tamper_sweep() {
+    sweep("XK msg3", 2, XK::MSG3_SIZE, |xf| run_xk(&*xf));
 }
 
 #[test]
-fn nn_msg1_tamper_truncation_sweep() {
-    sweep("NN msg1", 0, NN_MSG1, |xf| run_nn(&*xf));
+fn nn_msg1_tamper_sweep() {
+    sweep("NN msg1", 0, NN::MSG1_SIZE, |xf| run_nn(&*xf));
 }
 
 #[test]
-fn nn_msg2_tamper_truncation_sweep() {
-    sweep("NN msg2", 1, NN_MSG2, |xf| run_nn(&*xf));
+fn nn_msg2_tamper_sweep() {
+    sweep("NN msg2", 1, NN::MSG2_SIZE, |xf| run_nn(&*xf));
 }
 
 #[test]
-fn xx_msg1_tamper_truncation_sweep() {
-    sweep("XX msg1", 0, XX_MSG1, |xf| run_xx(&*xf));
+fn xx_msg1_tamper_sweep() {
+    sweep("XX msg1", 0, XX::MSG1_SIZE, |xf| run_xx(&*xf));
 }
 
 #[test]
-fn xx_msg2_tamper_truncation_sweep() {
-    sweep("XX msg2", 1, XX_MSG2, |xf| run_xx(&*xf));
+fn xx_msg2_tamper_sweep() {
+    sweep("XX msg2", 1, XX::MSG2_SIZE, |xf| run_xx(&*xf));
 }
 
 #[test]
-fn xx_msg3_tamper_truncation_sweep() {
-    sweep("XX msg3", 2, XX_MSG3, |xf| run_xx(&*xf));
+fn xx_msg3_tamper_sweep() {
+    sweep("XX msg3", 2, XX::MSG3_SIZE, |xf| run_xx(&*xf));
 }
 
 #[test]
-fn x_msg1_tamper_truncation_sweep() {
-    sweep("X msg1", 0, X_MSG1, |xf| run_x(&*xf));
+fn x_msg1_tamper_sweep() {
+    sweep("X msg1", 0, X::MSG1_SIZE, |xf| run_x(&*xf));
+}
+
+/// The wire sizes the sweeps cover, pinned so a codegen change that moved a
+/// message's length has to be acknowledged here rather than silently
+/// shrinking or growing the adversarial space above.
+#[test]
+fn swept_wire_sizes_are_what_we_think() {
+    assert_eq!(N::MSG1_SIZE, 81); // e + tag
+    assert_eq!(K::MSG1_SIZE, 81);
+    assert_eq!(Kpsk0::MSG1_SIZE, 81);
+    assert_eq!(IKpsk1::MSG1_SIZE, 162); // e + encrypted s + tags
+    assert_eq!(IKpsk1::MSG2_SIZE, 81);
+    assert_eq!(IK::MSG1_SIZE, 162);
+    assert_eq!(IK::MSG2_SIZE, 81);
+    assert_eq!(NK::MSG1_SIZE, 81);
+    assert_eq!(NK::MSG2_SIZE, 81);
+    assert_eq!(IX::MSG1_SIZE, 130); // e + s, both in the clear
+    assert_eq!(IX::MSG2_SIZE, 162);
+    assert_eq!(XK::MSG1_SIZE, 81);
+    assert_eq!(XK::MSG2_SIZE, 81);
+    assert_eq!(XK::MSG3_SIZE, 97); // encrypted s + tag
+    assert_eq!(NN::MSG1_SIZE, 65); // bare e, cipher never keyed
+    assert_eq!(NN::MSG2_SIZE, 81);
+    assert_eq!(XX::MSG1_SIZE, 65);
+    assert_eq!(XX::MSG2_SIZE, 162);
+    assert_eq!(XX::MSG3_SIZE, 97);
+    assert_eq!(X::MSG1_SIZE, 162);
 }
 
 // ── Non-canonical on-wire public key (M1) ────────────────────────
@@ -694,32 +525,28 @@ fn noncanonical_ephemeral_rejected() {
 
     // NN msg1 is a bare `-> e`: the 65-byte wire payload *is* the
     // initiator's ephemeral in canonical (0x04 ‖ X ‖ Y) form.
-    let i_stream = PeerStream::new();
-    let i = SyncHandshake::<NN, Initiator, _, _, _, _>::initiate(
+    let (msg1, _i_hs) = NN::initiator(
         EphemeralOnly::new(ScriptedRng::new(&[&INIT_EPHEMERAL])),
         &[],
-        i_stream.clone(),
-    );
-    let _ = i.e().unwrap();
-    let msg1 = i_stream.take_written();
-    assert_eq!(msg1.len(), NN_MSG1, "NN msg1 is a bare 65-byte ephemeral");
+    )
+    .write_message_1()
+    .unwrap();
 
     // Re-encode the genuine ephemeral non-canonically: its 33-byte
     // compressed form, right-padded with trailing zeros to the 65-byte
     // wire width. This decodes to the *same* point (so it passes
     // `from_bytes`) but is not the canonical encoding the send path emits.
     let e_pub = P256r1PublicKey::from_bytes(&msg1).expect("genuine ephemeral decodes");
-    let mut tampered = vec![0u8; NN_MSG1];
+    let mut tampered = [0u8; NN::MSG1_SIZE];
     tampered[..33].copy_from_slice(&e_pub.to_compressed());
 
-    let r_stream = PeerStream::new();
-    r_stream.feed(&tampered);
-    let r = SyncHandshake::<NN, Responder, _, _, _, _>::respond(
+    let err = NN::responder(
         EphemeralOnly::new(ScriptedRng::new(&[&RESP_EPHEMERAL])),
         &[],
-        r_stream.clone(),
-    );
-    let err = r.recv().e().map(|_| ()).unwrap_err();
+    )
+    .read_message_1(&tampered)
+    .map(|_| ())
+    .unwrap_err();
     assert!(
         matches!(err, HandshakeError::NonCanonicalPublicKey),
         "non-canonical ephemeral must be rejected as NonCanonicalPublicKey, got {err:?}"
@@ -735,73 +562,52 @@ fn kpsk0_wrong_psk_rejected() {
     let good = Psk::from_bytes(PSK_BYTES);
     let bad = Psk::from_bytes([0x00; 32]);
 
-    let i_stream = PeerStream::new();
-    let i = SyncHandshake::<Kpsk0, Initiator, _, _, _, _>::initiate(
+    let (msg1, _i_t) = Kpsk0::initiator(
         EphemeralOnly::new(ScriptedRng::new(&[&INIT_EPHEMERAL])),
         &[],
-        i_stream.clone(),
+        private_key(&INIT_STATIC),
+        public_key(&RESP_STATIC),
     )
-    .set_s(private_key(&INIT_STATIC))
     .unwrap()
-    .set_rs(public_key(&RESP_STATIC));
-    let _ = i
-        .psk(&good)
-        .unwrap()
-        .e()
-        .unwrap()
-        .es()
-        .unwrap()
-        .ss()
-        .unwrap();
-    let msg1 = i_stream.take_written();
-
-    let r_stream = PeerStream::new();
-    r_stream.feed(&msg1);
-    let r = SyncHandshake::<Kpsk0, Responder, _, _, _, _>::respond(
-        EphemeralOnly::new(StdRng::seed_from_u64(9)),
-        &[],
-        r_stream.clone(),
-    )
-    .set_rs(public_key(&INIT_STATIC))
-    .set_s(private_key(&RESP_STATIC))
+    .write_message_1(&good)
     .unwrap();
-    let recv = r.recv().psk(&bad).unwrap();
-    let (_, recv) = recv.e().unwrap();
-    let recv = recv.es().unwrap();
+
     // The mismatched PSK diverges the key schedule; the final payload tag
     // fails to verify at the last token of msg1.
-    assert!(recv.ss().is_err(), "Kpsk0 wrong PSK not rejected");
+    let outcome = Kpsk0::responder(
+        EphemeralOnly::new(StdRng::seed_from_u64(9)),
+        &[],
+        public_key(&INIT_STATIC),
+        private_key(&RESP_STATIC),
+    )
+    .unwrap()
+    .read_message_1(&msg1, &bad);
+    assert!(outcome.is_err(), "Kpsk0 wrong PSK not rejected");
 }
 
 // ── Transport: tamper sweep + nonce sequencing ───────────────────
 
-type ChannelN = Noise<pattern::N, P256, ChaChaPoly, Blake2b>;
-type NTransport = Transport<ChannelN>;
+type NTransport = Transport<N>;
 
 /// Complete an N handshake hiss↔hiss and return both transport states.
 fn complete_n() -> (NTransport, NTransport) {
-    let i_stream = PeerStream::new();
-    let i = SyncHandshake::<ChannelN, Initiator, _, _, _, _>::initiate(
+    let (msg1, i_transport) = N::initiator(
         EphemeralOnly::new(ScriptedRng::new(&[&INIT_EPHEMERAL])),
         &[],
-        i_stream.clone(),
+        public_key(&RESP_STATIC),
     )
-    .set_rs(public_key(&RESP_STATIC));
-    let chain = i.e().unwrap().es().unwrap();
-    let (i_transport, _) = chain.into_parts();
-    let msg1 = i_stream.take_written();
+    .write_message_1()
+    .unwrap();
 
-    let r_stream = PeerStream::new();
-    r_stream.feed(&msg1);
-    let r = SyncHandshake::<ChannelN, Responder, _, _, _, _>::respond(
+    let r_transport = N::responder(
         EphemeralOnly::new(StdRng::seed_from_u64(7)),
         &[],
-        r_stream.clone(),
+        private_key(&RESP_STATIC),
     )
-    .set_s(private_key(&RESP_STATIC))
+    .unwrap()
+    .read_message_1(&msg1)
     .unwrap();
-    let (_, recv) = r.recv().e().unwrap();
-    let (r_transport, _) = recv.es().unwrap().into_parts();
+
     (i_transport, r_transport)
 }
 

@@ -1,0 +1,38 @@
+# Dependabot — two ecosystems, deliberately not four.
+#
+# Watched:
+#   - github-actions: the workflow pins (actions/checkout, rust-toolchain,
+#     cargo-deny-action, ...). Near-zero noise, and the only way these move.
+#   - cargo, root workspace (hiss + hiss-macros): no root Cargo.lock is
+#     committed, so there is nothing lockfile-shaped to bump. A PR appears
+#     only when an upstream release falls OUTSIDE a declared range — exactly
+#     the moment CLAUDE.md's rule fires ("widening a range needs a green
+#     downstream build behind it"), and the PR run supplies that evidence:
+#     Check and Downstream both trigger on pull_request.
+#
+# Deliberately NOT watched:
+#   - hiss-interop/: its weekly CI cron runs `cargo update` against its own
+#     lockfile on purpose (interop.yml) — a bot bumping the same lockfile
+#     would duplicate that with more noise and less signal.
+#   - hiss-aesgcm-lab/: pinned to one frozen cryptoxide rev by design; the
+#     pin moving is the crate's *exit condition*, not an update.
+#   - demo/: own workspace, excluded from the published crate; it rebuilds
+#     only when demo/** changes and can trail the root at no cost.
+
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: "ci(deps)"
+
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: "chore(deps)"

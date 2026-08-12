@@ -17,8 +17,7 @@
 //! helpers parse from `&[u8]` and return the byte count consumed —
 //! rather than owning any I/O.
 //!
-//! The synchronous DH helpers (`ee`/`es_*`/`se_*`/`ss`) live here and are
-//! shared with the blocking driver in [`io_sync`](super::io_sync); the
+//! The synchronous DH helpers (`ee`/`es_*`/`se_*`/`ss`) live here; the
 //! provider-free token crypto is delegated to the private `process`
 //! module.
 //!

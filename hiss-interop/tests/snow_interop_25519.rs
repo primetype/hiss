@@ -13,19 +13,26 @@
 //! the handshake completes, the handshake hashes match, and transport
 //! messages decrypt across implementations.
 
-mod common;
-use common::PeerStream;
-
 use hiss::noise::*;
 use hiss::provider::EphemeralOnly;
 use hiss::provider::ProviderExt;
-use rand::{SeedableRng, rngs::StdRng};
+use rand::rngs::StdRng;
 
-// The bare `noise::{N, IK, XX}` aliases are pinned to P-256; spell the
-// X25519 suites out explicitly here.
-type N25519 = Noise<pattern::N, X25519, ChaChaPoly, Blake2b>;
-type IK25519 = Noise<pattern::IK, X25519, ChaChaPoly, Blake2b>;
-type XX25519 = Noise<pattern::XX, X25519, ChaChaPoly, Blake2b>;
+// The declared identifier is the Noise pattern name — it reaches the
+// protocol name mixed into the initial handshake hash — so these are `N`,
+// `IK`, `XX` and not `N25519`-style aliases. The suite is spelled out in the
+// type parameters instead, which is where the `25519` in the protocol name
+// comes from.
+hiss::noise! { pub N<X25519, ChaChaPoly, Blake2b>  { <- s ... -> e, es } }
+hiss::noise! { pub IK<X25519, ChaChaPoly, Blake2b> { <- s ... -> e, es, s, ss <- e, ee, se } }
+hiss::noise! { pub XX<X25519, ChaChaPoly, Blake2b> { -> e <- e, ee, s, es -> s, se } }
+
+/// snow reports a length into a scratch buffer; the generated readers take a
+/// fixed-size array. Narrowing here pins the wire size.
+fn exact<const M: usize>(buf: &[u8]) -> &[u8; M] {
+    buf.try_into()
+        .expect("snow's message length matches the generated wire size")
+}
 
 // ── N: our initiator ↔ snow responder ───────────────────────────
 
@@ -43,18 +50,14 @@ fn n_hiss_initiator_snow_responder() {
         .build_responder()
         .unwrap();
 
-    let stream = PeerStream::new();
-    let sealer = SyncHandshake::<N25519, Initiator, _, _, _, _>::initiate(
-        EphemeralOnly::new(StdRng::from_os_rng()),
-        &[],
-        stream.clone(),
-    )
-    .set_rs(responder_pub);
-
     // msg1: -> e, es (one-way seal, then transport mode)
-    let chain = sealer.e().unwrap().es().unwrap();
-    let (mut transport, _) = chain.into_parts();
-    let msg = stream.take_written();
+    let (msg, mut transport) = N::initiator(
+        EphemeralOnly::new(rand::make_rng::<StdRng>()),
+        &[],
+        responder_pub,
+    )
+    .write_message_1()
+    .unwrap();
 
     let payload = b"x25519 N interop";
     let mut sealed = [0u8; 256];
@@ -76,7 +79,7 @@ fn n_hiss_initiator_snow_responder() {
 
 #[test]
 fn ik_hiss_initiator_snow_responder() {
-    let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
+    let mut provider = EphemeralOnly::new(rand::make_rng::<StdRng>());
     let initiator_static = provider.generate::<X25519>().unwrap();
 
     let proto = "Noise_IK_25519_ChaChaPoly_BLAKE2b";
@@ -91,25 +94,14 @@ fn ik_hiss_initiator_snow_responder() {
         .build_responder()
         .unwrap();
 
-    let stream = PeerStream::new();
-    let i_hs = SyncHandshake::<IK25519, Initiator, _, _, _, _>::initiate(
-        EphemeralOnly::new(StdRng::from_os_rng()),
-        &[],
-        stream.clone(),
-    )
-    .set_rs(responder_pub);
-
     // msg1: -> e, es, s, ss
-    let i_hs = i_hs
-        .e()
-        .unwrap()
-        .es()
-        .unwrap()
-        .s(initiator_static)
-        .unwrap()
-        .ss()
-        .unwrap();
-    let msg1 = stream.take_written();
+    let (msg1, i_hs) = IK::initiator(
+        EphemeralOnly::new(rand::make_rng::<StdRng>()),
+        &[],
+        responder_pub,
+    )
+    .write_message_1(initiator_static)
+    .unwrap();
 
     let mut buf = [0u8; 256];
     snow_responder.read_message(&msg1, &mut buf).unwrap();
@@ -117,10 +109,7 @@ fn ik_hiss_initiator_snow_responder() {
     // msg2: <- e, ee, se
     let mut msg2 = [0u8; 256];
     let msg2_len = snow_responder.write_message(&[], &mut msg2).unwrap();
-    stream.feed(&msg2[..msg2_len]);
-    let (_, recv) = i_hs.recv().e().unwrap();
-    let chain = recv.ee().unwrap().se().unwrap();
-    let (mut i_transport, _) = chain.into_parts();
+    let mut i_transport = i_hs.read_message_2(exact(&msg2[..msg2_len])).unwrap();
 
     assert_eq!(
         i_transport.session_id().as_ref(),
@@ -149,7 +138,7 @@ fn ik_hiss_initiator_snow_responder() {
 
 #[test]
 fn ik_snow_initiator_hiss_responder() {
-    let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
+    let mut provider = EphemeralOnly::new(rand::make_rng::<StdRng>());
     let responder_static = provider.generate::<X25519>().unwrap();
     let responder_pub = provider.public(&responder_static).unwrap();
 
@@ -166,34 +155,26 @@ fn ik_snow_initiator_hiss_responder() {
         .build_initiator()
         .unwrap();
 
-    let stream = PeerStream::new();
-    let r_hs = SyncHandshake::<IK25519, Responder, _, _, _, _>::respond(
-        EphemeralOnly::new(StdRng::from_os_rng()),
-        &[],
-        stream.clone(),
-    )
-    .set_s(responder_static)
-    .unwrap();
-
     // msg1: -> e, es, s, ss (snow initiator sends)
     let mut msg1 = [0u8; 256];
     let msg1_len = snow_initiator.write_message(&[], &mut msg1).unwrap();
-    stream.feed(&msg1[..msg1_len]);
 
-    let (_, recv) = r_hs.recv().e().unwrap();
-    let recv = recv.es().unwrap();
-    let (revealed_initiator_pub, recv) = recv.s().unwrap();
-    let r_hs = recv.ss().unwrap();
+    let r_hs = IK::responder(
+        EphemeralOnly::new(rand::make_rng::<StdRng>()),
+        &[],
+        responder_static,
+    )
+    .unwrap()
+    .read_message_1(exact(&msg1[..msg1_len]))
+    .unwrap();
 
     assert_eq!(
-        revealed_initiator_pub.as_ref(),
+        r_hs.remote_static().as_ref(),
         snow_initiator_keypair.public.as_slice(),
     );
 
     // msg2: <- e, ee, se (our responder sends)
-    let chain = r_hs.e().unwrap().ee().unwrap().se().unwrap();
-    let (mut r_transport, _) = chain.into_parts();
-    let msg2 = stream.take_written();
+    let (msg2, mut r_transport) = r_hs.write_message_2().unwrap();
 
     let mut buf = [0u8; 256];
     snow_initiator.read_message(&msg2, &mut buf).unwrap();
@@ -224,7 +205,7 @@ fn ik_snow_initiator_hiss_responder() {
 
 #[test]
 fn xx_hiss_initiator_snow_responder() {
-    let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
+    let mut provider = EphemeralOnly::new(rand::make_rng::<StdRng>());
     let initiator_static = provider.generate::<X25519>().unwrap();
     let initiator_pub = provider.public(&initiator_static).unwrap();
 
@@ -241,16 +222,10 @@ fn xx_hiss_initiator_snow_responder() {
         .build_responder()
         .unwrap();
 
-    let stream = PeerStream::new();
-    let i_hs = SyncHandshake::<XX25519, Initiator, _, _, _, _>::initiate(
-        EphemeralOnly::new(StdRng::from_os_rng()),
-        &[],
-        stream.clone(),
-    );
-
     // msg1: -> e (bare ephemeral, cipher never keyed)
-    let i_hs = i_hs.e().unwrap();
-    let msg1 = stream.take_written();
+    let (msg1, i_hs) = XX::initiator(EphemeralOnly::new(rand::make_rng::<StdRng>()), &[])
+        .write_message_1()
+        .unwrap();
 
     let mut buf = [0u8; 256];
     snow_responder.read_message(&msg1, &mut buf).unwrap();
@@ -258,20 +233,14 @@ fn xx_hiss_initiator_snow_responder() {
     // msg2: <- e, ee, s, es (snow responder's static is encrypted)
     let mut msg2 = [0u8; 256];
     let msg2_len = snow_responder.write_message(&[], &mut msg2).unwrap();
-    stream.feed(&msg2[..msg2_len]);
-    let (_, recv) = i_hs.recv().e().unwrap();
-    let recv = recv.ee().unwrap();
-    let (revealed_responder_pub, recv) = recv.s().unwrap();
+    let i_hs = i_hs.read_message_2(exact(&msg2[..msg2_len])).unwrap();
     assert_eq!(
-        revealed_responder_pub.as_bytes(),
+        i_hs.remote_static().as_bytes(),
         responder_static_pub.as_bytes(),
     );
-    let i_hs = recv.es().unwrap();
 
     // msg3: -> s, se (our initiator's static is encrypted)
-    let chain = i_hs.s(initiator_static).unwrap().se().unwrap();
-    let (mut i_transport, _) = chain.into_parts();
-    let msg3 = stream.take_written();
+    let (msg3, mut i_transport) = i_hs.write_message_3(initiator_static).unwrap();
 
     let mut buf = [0u8; 256];
     snow_responder.read_message(&msg3, &mut buf).unwrap();
@@ -306,7 +275,7 @@ fn xx_hiss_initiator_snow_responder() {
 
 #[test]
 fn xx_snow_initiator_hiss_responder() {
-    let mut provider = EphemeralOnly::new(StdRng::from_os_rng());
+    let mut provider = EphemeralOnly::new(rand::make_rng::<StdRng>());
     let responder_static = provider.generate::<X25519>().unwrap();
     let responder_pub = provider.public(&responder_static).unwrap();
 
@@ -321,30 +290,15 @@ fn xx_snow_initiator_hiss_responder() {
         .build_initiator()
         .unwrap();
 
-    let stream = PeerStream::new();
-    let r_hs = SyncHandshake::<XX25519, Responder, _, _, _, _>::respond(
-        EphemeralOnly::new(StdRng::from_os_rng()),
-        &[],
-        stream.clone(),
-    );
-
     // msg1: -> e (snow initiator sends)
     let mut msg1 = [0u8; 256];
     let msg1_len = snow_initiator.write_message(&[], &mut msg1).unwrap();
-    stream.feed(&msg1[..msg1_len]);
-    let (_, recv) = r_hs.recv().e().unwrap();
+    let r_hs = XX::responder(EphemeralOnly::new(rand::make_rng::<StdRng>()), &[])
+        .read_message_1(exact(&msg1[..msg1_len]))
+        .unwrap();
 
     // msg2: <- e, ee, s, es (our responder's static is encrypted)
-    let r_hs = recv
-        .e()
-        .unwrap()
-        .ee()
-        .unwrap()
-        .s(responder_static)
-        .unwrap()
-        .es()
-        .unwrap();
-    let msg2 = stream.take_written();
+    let (msg2, r_hs) = r_hs.write_message_2(responder_static).unwrap();
 
     let mut buf = [0u8; 256];
     snow_initiator.read_message(&msg2, &mut buf).unwrap();
@@ -357,13 +311,10 @@ fn xx_snow_initiator_hiss_responder() {
     // msg3: -> s, se (snow initiator's static is encrypted)
     let mut msg3 = [0u8; 256];
     let msg3_len = snow_initiator.write_message(&[], &mut msg3).unwrap();
-    stream.feed(&msg3[..msg3_len]);
-    let (revealed_initiator_pub, recv) = r_hs.recv().s().unwrap();
-    let chain = recv.se().unwrap();
-    let (mut r_transport, _) = chain.into_parts();
+    let mut r_transport = r_hs.read_message_3(exact(&msg3[..msg3_len])).unwrap();
 
     assert_eq!(
-        revealed_initiator_pub.as_ref(),
+        r_transport.remote_static().unwrap().as_ref(),
         snow_initiator_keypair.public.as_slice(),
     );
     assert_eq!(

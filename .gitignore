@@ -2,4 +2,18 @@ target/
 .claude/
 .serena/
 .planning/
+# hiss's own lockfile stays untracked: the Downstream gate exists to prove the
+# published requirement ranges resolve fresh, the way a consumer resolves them.
 Cargo.lock
+# The out-of-workspace crates are the opposite case — unpublished, no consumers
+# to resolve them, and `hiss-interop`'s comparison benchmark is only comparable
+# across time if snow's version holds still. `demo/Cargo.lock` is tracked for
+# the same reason; the scheduled Interop run does `cargo update` first so the
+# pin never hides an upstream release.
+!hiss-interop/Cargo.lock
+# `hiss-aesgcm-lab` has the strongest claim of the three: it exists to test one
+# frozen upstream cryptoxide commit, and a `rev`-pinned git dependency without
+# a committed lock re-resolves its transitive graph freely. Its scheduled run
+# deliberately does NOT `cargo update` — that would defeat the pin, which is
+# the whole point of the crate.
+!hiss-aesgcm-lab/Cargo.lock

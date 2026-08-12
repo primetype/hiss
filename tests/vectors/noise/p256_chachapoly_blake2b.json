@@ -1,5 +1,5 @@
 {
-  "note": "Noise KAT vectors for P256/ChaChaPoly/BLAKE2b, generated from snow with fixed keys + pinned ephemerals. One-way patterns (N, K, Kpsk0, X) freeze msg1 + the initiator->responder transport; the interactive patterns (IKpsk1, IK, NK, IX, XK, NN, XX) freeze every handshake message + both transport directions. Provenance: agreement with snow (no spec P-256 vectors exist).",
+  "note": "Noise KAT vectors for P256/ChaChaPoly/BLAKE2b, generated from snow with fixed keys + pinned ephemerals. One-way patterns (N, K, Kpsk0, X) freeze msg1 + the initiator->responder transport; the interactive patterns (IKpsk1, IK, NK, IX, XK, NN, XX, NX, XN, KN, KK, KX, IN) freeze every handshake message + both transport directions. Provenance: agreement with snow (no spec P-256 vectors exist).",
   "vectors": [
     {
       "protocol_name": "Noise_N_P256_ChaChaPoly_BLAKE2b",
@@ -295,6 +295,189 @@
           "sender": "initiator",
           "payload": "68697373204b41543a20696e69746961746f72202d3e20726573706f6e646572",
           "ciphertext": "f17d9114ce86576bc1b40813a9116edf23424865cb75fefb7f7b56809e99a84ce8dd1b2fb4154f69d9d0ab7c912d957a"
+        }
+      ]
+    },
+    {
+      "protocol_name": "Noise_NX_P256_ChaChaPoly_BLAKE2b",
+      "init_ephemeral": "2222222222222222222222222222222222222222222222222222222222222222",
+      "resp_static": "3333333333333333333333333333333333333333333333333333333333333333",
+      "resp_ephemeral": "4444444444444444444444444444444444444444444444444444444444444444",
+      "messages": [
+        {
+          "payload": "",
+          "ciphertext": "04d65a93977caa3d1b081852ff57a79e465f1660577304baead505dd3a48589cf350185e895372df6221ea3a137557e473fddb6755f05bd507c3c533fce9c91285"
+        },
+        {
+          "payload": "",
+          "ciphertext": "045b36890dacbd7c9a96bb74a1ee28b3d2d75b72e09a20ef25cf8e6fd8a9f0350d0e14bed8d4682a34d83538bdff5b96e89a6666ec0db5745d02fa1210072df75a41f8443e86c240d6bfefdbfc960b7379e15e3cad8e0291617e304a4348819ae3e502f9c74c78d3269890a4d882adb860ac4fb71bddacbe4d8f6b34983d71e6e1be125663b7e73db40c1034784153ef34a08ab3fe5f82a6861eaa3ef7443de56fca"
+        }
+      ],
+      "handshake_hash": "29cb6af4f76bcb013bdc862d3163bf6407a3a9a56b6f8ed45c4efdd2c8cb88febaa4aebe8eae5e56e45cf65213542e9f2ff531ced004805a437db872964d1172",
+      "transport": [
+        {
+          "sender": "initiator",
+          "payload": "68697373204b41543a20696e69746961746f72202d3e20726573706f6e646572",
+          "ciphertext": "be404c12021d4d5e68b80c7060309ed9628f7176e6aa9dd5ff29a6b28f21db01ec27e1e2a4bdeaed75a249dc8afc0223"
+        },
+        {
+          "sender": "responder",
+          "payload": "68697373204b41543a20726573706f6e646572202d3e20696e69746961746f72",
+          "ciphertext": "91139ff9c8f8bc7d173933c673d8c5333993a973b11a06d435555c7eb15953c7958fe784acbe96d46856d20917fe207e"
+        }
+      ]
+    },
+    {
+      "protocol_name": "Noise_XN_P256_ChaChaPoly_BLAKE2b",
+      "init_static": "1111111111111111111111111111111111111111111111111111111111111111",
+      "init_ephemeral": "2222222222222222222222222222222222222222222222222222222222222222",
+      "resp_static": "3333333333333333333333333333333333333333333333333333333333333333",
+      "resp_ephemeral": "4444444444444444444444444444444444444444444444444444444444444444",
+      "messages": [
+        {
+          "payload": "",
+          "ciphertext": "04d65a93977caa3d1b081852ff57a79e465f1660577304baead505dd3a48589cf350185e895372df6221ea3a137557e473fddb6755f05bd507c3c533fce9c91285"
+        },
+        {
+          "payload": "",
+          "ciphertext": "045b36890dacbd7c9a96bb74a1ee28b3d2d75b72e09a20ef25cf8e6fd8a9f0350d0e14bed8d4682a34d83538bdff5b96e89a6666ec0db5745d02fa1210072df75a296856a0fe6259820f1b9a3e1497963a"
+        },
+        {
+          "payload": "",
+          "ciphertext": "c2151da2be0aa9b7291422452a884b5811f9d2224c0d780c6232831ba0366409216d6946afa1a82a548c2ec17cac3eb8f557b26716b05d8addd60af4da42a8c615719e6db5c0e7c6d27b7d370c29ea84be00d66fad9e06d39f709605a5eb295af2"
+        }
+      ],
+      "handshake_hash": "0096d65722367fc255dd54bdd362331c972dca6217ed48dce2680a86c1ebbc4ad680984cd2f6ef8da01d4de42953b770b8c751813281d2fe4228fe1ad2f41ce7",
+      "transport": [
+        {
+          "sender": "initiator",
+          "payload": "68697373204b41543a20696e69746961746f72202d3e20726573706f6e646572",
+          "ciphertext": "9a4c82ffd8e0287ed3789f27a79ca641eac49d1de5f5847720227d202d6534456b4b6f02b541c625ea9d3cff4aa85146"
+        },
+        {
+          "sender": "responder",
+          "payload": "68697373204b41543a20726573706f6e646572202d3e20696e69746961746f72",
+          "ciphertext": "581f93dbfe8c66f8188c78a89a9ae2846bdd394ffb5212132fd45008f3d183b5d1966de583961e387113749019ab3ca5"
+        }
+      ]
+    },
+    {
+      "protocol_name": "Noise_KN_P256_ChaChaPoly_BLAKE2b",
+      "init_static": "1111111111111111111111111111111111111111111111111111111111111111",
+      "init_ephemeral": "2222222222222222222222222222222222222222222222222222222222222222",
+      "resp_static": "3333333333333333333333333333333333333333333333333333333333333333",
+      "resp_ephemeral": "4444444444444444444444444444444444444444444444444444444444444444",
+      "messages": [
+        {
+          "payload": "",
+          "ciphertext": "04d65a93977caa3d1b081852ff57a79e465f1660577304baead505dd3a48589cf350185e895372df6221ea3a137557e473fddb6755f05bd507c3c533fce9c91285"
+        },
+        {
+          "payload": "",
+          "ciphertext": "045b36890dacbd7c9a96bb74a1ee28b3d2d75b72e09a20ef25cf8e6fd8a9f0350d0e14bed8d4682a34d83538bdff5b96e89a6666ec0db5745d02fa1210072df75a944c26863f21b65f7e2b2115dbc2e1be"
+        }
+      ],
+      "handshake_hash": "0245632dbf56749b4f686703e78f47560a1904a07e129f84c77906a06a15958d9ee92f862c4e687d05db05b3fe74adaa5c291d8105095308fb217b32ee426afc",
+      "transport": [
+        {
+          "sender": "initiator",
+          "payload": "68697373204b41543a20696e69746961746f72202d3e20726573706f6e646572",
+          "ciphertext": "7a34fcd2355d01f5a2e79d7ba7130a26abf795a1571b38fed0ae2cfd4ee5674d503c47da87c71392d949de2b27ed0229"
+        },
+        {
+          "sender": "responder",
+          "payload": "68697373204b41543a20726573706f6e646572202d3e20696e69746961746f72",
+          "ciphertext": "922a5fa8945c494b84b5356ac70a384315beaae4b6ab31c57f398221b962a3ca7be6703e8015989c5bca1188d5847311"
+        }
+      ]
+    },
+    {
+      "protocol_name": "Noise_KK_P256_ChaChaPoly_BLAKE2b",
+      "init_static": "1111111111111111111111111111111111111111111111111111111111111111",
+      "init_ephemeral": "2222222222222222222222222222222222222222222222222222222222222222",
+      "resp_static": "3333333333333333333333333333333333333333333333333333333333333333",
+      "resp_ephemeral": "4444444444444444444444444444444444444444444444444444444444444444",
+      "messages": [
+        {
+          "payload": "",
+          "ciphertext": "04d65a93977caa3d1b081852ff57a79e465f1660577304baead505dd3a48589cf350185e895372df6221ea3a137557e473fddb6755f05bd507c3c533fce9c912856ebc65fadf207a9de763566a8af52025"
+        },
+        {
+          "payload": "",
+          "ciphertext": "045b36890dacbd7c9a96bb74a1ee28b3d2d75b72e09a20ef25cf8e6fd8a9f0350d0e14bed8d4682a34d83538bdff5b96e89a6666ec0db5745d02fa1210072df75a5714758f7cb513e08f471c977de755be"
+        }
+      ],
+      "handshake_hash": "cde59c713202707f7a09aed5ea726b20f2200516bab50fa667258450c3f5ea64651c3804c4aa0fab81e1916c35ca4708a17ccc2b8fcbbf4227dbbb2c41dea241",
+      "transport": [
+        {
+          "sender": "initiator",
+          "payload": "68697373204b41543a20696e69746961746f72202d3e20726573706f6e646572",
+          "ciphertext": "001cae46b56dce2473e1740033f058f56530bb7d01e30640462f4e6055ae3b7cc5424051a9640dc4a0d1c9a5caa90d85"
+        },
+        {
+          "sender": "responder",
+          "payload": "68697373204b41543a20726573706f6e646572202d3e20696e69746961746f72",
+          "ciphertext": "46c46a78fa01c08616174fec5c09d3d43e945f2b24d06ce81986a73989c5ecf455e006fefae80e6f76e5347860fc320a"
+        }
+      ]
+    },
+    {
+      "protocol_name": "Noise_KX_P256_ChaChaPoly_BLAKE2b",
+      "init_static": "1111111111111111111111111111111111111111111111111111111111111111",
+      "init_ephemeral": "2222222222222222222222222222222222222222222222222222222222222222",
+      "resp_static": "3333333333333333333333333333333333333333333333333333333333333333",
+      "resp_ephemeral": "4444444444444444444444444444444444444444444444444444444444444444",
+      "messages": [
+        {
+          "payload": "",
+          "ciphertext": "04d65a93977caa3d1b081852ff57a79e465f1660577304baead505dd3a48589cf350185e895372df6221ea3a137557e473fddb6755f05bd507c3c533fce9c91285"
+        },
+        {
+          "payload": "",
+          "ciphertext": "045b36890dacbd7c9a96bb74a1ee28b3d2d75b72e09a20ef25cf8e6fd8a9f0350d0e14bed8d4682a34d83538bdff5b96e89a6666ec0db5745d02fa1210072df75a735f389093592ccd28bccdf132bbe1398c0f57b3d72518e464461e7cee1325d9335c0e2afb9e2e6ff84aa19d4aaab8d2eb94cee548dc0e16d8d02d10107553f36c3bc8077d94081d5fd8db895d576daf2a2b0527a2fd2d1fec713558d0be9020c0"
+        }
+      ],
+      "handshake_hash": "80a6471f3786be3a8477c87d243ede1b118a11d1911b556de2a02c17a6347d36229489d6c786812e8cc5d4ce8c2ddce372b683e031cc1bc4014f81edba3ff74d",
+      "transport": [
+        {
+          "sender": "initiator",
+          "payload": "68697373204b41543a20696e69746961746f72202d3e20726573706f6e646572",
+          "ciphertext": "ff9f58c4259f868098e5ca3732e4bda11cda70b6dd998abdc53145eb8ac63a9102a5fb20dd29a5f2481e86970844ef69"
+        },
+        {
+          "sender": "responder",
+          "payload": "68697373204b41543a20726573706f6e646572202d3e20696e69746961746f72",
+          "ciphertext": "016efba821641398f8a7ed38396ca641b0593f7fe3aab82bf5c3219084f135b3815e8f0a8ad41bdbc555d194962f450a"
+        }
+      ]
+    },
+    {
+      "protocol_name": "Noise_IN_P256_ChaChaPoly_BLAKE2b",
+      "init_static": "1111111111111111111111111111111111111111111111111111111111111111",
+      "init_ephemeral": "2222222222222222222222222222222222222222222222222222222222222222",
+      "resp_static": "3333333333333333333333333333333333333333333333333333333333333333",
+      "resp_ephemeral": "4444444444444444444444444444444444444444444444444444444444444444",
+      "messages": [
+        {
+          "payload": "",
+          "ciphertext": "04d65a93977caa3d1b081852ff57a79e465f1660577304baead505dd3a48589cf350185e895372df6221ea3a137557e473fddb6755f05bd507c3c533fce9c91285040217e617f0b6443928278f96999e69a23a4f2c152bdf6d6cdf66e5b80282d4ed194a7debcb97712d2dda3ca85aa8765a56f45fc758599652f2897c65306e5794"
+        },
+        {
+          "payload": "",
+          "ciphertext": "045b36890dacbd7c9a96bb74a1ee28b3d2d75b72e09a20ef25cf8e6fd8a9f0350d0e14bed8d4682a34d83538bdff5b96e89a6666ec0db5745d02fa1210072df75a82b1c5e863bc9236ae55c80f70568cec"
+        }
+      ],
+      "handshake_hash": "af4ed71f7cb1144fbae47e8f2bf141977db8ab3e82c4b754d8797578561b1baebe18772a3595c43a5202d37036f346645a34f2a895b019fa71846d9f73721b4e",
+      "transport": [
+        {
+          "sender": "initiator",
+          "payload": "68697373204b41543a20696e69746961746f72202d3e20726573706f6e646572",
+          "ciphertext": "828c258d951543b6a8ec5807a44d73f86a6dbf7d863830bfc1921a00911be770342209c71c1edda18c95afd3585e910d"
+        },
+        {
+          "sender": "responder",
+          "payload": "68697373204b41543a20726573706f6e646572202d3e20696e69746961746f72",
+          "ciphertext": "eb3b1b84d9f59d3614f8ec66221e4513e6aae5edab0f8a7695ca97ab4213dad635c642da5e2413b259d2042aba43f93b"
         }
       ]
     }

@@ -1,0 +1,59 @@
+name: Downstream
+
+# Builds hiss the way a *consumer* builds it: from a throwaway crate, with a
+# fresh dependency resolution and no lockfile. See scripts/downstream-build.sh
+# for what it actually does and CLAUDE.md for why the gate exists.
+#
+# This is a workflow of its own rather than a job in `Check` for one reason:
+# it is the only gate that needs a `schedule:` trigger. `Check` is the trigger
+# for `Test` and `Coverage` (both `workflow_run: workflows: ["Check"]`), so a
+# cron on `Check` would drag the entire pipeline — every feature-set/OS matrix
+# leg — through a full run on every tick. A separate workflow name is not
+# matched by those `workflow_run` filters, so the cron costs exactly the two
+# jobs below.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # An upstream release can break hiss without anyone touching this repo —
+  # eccoxide 0.4.3 did exactly that, in a patch release. push/pull_request
+  # alone would surface that only at the next push, which for a quiet week is
+  # also the release commit. Weekly is enough to find it before then.
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: downstream-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  downstream:
+    name: downstream build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Same reason as Check's clippy-doc: macOS resolves and compiles the
+        # Apple Secure Enclave dependency block (security-framework,
+        # core-foundation, tokio), ubuntu does not. Both dependency sets need
+        # the check.
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      # Deliberately NOT cached (no Swatinem/rust-cache). The point of this
+      # job is a resolution straight from the index; restoring a cached
+      # registry or target dir would undercut exactly what is being tested.
+      #
+      # Invoked via `bash` rather than executed directly so a lost exec bit
+      # cannot turn this gate into a failed job for the wrong reason.
+      - name: build hiss from a throwaway downstream crate
+        run: bash scripts/downstream-build.sh

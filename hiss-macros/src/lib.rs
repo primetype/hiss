@@ -105,14 +105,24 @@ use syn::parse_macro_input;
 ///
 /// # Example
 ///
-/// ```ignore
-/// // initiator                                   // responder
-/// let hs = IKpsk1::initiator(p, PROLOGUE, rs);   // let hs = IKpsk1::responder(p, PROLOGUE, s)?;
-/// let (msg1, hs) =                               // let hs = hs.read_message_1(&msg1, &psk)?;
-///     hs.write_message_1(static_key, &psk)?;     // // or: .read_message_1_with(&msg1, |id| lookup(id))?
-///                                                // let device = hs.remote_static();
-/// let transport = hs.read_message_2(&msg2)?;     // let (msg2, transport) = hs.write_message_2()?;
-/// ```
+/// The worked example — an `IKpsk1` ceremony, both roles in one program,
+/// the PSK lookup keyed on the identity msg1 reveals, and the transports
+/// that come out of it — is a doctest that compiles and runs. It hangs
+/// off `hiss`'s re-export of this macro, [`hiss::noise!`], and so sits
+/// further up that page.
+///
+/// It is there rather than here because a doctest can only exercise
+/// generated code where the runtime types are, and this crate cannot
+/// depend on `hiss` — `hiss` depends on this one. Two runnable programs
+/// in the repository cover the same ground: `examples/quickstart.rs`
+/// (`XX`, both roles in one process) and
+/// `examples/tcp_ikpsk1_ceremony.rs` (this pattern, over a socket).
+///
+/// Each type this macro generates also carries its own walkthrough: a
+/// `# Usage` section, per role, written against that pattern's messages
+/// — and likewise a doctest that compiles.
+///
+/// [`hiss::noise!`]: https://docs.rs/hiss/latest/hiss/macro.noise.html
 #[proc_macro]
 pub fn noise(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as parse::NoiseInput);

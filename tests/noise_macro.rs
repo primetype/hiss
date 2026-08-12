@@ -7,19 +7,15 @@
 //! * `XX` — no pre-messages, three messages, a bare single-`e` first
 //!   message (no tag), statics revealed in both directions.
 //!
-//! Besides macro↔macro round trips, the IKpsk1 handshake is driven
-//! against the existing `SyncHandshake` driver in both directions: the
-//! wire bytes must interoperate and both ends must derive the same
-//! session id (the transcript hash — equality proves byte-identical
-//! handshakes).
+//! This file used to also drive IKpsk1 against the `SyncHandshake` driver
+//! in both directions, as a bridge between the two implementations. The
+//! driver is gone, so the bridge has nothing to compare against and those
+//! two tests went with it. Cross-implementation agreement is now covered
+//! where it belongs — against `snow`, in `hiss-interop`'s `snow_interop*.rs`,
+//! and against
+//! the frozen vectors in `noise_kat.rs`.
 
-mod common;
-
-use common::PeerStream;
-use hiss::noise::{
-    Blake2b, ChaChaPoly, HandshakeError, Initiator, Noise, Responder, SyncHandshake, Transport,
-    X25519, pattern,
-};
+use hiss::noise::{Blake2b, ChaChaPoly, HandshakeError, Transport, X25519};
 use hiss::provider::{EphemeralOnly, ProviderExt};
 use hiss::psk::Psk;
 use rand::SeedableRng;
@@ -43,9 +39,6 @@ hiss::noise! {
         -> s, se
     }
 }
-
-/// The classic type-state protocol the interop tests drive against.
-type Classic = Noise<pattern::IKpsk1, X25519, ChaChaPoly, Blake2b>;
 
 const PROLOGUE: &[u8] = b"hiss noise! acceptance";
 
@@ -144,107 +137,6 @@ fn ikpsk1_unknown_peer_is_rejected_by_the_psk_lookup() {
         })
     });
     assert!(matches!(outcome, Err(HandshakeError::PeerRejected { .. })));
-}
-
-#[test]
-fn ikpsk1_macro_initiator_interops_with_classic_responder() {
-    let mut ip = provider(11);
-    let i_static = ip.generate::<X25519>().unwrap();
-    let i_pub = ip.public(&i_static).unwrap();
-    let mut rp = provider(22);
-    let r_static = rp.generate::<X25519>().unwrap();
-    let r_pub = rp.public(&r_static).unwrap();
-    let psk = Psk::from_bytes([0x55; 32]);
-
-    // Macro initiator produces msg1 as a fixed array.
-    let (msg1, i_hs) = IKpsk1::initiator(ip, PROLOGUE, r_pub)
-        .write_message_1(i_static, &psk)
-        .unwrap();
-
-    // Classic io-driver responder consumes it off an in-memory stream.
-    let stream = PeerStream::new();
-    stream.feed(&msg1);
-    let r_hs =
-        SyncHandshake::<Classic, Responder, _, _, _, _>::respond(rp, PROLOGUE, stream.clone())
-            .set_s(r_static)
-            .unwrap();
-    let (_re, recv) = r_hs.recv().e().unwrap();
-    let recv = recv.es().unwrap();
-    let (revealed_i, recv) = recv.s().unwrap();
-    assert_eq!(revealed_i.as_ref(), i_pub.as_ref());
-    let recv = recv.ss().unwrap();
-    let r_hs = recv.psk(&psk).unwrap();
-    let mut r_t = r_hs.e().unwrap().ee().unwrap().se().unwrap();
-    assert_eq!(stream.remaining(), 0, "classic responder must drain msg1");
-
-    // The classic responder's msg2 bytes drive the macro initiator home.
-    let msg2_bytes = stream.take_written();
-    assert_eq!(msg2_bytes.len(), IKpsk1::MSG2_SIZE);
-    let msg2: &[u8; IKpsk1::MSG2_SIZE] = msg2_bytes.as_slice().try_into().unwrap();
-    let mut i_t = i_hs.read_message_2(msg2).unwrap();
-
-    assert_eq!(i_t.session_id(), r_t.transport().session_id());
-
-    // Ciphertexts cross the implementation boundary.
-    let word = b"interop";
-    let mut sealed = vec![0u8; word.len() + Transport::<IKpsk1>::OVERHEAD];
-    let n = i_t.send(word, &mut sealed).unwrap();
-    let mut opened = vec![0u8; n];
-    let m = r_t.transport().receive(&sealed[..n], &mut opened).unwrap();
-    assert_eq!(&opened[..m], word);
-}
-
-#[test]
-fn ikpsk1_classic_initiator_interops_with_macro_responder() {
-    let mut ip = provider(33);
-    let i_static = ip.generate::<X25519>().unwrap();
-    let mut rp = provider(44);
-    let r_static = rp.generate::<X25519>().unwrap();
-    let r_pub = rp.public(&r_static).unwrap();
-    let psk = Psk::from_bytes([0x66; 32]);
-
-    // Classic io-driver initiator writes msg1 into the stream.
-    let stream = PeerStream::new();
-    let i_hs =
-        SyncHandshake::<Classic, Initiator, _, _, _, _>::initiate(ip, PROLOGUE, stream.clone())
-            .set_rs(r_pub);
-    let i_hs = i_hs
-        .e()
-        .unwrap()
-        .es()
-        .unwrap()
-        .s(i_static)
-        .unwrap()
-        .ss()
-        .unwrap()
-        .psk(&psk)
-        .unwrap();
-
-    let msg1_bytes = stream.take_written();
-    assert_eq!(msg1_bytes.len(), IKpsk1::MSG1_SIZE);
-    let msg1: &[u8; IKpsk1::MSG1_SIZE] = msg1_bytes.as_slice().try_into().unwrap();
-
-    // Macro responder consumes the fixed array and answers with msg2 —
-    // this deployment knows the PSK in advance, so it is a plain
-    // argument, no lookup.
-    let hs = IKpsk1::responder(rp, PROLOGUE, r_static).unwrap();
-    let hs = hs.read_message_1(msg1, &psk).unwrap();
-    let (msg2, mut r_t) = hs.write_message_2().unwrap();
-
-    // Feed msg2 to the classic initiator.
-    stream.feed(&msg2);
-    let (_re, recv) = i_hs.recv().e().unwrap();
-    let mut i_t = recv.ee().unwrap().se().unwrap();
-    assert_eq!(stream.remaining(), 0, "classic initiator must drain msg2");
-
-    assert_eq!(i_t.transport().session_id(), r_t.session_id());
-
-    let word = b"poretni";
-    let mut sealed = vec![0u8; word.len() + Transport::<IKpsk1>::OVERHEAD];
-    let n = r_t.send(word, &mut sealed).unwrap();
-    let mut opened = vec![0u8; n];
-    let m = i_t.transport().receive(&sealed[..n], &mut opened).unwrap();
-    assert_eq!(&opened[..m], word);
 }
 
 #[test]

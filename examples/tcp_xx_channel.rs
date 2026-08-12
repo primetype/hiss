@@ -1,11 +1,12 @@
 //! End-to-end Noise **XX** mutual-authentication handshake over a real
-//! localhost TCP socket, driven by the **async (tokio)** handshake driver,
-//! followed by one encrypted message exchanged in each direction.
+//! localhost TCP socket, followed by one encrypted message exchanged in
+//! each direction. `hiss` itself does no I/O; the socket work below is
+//! ordinary `tokio` code.
 //!
 //! Run with:
 //!
 //! ```text
-//! cargo run --example tcp_xx_channel --features async-io
+//! cargo run --example tcp_xx_channel
 //! ```
 //!
 //! # The XX pattern
@@ -28,42 +29,52 @@
 //! channel-binding `session_id` from the handshake hash.
 //!
 //! Contrast with the pre-known-static patterns (N, K, IK, XK): there the
-//! recipient static is configured up front with `set_rs` and folded into
-//! the prologue hash before the first byte goes out. **XX never calls
-//! `set_rs`** — there is nothing to pre-set. Instead each side passes its
-//! own static *private* key to the `s` token at the moment it is sent
-//! (`.s(my_static)`), and learns the peer's static *public* key as the
-//! return value of the `s` token when it is *received* (`let (peer_pub, _)
-//! = recv.s().await?`). That asymmetry — private key in on send, public
-//! key out on receive — is the whole shape of XX in this API.
+//! recipient's static is a *constructor argument*, folded into the
+//! transcript before the first byte goes out. **XX's constructors take no
+//! keys at all** — there is nothing to pre-set. Instead each side hands its
+//! own static *private* key to the write that carries the `s` token, and
+//! learns the peer's static *public* key from the read that receives one.
+//! That asymmetry — private key in on send, public key out on receive — is
+//! the whole shape of XX in this API.
 //!
 //! **Authentication is only real once you check the peer's static.** XX proves
 //! the peer holds *a* static private key, not that you trust it: each side here
 //! verifies the revealed key against a small out-of-band trust store and aborts
 //! on a stranger.
 //!
-//! # Why the `TcpStream` is the whole story
+//! # Framing is free, because every size is a constant
 //!
-//! The async driver takes ownership of any `tokio::io::AsyncRead +
-//! AsyncWrite` and `.await`s each token directly against the wire: there
-//! is no caller-sized scratch buffer for handshake messages. Here the
-//! `Io` is a live `TcpStream`. The in-memory ("buffer") case is the same
-//! code with an in-memory `Io` (e.g. a duplex pipe) substituted for the
-//! socket — nothing else changes.
+//! `hiss` performs no I/O: each `write_message_N` hands back a fixed-size
+//! array and each `read_message_N` takes one. So framing a handshake needs
+//! no length prefix — `read_exact` of `Channel::MSGn_SIZE` is the frame.
+//! Transport records *are* variable-length, so those keep the 2-byte prefix
+//! at the bottom of this file. Swapping the `TcpStream` for an in-memory
+//! duplex changes only the two `write_all`/`read_exact` pairs.
 
 use hiss::curve::Curve;
-use hiss::noise::{Blake2b, ChaChaPoly, Noise, P256, Transport, pattern};
+use hiss::noise::{Blake2b, ChaChaPoly, HandshakeError, P256, Transport};
 use hiss::provider::{CryptoKeyProvider, EphemeralOnly, ProviderExt};
 
-use rand::{SeedableRng, rngs::StdRng};
+use rand::rngs::StdRng;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
-/// The protocol this channel runs: `Noise_XX_P256_ChaChaPoly_BLAKE2b`.
-/// `XX` is the *pattern*; the suite is pinned here, locally.
-type Channel = Noise<pattern::XX, P256, ChaChaPoly, Blake2b>;
+// The protocol this channel runs: `Noise_XX_P256_ChaChaPoly_BLAKE2b`.
+//
+// The declared identifier *is* the Noise pattern name — it becomes the `XX`
+// in the protocol string that seeds the handshake hash — so the generated
+// type is `XX`, and `Channel` is the alias that says what it is *for*.
+hiss::noise! {
+    /// Mutually authenticated channel; neither side pre-knows the other.
+    pub XX<P256, ChaChaPoly, Blake2b> {
+        -> e
+        <- e, ee, s, es
+        -> s, se
+    }
+}
+type Channel = XX;
 
 /// A peer's P-256 static public key, as revealed by the completed handshake.
 type PublicKey = <P256 as Curve>::PublicKey;
@@ -94,11 +105,11 @@ async fn main() -> Result<(), BoxError> {
     // async provider surface and `tokio::spawn` both require; `rand::rng()`
     // (a `!Send` `ThreadRng`) would not cross the task boundary. Seed it
     // from OS entropy.
-    let mut init_provider = EphemeralOnly::new(StdRng::from_os_rng());
+    let mut init_provider = EphemeralOnly::new(rand::make_rng::<StdRng>());
     let init_static = init_provider.generate::<P256>()?;
     let init_pub = init_provider.public(&init_static)?;
 
-    let mut resp_provider = EphemeralOnly::new(StdRng::from_os_rng());
+    let mut resp_provider = EphemeralOnly::new(rand::make_rng::<StdRng>());
     let resp_static = resp_provider.generate::<P256>()?;
     let resp_pub = resp_provider.public(&resp_static)?;
 
@@ -151,42 +162,44 @@ async fn initiator(
     my_static: StaticKey,
     trusted: Vec<PublicKey>,
 ) -> Result<(String, String), BoxError> {
-    // The `TcpStream` itself is the async `Io` the handshake drives.
-    let stream = TcpStream::connect(addr).await?;
+    let mut stream = TcpStream::connect(addr).await?;
 
-    // Begin XX as initiator. No `set_rs`: XX has no pre-known remote
-    // static. The empty slice is the (here unused) prologue.
-    let hs = Channel::async_initiator(provider, &[], stream);
-
+    // Begin XX as initiator. XX has no pre-messages, so the constructor
+    // takes nothing but the provider and the (here unused) prologue.
     // msg1  -> e          ephemeral only; the cipher is not yet keyed, so
     //                     these bytes go out in the clear.
-    let hs = hs.e().await?;
+    let (msg1, hs) = Channel::initiator(provider, &[]).write_message_1()?;
+    stream.write_all(&msg1).await?;
 
     // msg2  <- e, ee, s, es
-    //   Read the responder's ephemeral, mix the ee DH, then receive its
-    //   static: the `s` token returns the peer's static *public* key,
-    //   which es then binds via the responder-static DH. Check it against
-    //   our trust store *before* proceeding — completing the handshake with
-    //   an untrusted peer would leak our own identity in msg3.
-    let (_their_e, recv) = hs.recv().e().await?;
-    let recv = recv.ee().await?;
-    let (responder_static, recv) = recv.s().await?;
-    if !is_trusted(&trusted, &responder_static) {
-        return Err("responder static key is not in our trust store".into());
-    }
-    let hs = recv.es().await?;
+    //   Read exactly the message's compile-time size, then hand it over.
+    //   The `_with` variant runs our trust check the instant the peer's
+    //   static decrypts and *before* the message's remaining tokens — so a
+    //   stranger is rejected without us ever sending msg3, which is where
+    //   we would reveal our own identity.
+    let mut msg2 = [0u8; Channel::MSG2_SIZE];
+    stream.read_exact(&mut msg2).await?;
+    let hs = hs.read_message_2_with(&msg2, |responder_static| {
+        if is_trusted(&trusted, responder_static) {
+            Ok(())
+        } else {
+            Err(HandshakeError::PeerRejected {
+                reason: "responder static key is not in our trust store".into(),
+            })
+        }
+    })?;
 
     // msg3  -> s, se
     //   Send our own static (encrypted, authenticated by se). The final
-    //   token transitions the handshake into the transport state.
-    let transport = hs.s(my_static).await?.se().await?;
-    let (mut transport, mut stream) = transport.into_parts();
+    //   message completes the handshake into the transport state.
+    let (msg3, mut transport) = hs.write_message_3(my_static)?;
+    stream.write_all(&msg3).await?;
 
     let session_id = transport.session_id().to_string();
 
-    // Transport phase. Handshake messages were framed on the wire by the
-    // driver; transport messages are plain buffers, so we add our own
-    // 2-byte big-endian length prefix per record.
+    // Transport phase. Handshake messages were fixed-size, so `read_exact`
+    // framed them; transport records are variable-length, so they get a
+    // 2-byte big-endian length prefix.
     let plaintext = b"hello from the XX initiator";
     let mut ciphertext = vec![0u8; plaintext.len() + Transport::<Channel>::OVERHEAD];
     let n = transport.send(plaintext, &mut ciphertext)?;
@@ -213,31 +226,34 @@ async fn responder(
     my_static: StaticKey,
     trusted: Vec<PublicKey>,
 ) -> Result<(String, String), BoxError> {
-    let (stream, _peer) = listener.accept().await?;
-
-    // Begin XX as responder. Like the initiator, no `set_rs`.
-    let hs = Channel::async_responder(provider, &[], stream);
+    let (mut stream, _peer) = listener.accept().await?;
 
     // msg1  -> e          read the initiator's ephemeral.
-    let (_their_e, recv) = hs.recv().e().await?;
+    let mut msg1 = [0u8; Channel::MSG1_SIZE];
+    stream.read_exact(&mut msg1).await?;
+    let hs = Channel::responder(provider, &[]).read_message_1(&msg1)?;
 
     // msg2  <- e, ee, s, es
-    //   Send our ephemeral, mix ee, send our static (the `s` token takes
-    //   our static *private* key and streams the encrypted public key),
-    //   then es. This message starts in the clear (e) and is keyed from
-    //   ee onward.
-    let hs = recv.e().await?.ee().await?.s(my_static).await?.es().await?;
+    //   Our ephemeral, the ee DH, then our static — the write takes our
+    //   static *private* key and puts the encrypted public half on the
+    //   wire. This message starts in the clear (e) and is keyed from ee on.
+    let (msg2, hs) = hs.write_message_2(my_static)?;
+    stream.write_all(&msg2).await?;
 
     // msg3  -> s, se
-    //   Read the initiator's static: the `s` token returns its static
-    //   *public* key. Check it against our trust store before finalizing
-    //   the handshake into the transport state.
-    let (initiator_static, recv) = hs.recv().s().await?;
-    if !is_trusted(&trusted, &initiator_static) {
-        return Err("initiator static key is not in our trust store".into());
-    }
-    let transport = recv.se().await?;
-    let (mut transport, mut stream) = transport.into_parts();
+    //   The read reveals the initiator's static; check it against our trust
+    //   store before the handshake completes into a transport.
+    let mut msg3 = [0u8; Channel::MSG3_SIZE];
+    stream.read_exact(&mut msg3).await?;
+    let mut transport = hs.read_message_3_with(&msg3, |initiator_static| {
+        if is_trusted(&trusted, initiator_static) {
+            Ok(())
+        } else {
+            Err(HandshakeError::PeerRejected {
+                reason: "initiator static key is not in our trust store".into(),
+            })
+        }
+    })?;
 
     let session_id = transport.session_id().to_string();
 

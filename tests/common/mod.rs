@@ -2,7 +2,8 @@
 
 #![allow(dead_code)] // each test binary uses a different subset
 
-use rand::{CryptoRng, RngCore};
+use rand::{TryCryptoRng, TryRng};
+use std::convert::Infallible;
 
 /// A deterministic RNG that replays a fixed, pre-scripted byte stream.
 ///
@@ -48,24 +49,37 @@ impl ScriptedRng {
     }
 }
 
-impl RngCore for ScriptedRng {
-    fn next_u32(&mut self) -> u32 {
-        u32::from_le_bytes(self.take(4).try_into().unwrap())
+// rand_core 0.10 inverts the hierarchy: `TryRng` is the base trait and the
+// infallible `Rng` / `CryptoRng` arrive through blanket impls over
+// `Error = Infallible`. So this is the whole implementation — `ScriptedRng`
+// is a `CryptoRng` (and satisfies hiss's public bounds) without naming
+// either trait.
+//
+// Infallible is the *type-level* claim; exhausting the script still panics
+// inside `take`, which is deliberate — a scripted draw that runs off the end
+// of its vector is a miswired test, not a runtime error a caller could
+// handle.
+impl TryRng for ScriptedRng {
+    type Error = Infallible;
+
+    fn try_next_u32(&mut self) -> Result<u32, Infallible> {
+        Ok(u32::from_le_bytes(self.take(4).try_into().unwrap()))
     }
 
-    fn next_u64(&mut self) -> u64 {
-        u64::from_le_bytes(self.take(8).try_into().unwrap())
+    fn try_next_u64(&mut self) -> Result<u64, Infallible> {
+        Ok(u64::from_le_bytes(self.take(8).try_into().unwrap()))
     }
 
-    fn fill_bytes(&mut self, dst: &mut [u8]) {
+    fn try_fill_bytes(&mut self, dst: &mut [u8]) -> Result<(), Infallible> {
         let n = dst.len();
         dst.copy_from_slice(self.take(n));
+        Ok(())
     }
 }
 
 // Marker only (no methods): the scripted stream stands in for a CSPRNG in
 // deterministic tests, never in production.
-impl CryptoRng for ScriptedRng {}
+impl TryCryptoRng for ScriptedRng {}
 
 // ── Fixed-key minting (P-256) ────────────────────────────────────
 
@@ -95,9 +109,8 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
 
-/// A single in-memory `Read + Write` endpoint for driving the blocking
-/// [`SyncHandshake`](hiss::noise::SyncHandshake) against an out-of-band
-/// peer (e.g. `snow`, or replayed frozen vectors).
+/// A single in-memory `Read + Write` endpoint, retained for any test that
+/// needs to stream bytes against an out-of-band peer by hand.
 ///
 /// Writes accumulate into a capture buffer drained per outgoing message
 /// by [`take_written`](PeerStream::take_written); reads pull from an

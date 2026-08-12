@@ -9,13 +9,13 @@
 //! These helpers are **internal** ([`pub(crate)`]) and Apple-scoped:
 //! the sole consumer is [`crate::provider::apple`]. They are written
 //! directly over the shared per-token crypto free functions in
-//! [`super::process`] in fixed Noise-N order (`e, es`) — there is no
-//! type-state driver and no I/O stream involved.
+//! [`super::process`] in fixed Noise-N order (`e, es`) — no generated
+//! state machine and no type-state involved.
 //!
-//! Async by construction: matches the existing `DhProviderAsync<P256>`
-//! async-trait pattern in [`crate::curve::p256`]. Callers `.await`
-//! directly. NO `block_on` / `Handle::try_current` is used — those
-//! would panic when invoked from inside a Tokio worker.
+//! Async by construction: matches the `DhProviderAsync<P256>` async-trait
+//! pattern, so callers `.await` directly. No `block_on` or executor
+//! handle is used anywhere — this crate depends on no async runtime, and
+//! these futures run wherever the caller polls them.
 //!
 //! # Wire format
 //!
@@ -26,10 +26,13 @@
 //! [Transport ciphertext — 48 bytes: encrypted payload (32) + AEAD tag (16)]
 //! ```
 //!
-//! The layout is stable and self-describing. Each seal operation uses
-//! a fresh ephemeral key, providing forward secrecy per write. The
-//! envelope is stored verbatim in the Keychain, so the byte layout is
-//! frozen (see the `seal_format_pin` test).
+//! The layout is stable and self-describing. Each seal operation uses a
+//! fresh ephemeral key, so — as for `N` generally — forward secrecy is
+//! **sender-side only**: that ephemeral protects a captured envelope
+//! against later compromise of the sender's keys, but the recipient's
+//! private key still opens it. The envelope is stored verbatim in the
+//! Keychain, so the byte layout is frozen (see the `seal_format_pin`
+//! test).
 //!
 //! # Cryptographic invariant
 //!
@@ -82,12 +85,13 @@ pub(crate) enum SealError {
 /// Seal a 32-byte payload to `recipient_pub` using
 /// `Noise_N_P256_ChaChaPoly_BLAKE2b`.
 ///
-/// Each call generates a fresh ephemeral key (forward secrecy per
-/// write). The returned 129-byte envelope is opaque to anyone without
-/// the recipient's P-256 private key.
+/// Each call generates a fresh ephemeral key, so forward secrecy is
+/// sender-side only — the recipient's private key opens a captured
+/// envelope whenever it is compromised. The returned 129-byte envelope
+/// is opaque to anyone without that key.
 ///
 /// Runs the Noise-N initiator message (`e, es`) directly over the
-/// shared crypto free functions — no type-state, no I/O driver.
+/// shared crypto free functions — no type-state, no state machine.
 pub(crate) async fn seal_32<P>(
     provider: P,
     recipient_pub: &P256r1PublicKey,
@@ -138,7 +142,7 @@ where
 /// (non-exportable).
 ///
 /// Runs the Noise-N responder message (`e, es`) directly over the
-/// shared crypto free functions — no type-state, no I/O driver.
+/// shared crypto free functions — no type-state, no state machine.
 pub(crate) async fn open_32<P>(
     provider: P,
     recipient_key: P::PrivateKey,
@@ -201,7 +205,7 @@ mod tests {
         let payload: [u8; 32] = [0x42; 32];
 
         let sealed = seal_32(
-            EphemeralOnly::new(StdRng::from_os_rng()),
+            EphemeralOnly::new(rand::make_rng::<StdRng>()),
             &device_pub,
             &payload,
         )
@@ -218,7 +222,7 @@ mod tests {
         );
 
         let opened = open_32(
-            EphemeralOnly::new(StdRng::from_os_rng()),
+            EphemeralOnly::new(rand::make_rng::<StdRng>()),
             device_key,
             &sealed,
         )
@@ -233,7 +237,7 @@ mod tests {
         let device_pub = device_key.public();
         let payload: [u8; 32] = [0x99; 32];
         let sealed = seal_32(
-            EphemeralOnly::new(StdRng::from_os_rng()),
+            EphemeralOnly::new(rand::make_rng::<StdRng>()),
             &device_pub,
             &payload,
         )
@@ -242,7 +246,7 @@ mod tests {
 
         let other_key = P256r1PrivateKey::generate(rand::rng()).unwrap();
         let result = open_32(
-            EphemeralOnly::new(StdRng::from_os_rng()),
+            EphemeralOnly::new(rand::make_rng::<StdRng>()),
             other_key,
             &sealed,
         )
@@ -260,14 +264,14 @@ mod tests {
         let payload: [u8; 32] = [0xAB; 32];
 
         let sealed_a = seal_32(
-            EphemeralOnly::new(StdRng::from_os_rng()),
+            EphemeralOnly::new(rand::make_rng::<StdRng>()),
             &device_pub,
             &payload,
         )
         .await
         .unwrap();
         let sealed_b = seal_32(
-            EphemeralOnly::new(StdRng::from_os_rng()),
+            EphemeralOnly::new(rand::make_rng::<StdRng>()),
             &device_pub,
             &payload,
         )
@@ -312,7 +316,7 @@ mod tests {
 
         // Round-trips back to the original payload.
         let opened = open_32(
-            EphemeralOnly::new(StdRng::from_os_rng()),
+            EphemeralOnly::new(rand::make_rng::<StdRng>()),
             recipient_key,
             &sealed,
         )

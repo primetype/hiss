@@ -5,7 +5,7 @@
 //! subsequent `Noise_IKpsk1` session between a pair of devices. It is
 //! zeroed on drop to prevent lingering in memory.
 
-use rand_core::{CryptoRng, RngCore};
+use rand_core::CryptoRng;
 use std::fmt;
 
 /// A 32-byte pre-shared key.
@@ -27,13 +27,14 @@ impl Psk {
 
     /// Generate a random PSK from a caller-supplied CSPRNG.
     ///
-    /// The caller owns the entropy source: supply your own
-    /// cryptographically secure `R: RngCore + CryptoRng`. `rand` is **not**
-    /// a dependency of `hiss`, so a consumer who wants to pass `rand::rng()`
-    /// must add the `rand` crate to their own `Cargo.toml`; for
-    /// deterministic tests, pass a seeded RNG instead. A `&mut R` is itself
-    /// `RngCore + CryptoRng`, so a borrowed RNG works too.
-    pub fn generate<R: RngCore + CryptoRng>(mut rng: R) -> Self {
+    /// The caller owns the entropy source: supply your own cryptographically
+    /// secure `R: CryptoRng` — the trait from [`rand_core`], re-exported at
+    /// the crate root so you can name the exact version `hiss` compiled
+    /// against. `rand` is **not** a dependency of `hiss`, so a consumer who
+    /// wants to pass `rand::rng()` must add the `rand` crate to their own
+    /// `Cargo.toml`; for deterministic tests, pass a seeded RNG instead. A
+    /// `&mut R` is itself `CryptoRng`, so a borrowed RNG works too.
+    pub fn generate<R: CryptoRng>(mut rng: R) -> Self {
         let mut bytes = [0u8; Self::SIZE];
         rng.fill_bytes(&mut bytes);
         Self(bytes)

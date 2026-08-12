@@ -1,16 +1,14 @@
-//! Runtime handshake state shared by the I/O drivers.
+//! Runtime handshake state.
 //!
-//! The type-state plumbing for the handshake lives in the two drivers —
-//! [`SyncHandshake`](super::io_sync::SyncHandshake) (blocking
-//! [`std::io`]) and [`AsyncHandshake`](super::io_async::AsyncHandshake)
-//! (async I/O). Both thread the same runtime data, [`HandshakeInner`],
-//! through their token chains; the per-token crypto operating on it is
-//! shared via [`process`](super::process).
+//! The type-state plumbing for the handshake lives in the state machines
+//! [`noise!`](crate::noise!) generates. They thread the same runtime
+//! data, [`HandshakeInner`], through their token chains; the per-token
+//! crypto operating on it is shared via [`process`](super::process).
 //!
 //! This module holds only that runtime struct and its shared
 //! constructor [`HandshakeInner::new`] — the protocol-name +
 //! `SymmetricState::initialize` + `mix_hash(prologue)` initialisation
-//! every driver (and the internal seal helpers) start from.
+//! every state machine (and the internal seal helpers) starts from.
 
 use super::Protocol;
 use super::cipher::Cipher;
@@ -21,10 +19,10 @@ use super::well_formed::DerivedHasPsk;
 use crate::curve::Curve;
 use crate::provider::CryptoKeyProvider;
 
-// ── Runtime state shared across the drivers ───────────────────
+// ── Runtime state shared across the state machines ────────────
 
 /// The runtime handshake data, threaded through every type state of the
-/// sync/async drivers.
+/// generated state machines.
 ///
 /// Separated from the type-state wrappers so that the shared per-token
 /// crypto in [`process`](super::process) can operate on it without
@@ -74,8 +72,8 @@ where
     /// provider, mixing the prologue into the handshake hash.
     ///
     /// This is the single source of the protocol-name + `mix_hash`
-    /// initialisation shared by every driver (`SyncHandshake`,
-    /// `AsyncHandshake`, and the internal seal helpers). The protocol
+    /// initialisation shared by every generated state machine and by the
+    /// internal seal helpers. The protocol
     /// descriptor `Proto` supplies the pattern/curve/cipher/hash names.
     pub(crate) fn new<Proto>(provider: CP, prologue: &[u8]) -> Self
     where

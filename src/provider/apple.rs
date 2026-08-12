@@ -15,15 +15,43 @@
 //! * [`P256r1PrivateKey::generate_secure_enclave_ephemeral`] —
 //!   hardware-backed, no per-use biometric prompt, not persisted.
 //!
-//! * [`P256r1PrivateKey::generate_secure_enclave`] — hardware-backed,
-//!   persisted to the Data Protection Keychain (Phase 18.1 Option B,
-//!   `2026/05/12`, D-20-restored). Authorisation for the team-prefixed
-//!   `keychain-access-groups` entitlement comes from the embedded macOS
-//!   Development provisioning profile placed alongside the binary by
-//!   the host application's build script (D-27.c). The Secure
-//!   Enclave binding is preserved via `Token::SecureEnclave` and
-//!   `kSecAttrTokenIDSecureEnclave` — D-23 invariant. iOS continues to
-//!   use its single (data-protection) keychain as before.
+//! * [`P256r1PrivateKey::generate_secure_enclave`] — hardware-backed and
+//!   persisted, so the key outlives the process and is recovered later
+//!   with [`P256r1PrivateKey::load_from_keychain`]. This is the mode a
+//!   long-term Noise static key uses, and the one with setup
+//!   requirements — see below.
+//!
+//! # What a persistent enclave key requires
+//!
+//! [`generate_secure_enclave`](P256r1PrivateKey::generate_secure_enclave)
+//! and [`load_from_keychain`](P256r1PrivateKey::load_from_keychain) only
+//! succeed inside an application that has been set up for them. Nothing
+//! in this crate can arrange that for you; get it wrong and the calls
+//! fail at run time.
+//!
+//! * **The key is generated into the Data Protection Keychain.**
+//!   Apple's technote TN3137 requires it: a key held in the Secure
+//!   Enclave must use that keychain, and a `SecItem` call targets the
+//!   older file-based keychain unless `kSecUseDataProtectionKeychain`
+//!   or `kSecAttrSynchronizable` is set. The generate path sets it; the
+//!   load path does not — it pins `kSecAttrTokenIDSecureEnclave`, so a
+//!   software key can never be substituted for the hardware one, but it
+//!   sets no data-protection selector, leaving the query targeting the
+//!   file-based keychain. No test covers the persistent path — it needs
+//!   the entitlement below and real hardware — so its behaviour on
+//!   device is unverified.
+//! * **On macOS, reaching that keychain needs an entitlement.** The
+//!   binary must carry a team-prefixed `keychain-access-groups`
+//!   entitlement, authorised by a provisioning profile embedded in the
+//!   application — the host application's build script places the
+//!   profile alongside the binary and signs with it. An unsigned
+//!   `cargo run` does not have this. On iOS the same entitlement comes
+//!   from ordinary app signing.
+//! * **The device must have been unlocked at least once since boot.**
+//!   Keys are created `AccessibleAfterFirstUnlockThisDeviceOnly`, so
+//!   they are unavailable before first unlock, never leave the device,
+//!   and are not in any backup or iCloud Keychain copy. A lost device
+//!   is a lost key; plan re-enrolment, not recovery.
 
 use crate::curve::SharedSecret;
 use crate::curve::ed25519::{
@@ -71,8 +99,8 @@ const ED25519_SEED_ACCOUNT: &str = "device-identity";
 //
 // `Clone` here is a CoreFoundation retain of the `SecKey` handle — no
 // secret material is copied (the key stays in the keychain / Secure
-// Enclave). It is required so the async impl can move the handle into a
-// `spawn_blocking` closure; the trait deliberately does not mandate it.
+// Enclave). The trait deliberately does not mandate `Clone`; this type
+// offers it because a retain is cheap and callers hold handles, not keys.
 #[derive(Clone)]
 pub struct P256r1PrivateKey {
     key: SecKey,
@@ -165,6 +193,10 @@ impl P256r1PrivateKey {
     /// prompt. The app-level lock screen provides the authentication gate.
     /// `AccessibleAfterFirstUnlockThisDeviceOnly` ensures the key is
     /// available once the device has been unlocked after boot.
+    ///
+    /// The key goes into the Data Protection Keychain, which the host
+    /// application must be entitled to reach — see "What a persistent
+    /// enclave key requires" in the [module documentation](self).
     pub fn generate_secure_enclave(label: &str) -> Result<Self, Error> {
         let mut attributes = GenerateKeyOptions::default();
         attributes
@@ -205,12 +237,16 @@ impl P256r1PrivateKey {
     /// [`generate_secure_enclave`](Self::generate_secure_enclave)). Returns `None`
     /// if no key is found.
     ///
-    /// Phase 18.1 (`2026/05/12`): the data-protection Keychain selector
-    /// is RESTORED (D-20-restored) per Apple TN3137 ("Keys stored in the
-    /// Secure Enclave _must_ use this keychain"). The lookup targets DPK;
-    /// authorisation lives in the embedded provisioning profile bundled
-    /// by the host application's build script (Option B, CONTEXT.md
-    /// Amendment 2026/05/12).
+    /// The query pins `kSecAttrTokenIDSecureEnclave`, so a software key
+    /// can never be returned in place of the hardware one. Unlike
+    /// [`generate_secure_enclave`](Self::generate_secure_enclave) it
+    /// sets no `kSecUseDataProtectionKeychain` selector, and by Apple's
+    /// TN3137 a `SecItem` call without one targets the file-based
+    /// keychain rather than the Data Protection Keychain the key was
+    /// written to. No test covers this path — it needs real hardware
+    /// plus the entitlement described under "What a persistent enclave
+    /// key requires" in the [module documentation](self) — so its
+    /// behaviour on device is unverified.
     pub fn load_from_keychain(label: &str) -> Result<Option<Self>, Error> {
         use core_foundation::base::TCFType as _;
         use core_foundation::boolean::CFBoolean;
@@ -357,6 +393,15 @@ impl P256r1PrivateKey {
     /// [`P256Signature`]. For a
     /// Secure-Enclave-backed key the signing scalar multiplication runs
     /// in-enclave and the private scalar never leaves hardware.
+    ///
+    /// **Unlike the software path, this is not RFC 6979 and not low-S.**
+    /// The framework derives its own per-signature nonce, so signing the
+    /// same message twice with the same key yields different signatures,
+    /// and the `s` it returns is decoded as-is rather than normalized to
+    /// the low half of the order. Both are properties of the platform
+    /// implementation, which `hiss` does not control. Verifiers that
+    /// require low-S — or that assume signature equality implies message
+    /// equality — must account for it.
     pub fn sign(&self, message: &[u8]) -> Result<P256Signature, Error> {
         let signature = self
             .key
@@ -405,6 +450,57 @@ impl P256r1PrivateKey {
 /// `namespace` is a required, caller-supplied reverse-DNS base (no
 /// default): it names the persisted slots so independent identities on a
 /// device never collide.
+///
+/// # Example
+///
+/// Swapping the provider is the whole change *in your code* — every
+/// handshake call below is identical to the software backend's. The
+/// enclave setup is not free, though: see "What a persistent enclave key
+/// requires" in the [module documentation](self). The suite must name
+/// [`P256`]: the Secure Enclave implements that curve and no other.
+///
+/// ```no_run
+/// use hiss::noise::{Blake2b, ChaChaPoly, P256};
+/// use hiss::provider::{AppleSecureEnclave, ProviderExt};
+///
+/// hiss::noise! {
+///     pub XX<P256, ChaChaPoly, Blake2b> {
+///         -> e
+///         <- e, ee, s, es
+///         -> s, se
+///     }
+/// }
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+///
+/// // Generated inside the enclave, persisted to the Keychain, never extractable.
+/// let mut keys = AppleSecureEnclave::new("uk.co.example.app");
+/// let static_key = keys.generate::<P256>()?;
+///
+/// // From here nothing is Apple-specific.
+/// let (msg1, hs) = XX::initiator(keys, &[]).write_message_1()?;
+/// # let _ = (msg1, hs, static_key);
+/// # Ok(())
+/// # }
+/// ```
+///
+/// This is a `no_run` doctest: it is compiled on every Apple build, but
+/// executing it needs real Secure Enclave hardware and a provisioned
+/// entitlement, neither of which a CI runner has.
+///
+/// # The async surface blocks
+///
+/// This type implements [`DhProviderAsync`] and friends, but every call
+/// underneath is a synchronous, blocking Security-framework C function
+/// with no async variant — and an enclave operation can stall for a
+/// meaningful time, including any keychain or biometric wait. **Those
+/// futures therefore do the work on whatever thread polls them and
+/// resolve on the first poll; they never suspend.**
+///
+/// `hiss` deliberately pulls in no async runtime to disguise that. If you
+/// are on an executor that must not block, wrap these calls in whatever
+/// your runtime provides — `spawn_blocking`, `block_in_place`, a
+/// dedicated thread. That is a decision for the application that owns the
+/// executor, not for this crate.
 #[derive(Clone)]
 pub struct AppleSecureEnclave {
     namespace: String,
@@ -512,55 +608,40 @@ impl AppleSecureEnclave {
     /// exist — establish it via
     /// [`generate_static_key`](CryptoKeyProvider::generate_static_key).
     pub async fn store_seed(&self, seed: &[u8; 32]) -> Result<(), SeedError> {
-        // Look up the SE identity key and extract its public key (the
-        // seal recipient) on the blocking pool — the lookup is a blocking
-        // Security-framework call. Only the public key is needed past
-        // here, so the private `SecKey` handle never leaves the closure.
+        // Look up the SE identity key and extract its public key — the
+        // seal recipient. Only the public key is needed past here, so the
+        // private `SecKey` handle is dropped immediately.
         let label = self.p256_label();
-        let se_public = offload_seed(move || {
-            let se_private = match P256r1PrivateKey::load_from_keychain(&label)? {
-                Some(key) => key,
-                None => return Err(SeedError::IdentityKeyMissing { label }),
-            };
-            Ok(se_private.public()?)
-        })
-        .await?;
+        let se_public = match P256r1PrivateKey::load_from_keychain(&label)? {
+            Some(se_private) => se_private.public()?,
+            None => return Err(SeedError::IdentityKeyMissing { label }),
+        };
 
-        // Seal the seed to the SE public key (the DH is itself offloaded
-        // by the provider inside `seal_32`).
+        // Seal the seed to the SE public key.
         let sealed = seal_32(self.clone(), &se_public, seed)
             .await
             .map_err(|e| SeedError::Seal(e.to_string()))?;
 
-        // Overwrite any prior item, then store the sealed envelope — both
-        // are blocking Keychain writes, so run them on the blocking pool.
+        // Overwrite any prior item, then store the sealed envelope.
         let service = self.ed25519_service();
-        offload_seed(move || {
-            let _ = delete_generic_password_options(seed_password_options(&service)?);
-            set_generic_password_options(&sealed, seed_password_options(&service)?).map_err(|e| {
-                SeedError::Keychain(format!("failed to store sealed Ed25519 seed: {e}"))
-            })
-        })
-        .await
+        let _ = delete_generic_password_options(seed_password_options(&service)?);
+        set_generic_password_options(&sealed, seed_password_options(&service)?)
+            .map_err(|e| SeedError::Keychain(format!("failed to store sealed Ed25519 seed: {e}")))
     }
 
     /// Load and unseal the Ed25519 seed, or `None` if none is stored.
     pub async fn load_seed(&self) -> Result<Option<[u8; 32]>, SeedError> {
-        // Blocking Keychain query for the sealed envelope.
+        // Keychain query for the sealed envelope.
         let service = self.ed25519_service();
-        let sealed_bytes =
-            offload_seed(
-                move || match generic_password(seed_password_options(&service)?) {
-                    Ok(bytes) => Ok(Some(bytes)),
-                    Err(e) if e.code() == security_framework_sys::base::errSecItemNotFound => {
-                        Ok(None)
-                    }
-                    Err(e) => Err(SeedError::Keychain(format!(
-                        "failed to query sealed Ed25519 seed: {e}"
-                    ))),
-                },
-            )
-            .await?;
+        let sealed_bytes = match generic_password(seed_password_options(&service)?) {
+            Ok(bytes) => Some(bytes),
+            Err(e) if e.code() == security_framework_sys::base::errSecItemNotFound => None,
+            Err(e) => {
+                return Err(SeedError::Keychain(format!(
+                    "failed to query sealed Ed25519 seed: {e}"
+                )));
+            }
+        };
         let Some(sealed_bytes) = sealed_bytes else {
             return Ok(None);
         };
@@ -572,18 +653,12 @@ impl AppleSecureEnclave {
         let mut sealed = [0u8; SEALED_SIZE];
         sealed.copy_from_slice(&sealed_bytes);
 
-        // Blocking SE-key lookup; the returned key (a `Send` `SecKey`
-        // handle) then moves into `open_32`, whose DH the provider
-        // offloads.
+        // SE-key lookup; the returned handle then moves into `open_32`.
         let label = self.p256_label();
-        let se_private =
-            offload_seed(
-                move || match P256r1PrivateKey::load_from_keychain(&label)? {
-                    Some(key) => Ok(key),
-                    None => Err(SeedError::IdentityKeyMissing { label }),
-                },
-            )
-            .await?;
+        let se_private = match P256r1PrivateKey::load_from_keychain(&label)? {
+            Some(key) => key,
+            None => return Err(SeedError::IdentityKeyMissing { label }),
+        };
 
         let opened = open_32(self.clone(), se_private, &sealed)
             .await
@@ -605,55 +680,33 @@ impl AppleSecureEnclave {
     }
 }
 
-/// Run a blocking Security-framework operation on Tokio's blocking
-/// thread pool.
-///
-/// Apple's `SecKey*` crypto calls are synchronous, blocking C functions
-/// with no async variant — and a Secure Enclave operation can stall for
-/// a meaningful time (including any keychain/biometric wait). Running
-/// them inline inside an `async fn` would block the async executor;
-/// [`spawn_blocking`](tokio::task::spawn_blocking) moves them to a
-/// dedicated blocking thread so the executor keeps making progress and
-/// the future genuinely suspends until the work completes.
-///
-/// Because this offloads, the [`DhProviderAsync`] futures here resolve
-/// on a worker thread rather than the first poll. The synchronous
-/// [`DhProvider`] surface runs the
-/// same blocking calls directly on the caller's thread, so
-/// `AppleSecureEnclave` is usable with the blocking `std::io` handshake
-/// too.
-async fn offload<T, F>(op: F) -> Result<T, Error>
-where
-    F: FnOnce() -> Result<T, Error> + Send + 'static,
-    T: Send + 'static,
-{
-    tokio::task::spawn_blocking(op)
-        .await
-        .map_err(|e| Error::Platform(format!("Secure Enclave task failed to join: {e}")))?
-}
-
-/// Like [`offload`], but for the Ed25519 seed lifecycle's [`SeedError`].
-///
-/// The Keychain item calls and the SE-key lookup are synchronous,
-/// blocking Security-framework operations (a keychain wait can stall) —
-/// run them on the blocking pool so the async seed methods never block
-/// the executor.
-async fn offload_seed<T, F>(op: F) -> Result<T, SeedError>
-where
-    F: FnOnce() -> Result<T, SeedError> + Send + 'static,
-    T: Send + 'static,
-{
-    tokio::task::spawn_blocking(op)
-        .await
-        .map_err(|e| SeedError::Keychain(format!("seed Keychain task failed to join: {e}")))?
-}
+// ── A note on the async surface ───────────────────────────────────────
+//
+// Apple's `SecKey*` and Keychain calls are synchronous, blocking C
+// functions with no async variant, and a Secure Enclave operation can
+// stall for a meaningful time (including any keychain or biometric wait).
+// The `*Async` impls below therefore do the same work as their
+// synchronous counterparts and resolve on the first poll — they do not
+// suspend, and they do not move the work to another thread.
+//
+// This crate pulls in **no async runtime** to pretend otherwise. An
+// earlier version wrapped every call in `tokio::task::spawn_blocking`,
+// which made `tokio` a hard dependency of every macOS/iOS consumer in
+// order to add a thread hop this crate cannot know is wanted. A caller
+// running on an executor that must not block should wrap these calls in
+// whatever their runtime offers (`spawn_blocking`, `block_in_place`, a
+// dedicated thread) — that is a decision belonging to the application
+// that owns the executor, not to a library.
+//
+// The `*Async` traits themselves remain the right shape for a backend
+// that genuinely suspends — a remote KMS, WebCrypto — where the future
+// really does await I/O.
 
 // Apple's Security-framework operations are synchronous, blocking C
-// calls — so the *synchronous* surface is simply those inherent ops,
-// run directly on the calling thread. (This is the right behaviour in a
-// blocking context; the async impls below offload the same calls.) This
-// is what makes Secure Enclave keys usable with the blocking `std::io`
-// handshake, exactly as Apple's libraries expose them.
+// calls — so the *synchronous* surface is simply those inherent ops, run
+// directly on the calling thread, exactly as Apple's libraries expose
+// them. The async impls further down call the very same operations; see
+// the note above them.
 impl CryptoKeyProvider<P256> for AppleSecureEnclave {
     type Error = Error;
     type PrivateKey = P256r1PrivateKey;
@@ -675,12 +728,11 @@ impl CryptoKeyProvider<P256> for AppleSecureEnclave {
 
 impl CryptoKeyProviderAsync<P256> for AppleSecureEnclave {
     async fn generate_static_key_async(&mut self) -> Result<Self::PrivateKey, Self::Error> {
-        let label = self.p256_label();
-        offload(move || P256r1PrivateKey::generate_secure_enclave(&label)).await
+        P256r1PrivateKey::generate_secure_enclave(&self.p256_label())
     }
 
     async fn generate_ephemeral_key_async(&mut self) -> Result<Self::PrivateKey, Self::Error> {
-        offload(P256r1PrivateKey::generate_ephemeral).await
+        P256r1PrivateKey::generate_ephemeral()
     }
 }
 
@@ -700,9 +752,7 @@ impl DhProviderAsync<P256> for AppleSecureEnclave {
         key: &Self::PrivateKey,
         peer: &P256r1PublicKey,
     ) -> Result<SharedSecret<32>, Self::Error> {
-        let key = key.clone();
-        let peer = *peer;
-        offload(move || key.dh(&peer)).await
+        key.dh(peer)
     }
 }
 
@@ -718,9 +768,7 @@ impl SigningProviderAsync<P256> for AppleSecureEnclave {
         key: &Self::PrivateKey,
         message: &[u8],
     ) -> Result<P256Signature, Self::Error> {
-        let key = key.clone();
-        let message = message.to_vec();
-        offload(move || key.sign(&message)).await
+        key.sign(message)
     }
 }
 
@@ -786,26 +834,6 @@ impl CryptoKeyProviderAsync<Ed25519> for AppleSecureEnclave {
 
     async fn generate_ephemeral_key_async(&mut self) -> Result<Self::PrivateKey, Self::Error> {
         apple_ed25519_generate()
-    }
-}
-
-impl DhProvider<Ed25519> for AppleSecureEnclave {
-    fn dh(
-        &self,
-        key: &Self::PrivateKey,
-        peer: &Ed25519PublicKey,
-    ) -> Result<SharedSecret<32>, Self::Error> {
-        Ok(key.dh(peer))
-    }
-}
-
-impl DhProviderAsync<Ed25519> for AppleSecureEnclave {
-    async fn dh_async(
-        &self,
-        key: &Self::PrivateKey,
-        peer: &Ed25519PublicKey,
-    ) -> Result<SharedSecret<32>, Self::Error> {
-        Ok(key.dh(peer))
     }
 }
 
@@ -879,11 +907,12 @@ mod tests {
         assert_eq!(apple_dh.as_bytes(), our_dh.as_bytes());
     }
 
-    /// Drive the async provider trait methods (which offload to
-    /// the Tokio blocking pool) end-to-end under a real runtime: generate
-    /// two ephemeral keys, agree, and confirm the DH matches both ways.
+    /// Drive the async provider trait methods end-to-end under a real
+    /// runtime: generate two ephemeral keys, agree, and confirm the DH
+    /// matches both ways. (`tokio` is a dev-dependency for this test only —
+    /// the crate itself pulls in no runtime.)
     #[tokio::test]
-    async fn crypto_provider_offloaded_dh_roundtrip() {
+    async fn crypto_provider_async_dh_roundtrip() {
         let mut provider = AppleSecureEnclave::new("uk.co.example.hiss-test");
 
         // Fully-qualified P-256: the provider also implements the trait
@@ -905,7 +934,7 @@ mod tests {
             .unwrap();
         assert_eq!(ab.as_bytes(), ba.as_bytes());
 
-        // The offloaded signing path round-trips too.
+        // The async signing path round-trips too.
         let sig = SigningProviderAsync::<P256>::sign_async(&provider, &a, b"hello")
             .await
             .unwrap();

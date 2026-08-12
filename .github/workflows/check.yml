@@ -25,7 +25,7 @@ jobs:
     name: rustfmt
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
@@ -41,7 +41,7 @@ jobs:
         # ubuntu does not. Lint and doc both so neither path rots.
         os: [ubuntu-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -53,9 +53,9 @@ jobs:
       # the `--no-default-features` build explicitly to keep it from rotting.
       - name: clippy (no default features — eccoxide X25519 backend)
         run: cargo clippy --no-default-features --all-targets -- -D warnings
-      # `cargo doc` caches, and items behind `async-io` only break the
-      # default build (the 0005 lesson) — so clean and check BOTH feature
-      # sets with warnings-as-errors to catch broken intra-doc links.
+      # `cargo doc` caches, and a link can break in one feature set while
+      # the other stays green — so clean and check BOTH with
+      # warnings-as-errors to catch broken intra-doc links.
       - name: doc intra-links (default features)
         run: cargo clean --doc && cargo doc --no-deps
         env:
@@ -71,7 +71,7 @@ jobs:
     name: MSRV (1.96)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.96"
@@ -86,7 +86,7 @@ jobs:
     name: cargo-deny (advisories · licenses · bans · sources)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check

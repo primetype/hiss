@@ -6,8 +6,8 @@ notation of the [Noise specification](https://noiseprotocol.org/noise.html)
 — into a pair of documented, sans-io, type-state handshake state machines
 with compile-time message sizes.
 
-Do not depend on this crate directly; enable the `macros` feature of
-`hiss` and use `hiss::noise!`.
+Do not depend on this crate directly. `hiss` requires it and re-exports the
+macro as `hiss::noise!` — there is no feature to enable.
 
 ```rust
 hiss::noise! {

@@ -56,8 +56,10 @@ hiss_macros::noise! {
     ///
     /// Used for encrypting data at rest to a known public key (e.g.
     /// sealing per-pair PSKs to the device's own Secure Enclave key).
-    /// Each seal operation uses a fresh ephemeral key, providing
-    /// forward secrecy per write.
+    /// With no `ee`, forward secrecy is **sender-side only**: the fresh
+    /// per-write ephemeral protects a captured message against later
+    /// compromise of the sender's keys, but the recipient's static
+    /// private key still decrypts it.
     pub N {
         <- s
         ...
@@ -70,8 +72,11 @@ hiss_macros::noise! {
     /// before the handshake. The sender is authenticated via `ss`.
     ///
     /// Used for sealed envelopes between two peers who have already
-    /// completed a trust ceremony — the message is confidential,
-    /// sender-authenticated, and forward-secret.
+    /// completed a trust ceremony — the message is confidential and
+    /// sender-authenticated. With no `ee`, forward secrecy is
+    /// **sender-side only**: the fresh per-write ephemeral protects a
+    /// captured message against later compromise of the sender's keys,
+    /// but the recipient's static private key still decrypts it.
     pub K {
         -> s
         <- s
@@ -84,6 +89,11 @@ hiss_macros::noise! {
     /// `Kpsk0` — one-way authenticated pattern with PSK at position 0.
     /// Both static keys are known; the PSK is mixed before the ephemeral
     /// key, binding the entire message to the ceremony-established trust.
+    ///
+    /// With no `ee`, forward secrecy is **sender-side only**: the fresh
+    /// per-write ephemeral protects a captured message against later
+    /// compromise of the sender's keys, but the recipient's static
+    /// private key **and** the PSK together still decrypt it.
     pub Kpsk0 {
         -> s
         <- s
@@ -241,11 +251,152 @@ hiss_macros::noise! {
     /// carries the sender's static **encrypted in-band** (after `es` keys the
     /// cipher), so the sender's identity is hidden from a passive
     /// eavesdropper. Its single message is the same token sequence as
-    /// [`IK`]'s msg1, without the responder's reply — confidential,
-    /// sender-authenticated, and forward-secret per write.
+    /// [`IK`]'s msg1, without the responder's reply — confidential and
+    /// sender-authenticated. With no `ee`, forward secrecy is
+    /// **sender-side only**: the fresh per-write ephemeral protects a
+    /// captured message against later compromise of the sender's keys,
+    /// but the recipient's static private key still decrypts it.
     pub X {
         <- s
         ...
         -> e, es, s, ss
+    }
+}
+
+hiss_macros::noise! {
+    /// `NX` — interactive, **responder-authenticated** handshake with no
+    /// pre-messages. The initiator is **anonymous** (it has no static key);
+    /// the responder transmits its static key in msg2 and is authenticated
+    /// via `es`.
+    ///
+    /// The responder's static is sent *after* `ee` keys the cipher, so it is
+    /// hidden from a passive eavesdropper — but **any anonymous initiator can
+    /// ask for it**, since nothing gates the handshake. Where [`XX`] lets the
+    /// responder learn who is asking before revealing itself, NX has no msg3
+    /// and therefore no initiator identity at all. Once `ee` mixes both
+    /// ephemerals the session has **full forward secrecy**.
+    ///
+    /// It is [`XX`] without msg3: pick it when the initiator genuinely has no
+    /// identity to offer and the responder is content to identify itself to
+    /// anyone.
+    pub NX {
+        -> e
+        <- e, ee, s, es
+    }
+}
+
+hiss_macros::noise! {
+    /// `XN` — interactive, **initiator-authenticated** handshake over three
+    /// messages, with no pre-messages. The responder is **anonymous** (it has
+    /// no static key); the initiator transmits its static key in msg3 and is
+    /// authenticated via `se`.
+    ///
+    /// The initiator's static is sent *after* `ee` keys the cipher, so it is
+    /// hidden from a passive eavesdropper — but it is **sent to a responder
+    /// that was never authenticated**, so completing XN tells you nothing
+    /// about who received your identity. An active man-in-the-middle can
+    /// impersonate the responder outright.
+    ///
+    /// It is [`XX`] without the responder's static — the mirror image of
+    /// [`NX`], paying an extra round trip to put the identity on the
+    /// initiator's side.
+    pub XN {
+        -> e
+        <- e, ee
+        -> s, se
+    }
+}
+
+hiss_macros::noise! {
+    /// `KN` — interactive handshake whose initiator's static key is
+    /// **pre-shared** (`-> s`) and whose responder is **anonymous**. The
+    /// initiator is authenticated via `se`; **the responder is never
+    /// authenticated**.
+    ///
+    /// Nothing identifying travels on the wire, but pre-shared is not the
+    /// same as private: an **active** attacker who impersonates the initiator
+    /// and later obtains a candidate for the initiator's *private* key can
+    /// confirm the guess.
+    ///
+    /// Like [`IN`] but with the initiator's static arranged in advance
+    /// instead of sent in the clear. As with every pattern whose name starts
+    /// with `K` or `I`, the responder has only **weak** forward secrecy for
+    /// the transport messages it sends until it receives one from the
+    /// initiator.
+    pub KN {
+        -> s
+        ...
+        -> e
+        <- e, ee, se
+    }
+}
+
+hiss_macros::noise! {
+    /// `KK` — interactive mutual authentication with **both** static keys
+    /// pre-shared, and the only built-in interactive pattern offering
+    /// **zero-RTT**: msg1's payload is already encrypted.
+    ///
+    /// That zero-RTT payload carries two caveats, and both matter. Its sender
+    /// authentication rests on the static–static `ss` DH, so it is
+    /// **vulnerable to key-compromise impersonation** — an attacker holding
+    /// the *responder's* private key can forge a msg1 that appears to come
+    /// from the initiator. And msg1 **can be replayed**: no responder
+    /// ephemeral contributes to it. Both properties harden once msg2 lands.
+    ///
+    /// Nothing identifying is transmitted, but a **passive** attacker can
+    /// test candidate (responder private key, initiator public key) pairs
+    /// against a recorded handshake. Like [`K`] it pre-shares both statics;
+    /// unlike `K` the responder replies, so the session reaches full forward
+    /// secrecy once `ee` is mixed. The `K`/`I` responder caveat applies until
+    /// the responder receives a transport message.
+    pub KK {
+        -> s
+        <- s
+        ...
+        -> e, es, ss
+        <- e, ee, se
+    }
+}
+
+hiss_macros::noise! {
+    /// `KX` — interactive mutual authentication where the initiator's static
+    /// key is **pre-shared** (`-> s`) and the responder's is transmitted,
+    /// encrypted, in msg2. The initiator is authenticated via `se`, the
+    /// responder via `es`.
+    ///
+    /// The responder's identity has only **weak** forward secrecy: the
+    /// initiator's alleged ephemeral may have been forged by an active
+    /// attacker, so a later compromise of the responder's static key can
+    /// expose which responder answered. The initiator's own key, being
+    /// pre-shared, carries the same active-attacker caveat as [`KN`].
+    ///
+    /// It is [`IX`] with the initiator's static arranged in advance rather
+    /// than sent in the clear. The `K`/`I` responder caveat applies until the
+    /// responder receives a transport message.
+    pub KX {
+        -> s
+        ...
+        -> e
+        <- e, ee, se, s, es
+    }
+}
+
+hiss_macros::noise! {
+    /// `IN` — interactive handshake with no pre-messages whose initiator
+    /// transmits its static key in msg1 and whose responder is **anonymous**.
+    /// The initiator is authenticated via `se`; the responder never is.
+    ///
+    /// **The initiator's static key travels in msg1 in the clear**, before
+    /// any DH keys the cipher — so a *passive* observer learns the
+    /// initiator's identity outright. That is the weakest identity exposure
+    /// of any pattern this crate ships; prefer [`KN`] (pre-share it) or
+    /// [`XN`] (send it encrypted in msg3) whenever the initiator's identity
+    /// is worth hiding.
+    ///
+    /// It is [`IX`] without the responder's static. The `K`/`I` responder
+    /// caveat applies until the responder receives a transport message.
+    pub IN {
+        -> e, s
+        <- e, ee, se
     }
 }
