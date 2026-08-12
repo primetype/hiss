@@ -1,0 +1,48 @@
+name: Audit
+
+# The supply-chain gate, on a clock. This is the same `cargo deny check` that
+# runs as the `deny` job in `Check` — advisories, licenses, bans, sources,
+# configured by `deny.toml` — re-run daily against an unchanged tree.
+#
+# Why it exists at all: `Check` runs on push, and every input to cargo-deny
+# moves without one. A RUSTSEC advisory (the RustSec database is where crate
+# CVEs land) is published on the discloser's timetable, not this repo's; and
+# because no root `Cargo.lock` is committed, every run re-resolves the graph
+# fresh, so a new upstream release that drags in a license change, a
+# duplicate, or a non-registry source surfaces here too — during exactly the
+# idle windows in which `Check` never fires.
+#
+# Why a workflow of its own rather than a job in `Check`: the same reason as
+# `Downstream`, `Interop` and the AES-GCM lab — it needs a `schedule:`
+# trigger, and `Check` is the trigger for `Test` and `Coverage` (both
+# `workflow_run: workflows: ["Check"]`), so a cron on `Check` would drag the
+# full matrix through a run on every tick. A separate name costs exactly the
+# one job below.
+#
+# Why daily where the other crons are weekly: those re-measure hiss against a
+# slowly moving ecosystem, and a week of latency is fine. This one is the
+# security feed — a week is most of a disclosure window. The job is a single
+# metadata resolve plus an advisory-DB fetch; no compilation.
+
+on:
+  schedule:
+    # Daily, offset from the Monday cron trio (17 6 / 43 6 / 43 7).
+    - cron: "31 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deny:
+    name: cargo-deny (advisories · licenses · bans · sources)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
