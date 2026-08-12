@@ -60,13 +60,20 @@
 //!
 //! | Where | hiss/AESGCM arm is measuring |
 //! |---|---|
-//! | a Mac (`aarch64-apple-darwin`) | **hardware** AES intrinsics |
-//! | CI's `ubuntu-latest` (x86_64) | **portable** reference AES |
+//! | a Mac (`aarch64-apple-darwin`) | **hardware** AES block + **portable** GHASH |
+//! | CI's `ubuntu-latest` (x86_64) | **portable** reference AES + portable GHASH |
 //!
-//! `snow`'s RustCrypto `aes-gcm` makes its own runtime/compile-time choice
-//! independently, so a hiss-vs-snow gap on one machine does not transfer to
-//! the other. **Never compare a number from one row against a number from the
-//! other.** Always state the host alongside the result.
+//! GHASH is portable on both rows: cryptoxide's hardware path covers the AES
+//! block function only, and at these sizes GHASH is where the time goes.
+//!
+//! The snow arm, by contrast, is pinned to RustCrypto's **hardware** paths
+//! everywhere: x86-64 runtime-detects AES-NI/CLMUL, and on aarch64 this
+//! crate's `.cargo/config.toml` sets the `aes_armv8`/`polyval_armv8` cfgs
+//! that `aes` 0.8.4 and `polyval` 0.6.2 leave off by default. Without them
+//! the arm silently measures RustCrypto's software fallback — this lab's
+//! first committed numbers did exactly that; the README keeps the record.
+//! **Never compare a number from one row against a number from the other.**
+//! Always state the host alongside the result.
 //!
 //! # Caveat inherited from `comparison.rs`
 //!

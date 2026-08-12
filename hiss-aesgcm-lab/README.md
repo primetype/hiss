@@ -106,31 +106,52 @@ CI compiles it with `--no-run` only, following `interop.yml`: numbers from a
 shared runner are not meaningful, but a bench that stops compiling is a real
 break.
 
-**Read the numbers with the host in hand.** Per the backend table above, the
-hiss/AESGCM arm measures *hardware* AES on a Mac and *portable* AES on CI's
-x86 runner. Never compare a figure from one against a figure from the other.
+**Read the numbers with the host in hand.** Per the backend section below,
+the hiss/AESGCM arm measures hardware AES *block* + portable GHASH on a Mac
+and all-portable on CI's x86 runner; the snow arm is RustCrypto's hardware
+path on both. Never compare a figure from one host against a figure from the
+other.
 
-Measured once on `aarch64-apple-darwin` (hardware AES), 1 KiB messages:
+Measured on `aarch64-apple-darwin` (M-series), 1 KiB messages, with the
+`.cargo/config.toml` cfgs in place (snow arm on RustCrypto's hardware paths):
 
 | Group | hiss/AESGCM | snow/AESGCM | hiss/ChaChaPoly |
 |---|---|---|---|
-| `transport_1KiB` (round trip) | 11.75 µs | 11.12 µs | 1.99 µs |
-| `transport_1KiB_encrypt` | 5.69 µs | 5.55 µs | 0.99 µs |
-| `transport_1KiB_decrypt` | 5.86 µs | 5.51 µs | 1.01 µs |
+| `transport_1KiB` (round trip) | 11.10 µs | **1.31 µs** | 2.01 µs |
+| `transport_1KiB_encrypt` | 5.78 µs | 0.65 µs | 1.00 µs |
+| `transport_1KiB_decrypt` | 5.79 µs | 0.71 µs | 1.03 µs |
 
-Two things worth saying about those, because the headline gap invites a wrong
-conclusion:
+Three things those numbers say — the first is a correction:
 
-- **This is not a cryptoxide problem.** cryptoxide and RustCrypto land within
-  ~3% of each other. AES-GCM being ~5.6× slower than ChaChaPoly at this size
-  is the state of both pure-Rust stacks on Apple Silicon, not a defect in the
-  implementation under test.
-- **It is not the per-message key schedule either.** hiss's `Cipher` trait
-  takes the key per call, so `AesGcm256::new` re-expands on every message —
-  the obvious suspect. Measured directly: the key schedule is **≈110 ns**,
-  about **2%** of the ≈5.6 µs. Hoisting it would buy almost nothing. (Worth
-  recording because the design note that predicted this cost flagged it as a
-  question for the exit review; the answer is that it is negligible.)
+- **This lab's first committed measurement got the headline wrong.** It ran
+  before `.cargo/config.toml` existed, so the snow arm was RustCrypto's
+  *software* fallback (11.12 µs round trip), and this README concluded
+  "cryptoxide and RustCrypto land within ~3%; the gap to ChaChaPoly is the
+  state of both pure-Rust stacks on Apple Silicon". Wrong on both counts:
+  RustCrypto's hardware path is ~8.5× faster than what was measured, and
+  **hardware AES-GCM beats ChaChaPoly** (1.31 µs vs 2.01 µs round trip) — as
+  it should on silicon with AES and PMULL. The software-vs-software numbers
+  remain in git history; this paragraph is kept so they cannot be quoted
+  without their correction.
+- **The real gap is cryptoxide's GHASH, nothing else.** cryptoxide's
+  hardware path covers the AES block function only; its GHASH is portable
+  GF(2^128) arithmetic on every target, and that is essentially the whole
+  11 µs — the 64 hardware AES block calls of a 1 KiB message are noise
+  beside it. This is the lab's most concrete piece of upstream feedback: a
+  PMULL/CLMUL GHASH in cryptoxide's `aes_gcm` closes roughly all of the ~8×
+  to RustCrypto.
+- **It is not the per-message key schedule.** hiss's `Cipher` trait takes
+  the key per call, so `AesGcm256::new` re-expands on every message — the
+  obvious suspect. Measured directly: **≈110 ns**, about **2%** of the
+  total. Hoisting it would buy almost nothing. (Worth recording because the
+  design note that predicted this cost flagged it as a question for the exit
+  review; the answer is that it is negligible.)
+
+The ship-it advice this correction changes: AESGCM as an *option* rather
+than a default remains right for hiss **today**, but the reason is now
+precise — it is cryptoxide's current GHASH implementation, not the AEAD and
+not the platform. If upstream lands a carry-less-multiply GHASH before the
+release, re-measure; the default question reopens.
 
 ### AES backends: what your machine actually tests
 
@@ -155,6 +176,22 @@ is the only hosted runner that compiles the hardware backend, which is why
 `.github/workflows/aesgcm-lab.yml` uses a `{ubuntu-latest, macos-latest}`
 matrix.
 
+RustCrypto — the snow arm — splits differently. On x86-64 its AES-NI and
+CLMUL paths are **runtime-detected**: no flag, always on. On aarch64, in the
+versions snow resolves (`aes` 0.8.4, `polyval` 0.6.2), the hardware paths
+are compile-time **opt-in** behind `--cfg aes_armv8` and
+`--cfg polyval_armv8` — a default build, this lab's included until it set
+them, measures RustCrypto's *software* fallback. `.cargo/config.toml` now
+sets both cfgs for every aarch64 build of this crate, so the snow arm is
+always RustCrypto at its best. (An ordinary snow consumer on Apple Silicon
+who does not know about the flags gets the software path — worth
+remembering when reading snow numbers published by anyone.)
+
+One asymmetry survives every flag: **cryptoxide's GHASH is portable
+software on every target.** Its hardware story covers the AES block
+function only, and at transport sizes GHASH is where the time goes — see
+the results above.
+
 **Do not try to reach the portable path locally with
 `RUSTFLAGS="-C target-feature=-aes"`.** It cannot work: `snow`'s default `std`
 feature puts `ring` in the dev graph, and ring 0.17 fails const-eval under that
@@ -162,6 +199,12 @@ flag on `aarch64-apple-darwin`
 (`assertion failed: (CAPS_STATIC & MIN_STATIC_FEATURES) == MIN_STATIC_FEATURES`).
 `RUSTFLAGS` is package-global, so `--test` scoping does not help. The portable
 path is CI's ubuntu leg's job.
+
+The inverse gotcha exists too: a `RUSTFLAGS` environment variable
+**replaces** `.cargo/config.toml`'s target rustflags wholesale, so exporting
+one — for anything — silently drops the `aes_armv8`/`polyval_armv8` cfgs
+and the snow arm degrades to RustCrypto's software path. If you must export
+`RUSTFLAGS`, carry `--cfg aes_armv8 --cfg polyval_armv8` along in it.
 
 ## Regenerating the vectors
 
