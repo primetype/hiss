@@ -6,9 +6,8 @@ checked by the compiler, and private keys that can stay in an Apple Secure Encla
 Built on the [Noise Protocol Framework][noise]: you write the handshake in Noise's own
 notation; `hiss` generates it, sizes every message at compile time, and rejects malformed ones.
 
-> **Status: `0.2`, unreleased — unstable API, not independently audited.** See
+> **Status: `0.3` — pre-1.0: unstable API, not independently audited.** See
 > [How this is tested](#how-this-is-tested) and [Security](#security) before relying on it.
-> The `0.1.0` currently on crates.io predates the `noise!` macro this README describes.
 
 [noise]: https://noiseprotocol.org/
 
@@ -22,7 +21,7 @@ runs; assembled, they are [`examples/quickstart.rs`](examples/quickstart.rs).
 
 ```toml
 [dependencies]
-hiss = "0.2"
+hiss = "0.3"
 rand = "0.10"
 ```
 
@@ -121,28 +120,34 @@ this README leans on it: the `hiss-interop` suite runs `hiss` against it, and th
 vectors were generated from it. Neither crate has been audited — snow says so on its own front
 page. Three things differ.
 
-**The pattern is a type, not a string.** snow parses `"Noise_XX_25519_ChaChaPoly_BLAKE2s"`
-at runtime and hands back one `HandshakeState` whose `read_message` / `write_message` take
-`&mut self` and may be called in any order. `hiss` compiles the pattern into a state
-machine: each message is its own method, and it consumes the state before it. Wrong order,
-skipped message, or using the channel before the handshake finishes are compile errors —
-as is [a pattern that never keys the cipher](#when-you-get-it-wrong).
+**The pattern is a type, not a string.** In `snow`, the pattern is data: the builder
+parses `"Noise_XX_25519_ChaChaPoly_BLAKE2s"` at runtime, and every session is the same
+`HandshakeState` type, whose `read_message` / `write_message` take `&mut self` and accept
+calls in any order. In `hiss`, the `noise!` block compiles the pattern into its own state
+machine: `XX` from the Quickstart is a type, each message is its own method, and each call
+consumes the state before it. Wrong order, a skipped message, or using the channel before
+the handshake finishes will not compile — nor will [a pattern that never keys the
+cipher](#when-you-get-it-wrong).
 
-**Message sizes are constants.** snow's own example opens `let mut buf = [0u8; 65535]`,
-because the length isn't known until the message arrives. `XX::MSG1_SIZE` is a
-compile-time `usize`, so framing a handshake is a `read_exact` into `[u8; N]` — no length
-prefix, no scratch buffer.
+**Message sizes are constants.** In `snow`, nothing tells you a message's size before it
+arrives, so buffers are sized for the ceiling — snow's own example opens
+`let mut buf = [0u8; 65535]`. In `hiss`, the macro has already computed every handshake
+message's exact size and hangs each on the pattern type as an associated constant:
+`XX::MSG1_SIZE` is a compile-time `usize`, so framing a handshake is a `read_exact` into
+`[u8; XX::MSG1_SIZE]` — no length prefix, no scratch buffer.
 
-**Private keys can stay in hardware.** snow's builder takes the private key as bytes. On
-macOS and iOS, `hiss` can generate the static key inside the Apple Secure Enclave and
-leave it there; your process only ever holds a handle. See [Providers](#providers).
+**Private keys can stay in hardware.** `snow`'s builder takes the static private key as
+bytes, so the key passes through your process's memory wherever it actually lives. In
+`hiss`, every key operation goes through a *provider*; on macOS and iOS that provider can
+be the Apple Secure Enclave, which generates the static key internally and never releases
+it — your process only ever holds a handle. See [Providers](#providers).
 
 **Choose snow** if you need more of Noise than this covers — the **23 deferred
 patterns** (spec §7.6), the `fallback` modifier, PSKs at arbitrary positions
 (`psk0`–`psk4`), more ciphers (AES-GCM, XChaChaPoly), and swappable crypto backends
-including `ring` — or if you need something on crates.io today. Two axes where it is no
-longer ahead: the **fundamental** patterns, all fifteen of which hiss now ships, and the
-hashes — snow's set is the specification's four, and so is hiss's.
+including `ring`. Two axes where it is no longer ahead: the **fundamental** patterns,
+all fifteen of which hiss now ships, and the hashes — snow's set is the specification's
+four, and so is hiss's.
 
 One choice that isn't a comparison: production cryptography here is `cryptoxide` and
 `eccoxide`, nothing else.
