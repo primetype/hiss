@@ -7,10 +7,10 @@ name: Deploy site
 # This is INDEPENDENT of the core-crate pipeline (`check.yml` → `test.yml` →
 # `coverage.yml`). The site is its own cargo workspace, excluded from the
 # published hiss crate (root `Cargo.toml` `exclude = ["/site"]`), so it never
-# touches the crate's build or release gates. We gate this workflow on
-# `site/**` so crate-only changes don't rebuild/redeploy the page. (Phase 2
-# adds `src/**` and `hiss-macros/**` to the paths once the fixture-pinning
-# test gives the site a dev-dependency on hiss.)
+# touches the crate's build or release gates. The paths include `src/**` and
+# `hiss-macros/**` because the fixture-pinning test (site/tests/fixtures.rs)
+# has a dev-dependency on hiss: an API or wire change must re-run the pin —
+# and fail loudly here — rather than leave the page claiming stale bytes.
 #
 # Prerequisites (one-time, on GitHub) before this can actually deploy:
 #   1. The repo must be PUBLIC, or on a paid plan (Pages from a private repo
@@ -24,6 +24,8 @@ on:
     branches: [main]
     paths:
       - "site/**"
+      - "src/**"
+      - "hiss-macros/**"
       - ".github/workflows/site-pages.yml"
   workflow_dispatch:
 
@@ -61,6 +63,9 @@ jobs:
           workspaces: site
       # Prebuilt trunk binary (fast); trunk then auto-downloads the pinned
       # tailwindcss 4.1.18, wasm-bindgen, and wasm-opt at build time.
+      # The pin before the build: the frozen traces the page replays must be
+      # exactly what hiss produces today, or nothing deploys.
+      - run: cargo test
       - uses: jetli/trunk-action@v0.5.1
       # `--public-url` is load-bearing: a project Pages site serves under
       # `https://<owner>.github.io/<repo>/`, so asset hrefs must be prefixed

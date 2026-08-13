@@ -18,6 +18,15 @@ description = "The hiss one-page site (Leptos CSR + Trunk + TailwindCSS)."
 leptos = { version = "0.8", features = ["csr"] }
 console_error_panic_hook = "0.1"
 
+# The fixture generator/pinning test ONLY (tests/fixtures.rs): hiss runs the
+# six patterns' handshakes deterministically (ChaCha20, fixed seeds) and the
+# frozen traces in src/fixtures_data.in are asserted against it on every
+# deploy. Dev-dependencies never reach the shipped WASM.
+[dev-dependencies]
+hiss = { path = ".." }
+rand_core = "0.10"
+rand_chacha = "0.10"
+
 # A landing page wants the smallest artifact, not the fastest one.
 [profile.release]
 opt-level = "z"
