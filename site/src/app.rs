@@ -103,7 +103,7 @@ fn Hero() -> impl IntoView {
 #[component]
 fn Invite(open: RwSignal<bool>) -> impl IntoView {
     view! {
-        <section class="flex flex-col items-center text-center lg:w-[400px] lg:shrink-0">
+        <section class="flex flex-col items-start text-left lg:w-[400px] lg:shrink-0 lg:items-center lg:text-center">
             <svg
                 viewBox="0 0 260 44"
                 class="mb-8 w-56 md:w-64"
