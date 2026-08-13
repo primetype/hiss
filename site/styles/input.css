@@ -5,12 +5,13 @@
 @source "../src/**/*.rs";
 @source "../index.html";
 
-/* hiss brand — austere, monochrome-forward, monospace, one cold cyan accent.
-   Palette mirrors the project house style (.planning/html/styles.css):
-   near-black ink, static-silver text, signal-cyan accent. */
+/* hiss brand — "signal in the static" v0.1 (see the brand guidelines).
+   Laws: cyan means interactive-or-live, never decoration; warn orange means
+   security caveat, never anything else; evidence colors mark test status
+   only. Token names mirror demo/styles/input.css and the brand tokens.css. */
 @theme {
   --font-mono:
-    "Berkeley Mono", "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas,
+    "Berkeley Mono", "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas,
     monospace;
 
   --color-ink: #0b0b0c;
@@ -18,6 +19,7 @@
   --color-panel-2: #121518;
   --color-line: #26292e;
   --color-line-soft: #1b1e22;
+  --color-silver-bright: #e8eaec;
   --color-silver: #c7ccd1;
   --color-silver-dim: #878d95;
   --color-silver-faint: #5a6068;
@@ -26,8 +28,7 @@
   --color-done: #6fcf97;
   --color-partial: #e0c46c;
   --color-blocked: #d98a8a;
-  /* deliberate exception to the monochrome palette: a neon-orange reserved
-     solely for the "not secure / demo only" safety warning. */
+  /* the law: reserved solely for security caveats. */
   --color-warn: #ff7a18;
 }
 
@@ -36,43 +37,49 @@
     scroll-behavior: smooth;
   }
   body {
-    background-color: var(--color-ink);
-    color: var(--color-silver);
-    font-family: var(--font-mono);
     letter-spacing: 0.2px;
     -webkit-font-smoothing: antialiased;
-    /* a single cold cyan glow, top-right — the "signal" in the static */
+    /* the one signal glow per page — top-right, cold */
     background-image: radial-gradient(
-      900px 500px at 80% -10%,
-      rgba(91, 200, 214, 0.05),
+      900px 520px at 82% -8%,
+      rgba(91, 200, 214, 0.06),
       transparent 60%
     );
     background-attachment: fixed;
   }
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto;
+    }
+    /* trace rows still appear stepwise, but without any transition */
+    .trace-row {
+      transition: none !important;
+    }
+  }
 }
 
 @layer components {
-  /* signal → static motif: a faint band of vertical ticks, masked at the edges */
+  /* the static band — section divider motif, opacity ≤ 0.16 */
   .static-band {
-    height: 26px;
+    height: 24px;
     background-image: repeating-linear-gradient(
       90deg,
       var(--color-silver-faint) 0 1px,
       transparent 1px 3px
     );
-    opacity: 0.14;
+    opacity: 0.15;
     -webkit-mask-image: linear-gradient(
       90deg,
       transparent,
-      #000 15%,
-      #000 85%,
+      #000 12%,
+      #000 88%,
       transparent
     );
     mask-image: linear-gradient(
       90deg,
       transparent,
-      #000 15%,
-      #000 85%,
+      #000 12%,
+      #000 88%,
       transparent
     );
   }
