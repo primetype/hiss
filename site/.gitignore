@@ -1,0 +1,6 @@
+/target
+/dist
+# Commit the lockfile: this is a binary artifact (the deployed site), so pin
+# its deps for reproducible builds (the repo root ignores Cargo.lock for the
+# library).
+!/Cargo.lock

@@ -1,0 +1,7 @@
+[toolchain]
+# A recent stable (the phase-2 dev-dependency on `hiss` needs edition 2024,
+# MSRV 1.96); `stable` satisfies it and auto-installs the wasm target so
+# `trunk serve` works on a clean clone.
+channel = "stable"
+targets = ["wasm32-unknown-unknown"]
+profile = "minimal"
