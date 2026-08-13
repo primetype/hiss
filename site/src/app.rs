@@ -66,14 +66,14 @@ fn Nav() -> impl IntoView {
 #[component]
 fn Hero() -> impl IntoView {
     view! {
-        <header class="lg:flex-1">
+        <header class="text-center lg:flex-1 lg:text-left">
             <p class="mb-5 text-[clamp(11px,0.75vw,13px)] uppercase tracking-[0.16em] text-silver-dim">
                 "noise protocol framework · rust · sans-io · no async runtime"
             </p>
-            <h1 class="max-w-[20ch] text-[clamp(30px,3.4vw,58px)] font-semibold leading-[1.12] tracking-tight text-silver-bright [text-wrap:balance]">
+            <h1 class="mx-auto max-w-[20ch] text-[clamp(30px,3.4vw,58px)] font-semibold leading-[1.12] tracking-tight text-silver-bright [text-wrap:balance] lg:mx-0">
                 "Encrypted, authenticated channels between two peers you control."
             </h1>
-            <p class="mt-5 max-w-[46ch] text-[clamp(15px,1.1vw,18px)] leading-relaxed text-silver-dim">
+            <p class="mx-auto mt-5 max-w-[46ch] text-[clamp(15px,1.1vw,18px)] leading-relaxed text-silver-dim lg:mx-0">
                 "You decide who proves themselves — the handshake enforces it, the compiler checks it."
             </p>
             <a
@@ -82,7 +82,7 @@ fn Hero() -> impl IntoView {
             >
                 "unaudited · pre-1.0 — what stands in for an audit ↓"
             </a>
-            <div class="mt-7 flex flex-wrap items-center gap-3.5">
+            <div class="mt-7 flex flex-wrap items-center justify-center gap-3.5 lg:justify-start">
                 <a
                     class="rounded-sm border border-line px-4 py-2 text-[13px] text-silver-dim hover:border-silver-faint hover:text-silver"
                     href="https://docs.rs/hiss"
@@ -103,7 +103,7 @@ fn Hero() -> impl IntoView {
 #[component]
 fn Invite(open: RwSignal<bool>) -> impl IntoView {
     view! {
-        <section class="flex flex-col items-start text-left lg:w-[400px] lg:shrink-0 lg:items-center lg:text-center">
+        <section class="flex flex-col items-center text-center lg:w-[400px] lg:shrink-0">
             <svg
                 viewBox="0 0 260 44"
                 class="mb-8 w-56 md:w-64"
