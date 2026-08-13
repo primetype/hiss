@@ -76,12 +76,9 @@ fn Hero() -> impl IntoView {
             <p class="mx-auto mt-5 max-w-[46ch] text-[clamp(15px,1.1vw,18px)] leading-relaxed text-silver-dim lg:mx-0">
                 "You decide who proves themselves — the handshake enforces it, the compiler checks it."
             </p>
-            <a
-                class="mt-6 inline-block rounded-full border border-warn/50 px-3 py-1 text-xs text-warn"
-                href="#proof"
-            >
-                "unaudited · pre-1.0 — what stands in for an audit ↓"
-            </a>
+            <span class="mt-6 inline-block rounded-full border border-warn/50 px-3 py-1 text-xs text-warn">
+                "unaudited · pre-1.0 — use at your own risk"
+            </span>
             <div class="mt-7 flex flex-wrap items-center justify-center gap-3.5 lg:justify-start">
                 <a
                     class="rounded-sm border border-line px-4 py-2 text-[13px] text-silver-dim hover:border-silver-faint hover:text-silver"
