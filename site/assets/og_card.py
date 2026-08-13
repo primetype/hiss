@@ -86,7 +86,7 @@ d.text(
 # ---- footer row ----
 ff = font(22)
 d.text((100, 566), "unaudited · pre-1.0", font=ff, fill=WARN, anchor="lm")
-d.text((1100, 566), "primetype.github.io/hiss", font=ff, fill=SILVER_FAINT, anchor="rm")
+d.text((1100, 566), "primetype.co.uk/hiss", font=ff, fill=SILVER_FAINT, anchor="rm")
 
 out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "og.png")
 img.save(out, optimize=True)

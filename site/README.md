@@ -40,7 +40,8 @@ trunk build --release
 ```
 
 CI passes `--public-url "/hiss/"` because a project Pages site serves under
-`https://<owner>.github.io/<repo>/`.
+`https://<owner>.github.io/<repo>/` — the `/hiss/` path survives the org's
+custom domain, so the live site is `https://primetype.co.uk/hiss/`.
 
 This crate is excluded from the published `hiss` package (root `Cargo.toml`
 `exclude`) and stands alone as its own cargo workspace, so it never perturbs

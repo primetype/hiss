@@ -544,7 +544,7 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "hiss"
-version = "0.2.0"
+version = "0.3.1"
 dependencies = [
  "core-foundation",
  "cryptoxide",
@@ -560,7 +560,7 @@ dependencies = [
 
 [[package]]
 name = "hiss-macros"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "proc-macro2",
  "quote",
