@@ -28,8 +28,13 @@ categories = ["cryptography", "network-programming"]
 # separately. Keep all four out of the packaged crate. NOTE:
 # `hiss-aesgcm-lab/` carries a **git** dependency; it must never appear in
 # this manifest's `[dependencies]` or in a root `[patch]`, or hiss stops
-# being publishable.
-exclude = ["/site", "/hiss-macros", "/hiss-interop", "/hiss-aesgcm-lab"]
+# being publishable. The second row is repo infrastructure that means nothing
+# outside the repository; tests/ (vectors included) ships on purpose, so the
+# KAT and Wycheproof gates run against the exact published bytes.
+exclude = [
+    "/site", "/hiss-macros", "/hiss-interop", "/hiss-aesgcm-lab",
+    "/.github", "/scripts", "/CLAUDE.md", "/TODO.md", "/deny.toml", "/.gitignore",
+]
 
 # docs.rs builds with every feature and passes `--cfg docsrs`, so the
 # `#[doc(cfg(...))]` feature/platform badges (gated behind
