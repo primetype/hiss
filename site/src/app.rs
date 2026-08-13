@@ -23,6 +23,10 @@ const PINNED: &str = "https://github.com/primetype/hiss/blob/main/site/tests/fix
 const ANSWER_CARD: &str = "block w-full cursor-pointer rounded-sm border border-line bg-panel-2 \
      p-4 text-left transition-colors hover:border-cyan hover:bg-cyan/5";
 const GHOST_BTN: &str = "cursor-pointer text-xs text-silver-faint hover:text-cyan";
+const TAB_ON: &str =
+    "cursor-pointer rounded-sm border border-cyan bg-cyan/10 px-3 py-1.5 text-xs text-cyan";
+const TAB_OFF: &str = "cursor-pointer rounded-sm border border-line px-3 py-1.5 text-xs \
+     text-silver-dim transition-colors hover:border-silver-faint hover:text-silver";
 
 #[component]
 pub fn App() -> impl IntoView {
@@ -126,6 +130,9 @@ fn Wizard(open: RwSignal<bool>) -> impl IntoView {
     let you = RwSignal::new(true);
     let peer = RwSignal::new(true);
     let known = RwSignal::new(false);
+    // Which candidate the result card is showing — set to the recommendation
+    // on every transition into `Stage::Result`, then driven by the tabs.
+    let selected = RwSignal::new("XX");
 
     // Opening always starts from the first question.
     Effect::new(move |_| {
@@ -236,6 +243,8 @@ fn Wizard(open: RwSignal<bool>) -> impl IntoView {
                                         on:click=move |_| {
                                             peer.set(false);
                                             known.set(false);
+                                            selected
+                                                .set(fixtures::pick(you.get_untracked(), false, false));
                                             stage.set(Stage::Result);
                                         }
                                     >
@@ -271,6 +280,8 @@ fn Wizard(open: RwSignal<bool>) -> impl IntoView {
                                         class=ANSWER_CARD
                                         on:click=move |_| {
                                             known.set(true);
+                                            selected
+                                                .set(fixtures::pick(you.get_untracked(), true, true));
                                             stage.set(Stage::Result);
                                         }
                                     >
@@ -285,6 +296,8 @@ fn Wizard(open: RwSignal<bool>) -> impl IntoView {
                                         class=ANSWER_CARD
                                         on:click=move |_| {
                                             known.set(false);
+                                            selected
+                                                .set(fixtures::pick(you.get_untracked(), true, false));
                                             stage.set(Stage::Result);
                                         }
                                     >
@@ -307,17 +320,43 @@ fn Wizard(open: RwSignal<bool>) -> impl IntoView {
                                 .into_any()
                         }
                         Stage::Result => {
-                            let n = fixtures::pick(you.get(), peer.get(), known.get());
-                            let inf = fixtures::info(n);
-                            let f = fixtures::fixture(n);
+                            let recommended = fixtures::pick(you.get(), peer.get(), known.get());
+                            let rec_inf = fixtures::info(recommended);
+                            let sel = selected.get();
+                            let inf = fixtures::info(sel);
+                            let f = fixtures::fixture(sel);
+                            let context = (sel != recommended)
+                                .then(|| {
+                                    rec_inf.alternates.iter().find(|a| a.name == sel).map(|a| a.note)
+                                })
+                                .flatten();
+                            let tabs = std::iter::once(recommended)
+                                .chain(rec_inf.alternates.iter().map(|a| a.name))
+                                .map(|nm| {
+                                    let cls = if nm == sel { TAB_ON } else { TAB_OFF };
+                                    let label = if nm == recommended {
+                                        format!("{nm} ★ recommended")
+                                    } else {
+                                        nm.to_string()
+                                    };
+                                    view! {
+                                        <button class=cls on:click=move |_| selected.set(nm)>
+                                            {label}
+                                        </button>
+                                    }
+                                })
+                                .collect_view();
                             view! {
-                                <p class="text-xs text-silver-faint">"your handshake"</p>
-                                <h2 class="mt-1 text-2xl font-semibold tracking-tight">
-                                    <span class="text-cyan">{n}</span>
+                                <p class="text-xs text-silver-faint">
+                                    "your handshake — and the ones that also fit"
+                                </p>
+                                <div class="mt-2 flex flex-wrap gap-2">{tabs}</div>
+                                <h2 class="mt-4 text-2xl font-semibold tracking-tight">
+                                    <span class="text-cyan">{sel}</span>
                                     <span class="text-sm text-silver-dim">
                                         {format!("  · {} messages", f.msgs.len())}
                                     </span>
-                                    {(n == "XX")
+                                    {(sel == "XX")
                                         .then(|| {
                                             view! {
                                                 <span class="text-sm text-silver-faint">
@@ -326,6 +365,14 @@ fn Wizard(open: RwSignal<bool>) -> impl IntoView {
                                             }
                                         })}
                                 </h2>
+                                {context
+                                    .map(|c| {
+                                        view! {
+                                            <p class="mt-1 text-xs text-silver-dim">
+                                                {format!("vs {recommended}: {c}")}
+                                            </p>
+                                        }
+                                    })}
                                 {inf
                                     .warn_note
                                     .map(|w| {
@@ -355,27 +402,7 @@ fn Wizard(open: RwSignal<bool>) -> impl IntoView {
                                         {inf.decl}
                                     </code>
                                 </pre>
-                                <TracePanes name=n />
-                                <div class="mt-4 space-y-1 text-xs">
-                                    <p class="text-silver-faint">"also fits your answers:"</p>
-                                    {inf
-                                        .alternates
-                                        .iter()
-                                        .map(|a| {
-                                            view! {
-                                                <p class="text-silver-dim">
-                                                    <a
-                                                        class="text-cyan hover:underline"
-                                                        href=a.explorer
-                                                    >
-                                                        {a.name}
-                                                    </a>
-                                                    {format!(" — {}", a.note)}
-                                                </p>
-                                            }
-                                        })
-                                        .collect_view()}
-                                </div>
+                                <TracePanes name=sel />
                                 <p class="mt-4 text-xs text-silver-dim">
                                     "Suite: "
                                     <span class="text-silver">"X25519 · ChaChaPoly · Blake2b"</span>

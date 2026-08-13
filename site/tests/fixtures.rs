@@ -1,8 +1,8 @@
 //! The fixture generator and its pinning test.
 //!
 //! `src/fixtures_data.in` is a frozen table of real handshake traces: every
-//! byte was produced by hiss itself over the six patterns the device offers,
-//! deterministically (ChaCha20 RNG, fixed seeds, empty prologue). The shipped
+//! byte was produced by hiss itself over the eight patterns the wizard can
+//! show, deterministically (ChaCha20 RNG, fixed seeds, empty prologue). The shipped
 //! WASM never links hiss — this file is where the page's numbers meet the
 //! crate:
 //!
@@ -27,6 +27,8 @@ hiss::noise! { pub NX<X25519, ChaChaPoly, Blake2b> { -> e <- e, ee, s, es } }
 hiss::noise! { pub XN<X25519, ChaChaPoly, Blake2b> { -> e <- e, ee -> s, se } }
 hiss::noise! { pub XX<X25519, ChaChaPoly, Blake2b> { -> e <- e, ee, s, es -> s, se } }
 hiss::noise! { pub IK<X25519, ChaChaPoly, Blake2b> { <- s ... -> e, es, s, ss <- e, ee, se } }
+hiss::noise! { pub XK<X25519, ChaChaPoly, Blake2b> { <- s ... -> e, es <- e, ee -> s, se } }
+hiss::noise! { pub IX<X25519, ChaChaPoly, Blake2b> { -> e, s <- e, ee, se, s, es } }
 
 /// The device shows the simplest honest run: no prologue.
 const PROLOGUE: &[u8] = &[];
@@ -316,6 +318,94 @@ fn trace_ik() -> Trace {
     }
 }
 
+fn trace_xk() -> Trace {
+    let mut ip = provider(0xA7);
+    let i_static = ip.generate::<X25519>().unwrap();
+    let mut rp = provider(0xB7);
+    let r_static = rp.generate::<X25519>().unwrap();
+    let r_pub = rp.public(&r_static).unwrap();
+
+    let (msg1, i_hs) = XK::initiator(ip, PROLOGUE, r_pub)
+        .write_message_1()
+        .unwrap();
+    let r_hs = XK::responder(rp, PROLOGUE, r_static)
+        .unwrap()
+        .read_message_1(&msg1)
+        .unwrap();
+    let (msg2, r_hs) = r_hs.write_message_2().unwrap();
+    let i_hs = i_hs.read_message_2(&msg2).unwrap();
+    let (msg3, mut i_t) = i_hs.write_message_3(i_static).unwrap();
+    let mut r_t = r_hs.read_message_3(&msg3).unwrap();
+
+    assert_eq!(msg1.len(), XK::MSG1_SIZE);
+    assert_eq!(msg2.len(), XK::MSG2_SIZE);
+    assert_eq!(msg3.len(), XK::MSG3_SIZE);
+    let (session, ping, pong, overhead) = transport_exchange!(i_t, r_t, XK);
+    Trace {
+        name: "XK",
+        pre: Some("<- s"),
+        msgs: vec![
+            TMsg {
+                to_peer: true,
+                tokens: "e, es",
+                bytes: msg1.to_vec(),
+            },
+            TMsg {
+                to_peer: false,
+                tokens: "e, ee",
+                bytes: msg2.to_vec(),
+            },
+            TMsg {
+                to_peer: true,
+                tokens: "s, se",
+                bytes: msg3.to_vec(),
+            },
+        ],
+        session,
+        ping,
+        pong,
+        overhead,
+    }
+}
+
+fn trace_ix() -> Trace {
+    let mut ip = provider(0xA8);
+    let i_static = ip.generate::<X25519>().unwrap();
+    let mut rp = provider(0xB8);
+    let r_static = rp.generate::<X25519>().unwrap();
+
+    let (msg1, i_hs) = IX::initiator(ip, PROLOGUE)
+        .write_message_1(i_static)
+        .unwrap();
+    let r_hs = IX::responder(rp, PROLOGUE).read_message_1(&msg1).unwrap();
+    let (msg2, mut r_t) = r_hs.write_message_2(r_static).unwrap();
+    let mut i_t = i_hs.read_message_2(&msg2).unwrap();
+
+    assert_eq!(msg1.len(), IX::MSG1_SIZE);
+    assert_eq!(msg2.len(), IX::MSG2_SIZE);
+    let (session, ping, pong, overhead) = transport_exchange!(i_t, r_t, IX);
+    Trace {
+        name: "IX",
+        pre: None,
+        msgs: vec![
+            TMsg {
+                to_peer: true,
+                tokens: "e, s",
+                bytes: msg1.to_vec(),
+            },
+            TMsg {
+                to_peer: false,
+                tokens: "e, ee, se, s, es",
+                bytes: msg2.to_vec(),
+            },
+        ],
+        session,
+        ping,
+        pong,
+        overhead,
+    }
+}
+
 fn traces() -> Vec<Trace> {
     vec![
         trace_nn(),
@@ -324,6 +414,8 @@ fn traces() -> Vec<Trace> {
         trace_xn(),
         trace_xx(),
         trace_ik(),
+        trace_xk(),
+        trace_ix(),
     ]
 }
 

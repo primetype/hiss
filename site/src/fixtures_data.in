@@ -80,4 +80,29 @@ pub static FIXTURES: &[Fixture] = &[
         pong_ct: "8a 2a 05 b8 b9 ef 9a d0 …",
         overhead: 16,
     },
+    Fixture {
+        name: "XK",
+        pre: Some("<- s"),
+        msgs: &[
+            Msg { dir: Dir::ToPeer, tokens: "e, es", size: 48, preview: "14 ea 37 9a 9c 93 55 69 …" },
+            Msg { dir: Dir::FromPeer, tokens: "e, ee", size: 48, preview: "62 af bd 84 65 00 95 34 …" },
+            Msg { dir: Dir::ToPeer, tokens: "s, se", size: 64, preview: "7f d8 28 a9 d8 45 f4 64 …" },
+        ],
+        session: "c9 48 3b a3 2a b0 59 4b …",
+        ping_ct: "21 e4 8e 31 d1 ef 9b ec …",
+        pong_ct: "5c 11 b6 cd 88 b9 0b e2 …",
+        overhead: 16,
+    },
+    Fixture {
+        name: "IX",
+        pre: None,
+        msgs: &[
+            Msg { dir: Dir::ToPeer, tokens: "e, s", size: 64, preview: "fc 64 bf 33 4f 34 64 72 …" },
+            Msg { dir: Dir::FromPeer, tokens: "e, ee, se, s, es", size: 96, preview: "57 0f 4f e2 70 fa ea 8a …" },
+        ],
+        session: "63 41 6c 84 6e c4 c5 7f …",
+        ping_ct: "93 b2 d7 f3 f2 85 91 54 …",
+        pong_ct: "5c aa 6d f3 1f 9a 1e 3c …",
+        overhead: 16,
+    },
 ];

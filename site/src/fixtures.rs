@@ -1,8 +1,9 @@
 //! Frozen handshake traces and per-pattern UI metadata for the wizard.
 //!
 //! The trace table (`fixtures_data.in`) is **generated** by
-//! `tests/fixtures.rs`: every byte was produced by hiss itself, over the six
-//! patterns the wizard can recommend, with fixed RNG seeds so regeneration is
+//! `tests/fixtures.rs`: every byte was produced by hiss itself, over the
+//! eight patterns the wizard can show (six outcomes plus the XK and IX
+//! alternates), with fixed RNG seeds so regeneration is
 //! deterministic. The pinning test (`fixtures_match_hiss`) re-runs hiss and
 //! fails if the committed table drifts — the deploy workflow runs it before
 //! every build, so nothing on the page can silently stop being true.
@@ -42,10 +43,11 @@ include!("fixtures_data.in");
 
 /// A pattern that also satisfies the visitor's answers, with the trade-off
 /// that would make someone prefer it. Wording follows the README's tables.
+/// The name doubles as the lookup key into [`INFO`]/[`FIXTURES`] — every
+/// alternate is selectable in the result card, so it must have both.
 pub struct Alt {
     pub name: &'static str,
     pub note: &'static str,
-    pub explorer: &'static str,
 }
 
 /// Per-pattern editorial metadata (hand-written; the *claims* here mirror the
@@ -86,7 +88,6 @@ pub static INFO: &[Info] = &[
         alternates: &[Alt {
             name: "XX",
             note: "mutual authentication with the same \"nothing pre-shared\" start",
-            explorer: "https://noiseexplorer.com/patterns/XX/",
         }],
         explorer: "https://noiseexplorer.com/patterns/NN/",
     },
@@ -110,12 +111,10 @@ pub static INFO: &[Info] = &[
             Alt {
                 name: "NX",
                 note: "no pre-shared key — the peer's key arrives during the handshake",
-                explorer: "https://noiseexplorer.com/patterns/NX/",
             },
             Alt {
                 name: "XX",
                 note: "upgrade to mutual authentication",
-                explorer: "https://noiseexplorer.com/patterns/XX/",
             },
         ],
         explorer: "https://noiseexplorer.com/patterns/NK/",
@@ -138,12 +137,10 @@ pub static INFO: &[Info] = &[
             Alt {
                 name: "NK",
                 note: "pre-share the peer's key instead — it then never rides the wire",
-                explorer: "https://noiseexplorer.com/patterns/NK/",
             },
             Alt {
                 name: "XX",
                 note: "upgrade to mutual authentication",
-                explorer: "https://noiseexplorer.com/patterns/XX/",
             },
         ],
         explorer: "https://noiseexplorer.com/patterns/NX/",
@@ -166,7 +163,6 @@ pub static INFO: &[Info] = &[
         alternates: &[Alt {
             name: "XX",
             note: "almost always the better call — the peer is proven too",
-            explorer: "https://noiseexplorer.com/patterns/XX/",
         }],
         explorer: "https://noiseexplorer.com/patterns/XN/",
     },
@@ -190,12 +186,10 @@ pub static INFO: &[Info] = &[
             Alt {
                 name: "IX",
                 note: "two messages instead of three — your identity travels in the clear",
-                explorer: "https://noiseexplorer.com/patterns/IX/",
             },
             Alt {
                 name: "IK",
                 note: "two messages — if you can ship the peer's key in advance",
-                explorer: "https://noiseexplorer.com/patterns/IK/",
             },
         ],
         explorer: "https://noiseexplorer.com/patterns/XX/",
@@ -220,15 +214,50 @@ pub static INFO: &[Info] = &[
             Alt {
                 name: "XK",
                 note: "hides your identity from an eavesdropper — costs an extra round trip",
-                explorer: "https://noiseexplorer.com/patterns/XK/",
             },
             Alt {
                 name: "XX",
                 note: "nothing pre-arranged — three messages",
-                explorer: "https://noiseexplorer.com/patterns/XX/",
             },
         ],
         explorer: "https://noiseexplorer.com/patterns/IK/",
+    },
+    Info {
+        name: "XK",
+        decl: r#" {
+    pub XK<X25519, ChaChaPoly, Blake2b> {
+        <- s
+        ...
+        -> e, es
+        <- e, ee
+        -> s, se
+    }
+}"#,
+        why: &[
+            "both sides proven",
+            "your identity is encrypted before it is sent — hidden from eavesdroppers",
+            "requires the peer's public key in advance · three messages",
+        ],
+        warn_note: None,
+        alternates: &[],
+        explorer: "https://noiseexplorer.com/patterns/XK/",
+    },
+    Info {
+        name: "IX",
+        decl: r#" {
+    pub IX<X25519, ChaChaPoly, Blake2b> {
+        -> e, s
+        <- e, ee, se, s, es
+    }
+}"#,
+        why: &[
+            "both sides proven, in two messages",
+            "your identity travels in the clear in the first message",
+            "nothing arranged in advance",
+        ],
+        warn_note: None,
+        alternates: &[],
+        explorer: "https://noiseexplorer.com/patterns/IX/",
     },
 ];
 
