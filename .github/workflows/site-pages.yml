@@ -1,12 +1,16 @@
-name: Deploy demo
+name: Deploy site
 
-# Builds the browser playground (`/demo`) and publishes it to GitHub Pages.
+# Builds the one-page site (`/site`) and publishes it to GitHub Pages. This
+# workflow REPLACED demo-pages.yml — a repository has exactly one Pages slot,
+# and the site now owns it.
 #
 # This is INDEPENDENT of the core-crate pipeline (`check.yml` → `test.yml` →
-# `coverage.yml`). The demo is its own cargo workspace, excluded from the
-# published hiss crate (root `Cargo.toml` `exclude = ["/demo"]`), so it never
+# `coverage.yml`). The site is its own cargo workspace, excluded from the
+# published hiss crate (root `Cargo.toml` `exclude = ["/site"]`), so it never
 # touches the crate's build or release gates. We gate this workflow on
-# `demo/**` so crate-only changes don't rebuild/redeploy the site.
+# `site/**` so crate-only changes don't rebuild/redeploy the page. (Phase 2
+# adds `src/**` and `hiss-macros/**` to the paths once the fixture-pinning
+# test gives the site a dev-dependency on hiss.)
 #
 # Prerequisites (one-time, on GitHub) before this can actually deploy:
 #   1. The repo must be PUBLIC, or on a paid plan (Pages from a private repo
@@ -19,8 +23,8 @@ on:
   push:
     branches: [main]
     paths:
-      - "demo/**"
-      - ".github/workflows/demo-pages.yml"
+      - "site/**"
+      - ".github/workflows/site-pages.yml"
   workflow_dispatch:
 
 # Least privilege for the build job; the deploy job needs id-token + pages.
@@ -44,7 +48,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: demo
+        working-directory: site
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -52,9 +56,9 @@ jobs:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
         with:
-          # The demo is a separate workspace; point the cache at it (rust-cache
+          # The site is a separate workspace; point the cache at it (rust-cache
           # keys off its Cargo.lock, which is committed for reproducibility).
-          workspaces: demo
+          workspaces: site
       # Prebuilt trunk binary (fast); trunk then auto-downloads the pinned
       # tailwindcss 4.1.18, wasm-bindgen, and wasm-opt at build time.
       - uses: jetli/trunk-action@v0.5.1
@@ -63,11 +67,24 @@ jobs:
       # with `/hiss/` or they 404 against the domain root. For a custom domain
       # or a user/org page, change this to `/`.
       - run: trunk build --release --public-url "/hiss/"
+      # Payload budget from the site plan: 100 KB gzipped across wasm+js+css.
+      # A landing page that outgrows this has stopped being slick.
+      - name: check payload budget (100 KB gz)
+        run: |
+          total=0
+          for f in dist/*.wasm dist/*.js dist/*.css; do
+            [ -e "$f" ] || continue
+            sz=$(gzip -9 -c "$f" | wc -c)
+            printf '%8d gz  %s\n' "$sz" "$f"
+            total=$((total + sz))
+          done
+          printf '%8d gz  TOTAL (budget 102400)\n' "$total"
+          [ "$total" -le 102400 ]
       - uses: actions/upload-pages-artifact@v5
         with:
           # Relative to the repo root (this is a `uses:` step, so the
           # `working-directory` default above does not apply to it).
-          path: demo/dist
+          path: site/dist
 
   deploy:
     name: deploy (GitHub Pages)

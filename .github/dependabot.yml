@@ -18,6 +18,9 @@
 #     pin moving is the crate's *exit condition*, not an update.
 #   - demo/: own workspace, excluded from the published crate; it rebuilds
 #     only when demo/** changes and can trail the root at no cost.
+#   - site/: same reasoning as demo/ — own workspace with a committed
+#     lockfile, excluded from the published crate; rebuilds only when
+#     site/** changes.
 
 version: 2
 updates:
