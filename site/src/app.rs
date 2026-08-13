@@ -32,13 +32,17 @@ const TAB_OFF: &str = "cursor-pointer rounded-sm border border-line px-3 py-1.5 
 pub fn App() -> impl IntoView {
     let wizard_open = RwSignal::new(false);
     view! {
-        <main class="mx-auto max-w-4xl px-5 pb-24">
+        <main class="flex min-h-dvh flex-col px-5 md:px-10">
             <Nav />
-            <Hero />
-            <Invite open=wizard_open />
-            <div class="static-band my-10"></div>
-            <ProofStrip />
-            <PageFooter />
+            <div class="mx-auto flex w-full max-w-6xl flex-1 flex-col justify-center gap-12 py-12 lg:flex-row lg:items-center lg:gap-20">
+                <Hero />
+                <Invite open=wizard_open />
+            </div>
+            <div class="mx-auto w-full max-w-6xl pb-6">
+                <div class="static-band mb-6"></div>
+                <ProofStrip />
+                <PageFooter />
+            </div>
         </main>
         <Wizard open=wizard_open />
     }
@@ -62,23 +66,23 @@ fn Nav() -> impl IntoView {
 #[component]
 fn Hero() -> impl IntoView {
     view! {
-        <header class="pt-16 pb-4">
-            <p class="mb-4 text-[11.5px] uppercase tracking-[0.16em] text-silver-dim">
+        <header class="lg:flex-1">
+            <p class="mb-5 text-[clamp(11px,0.75vw,13px)] uppercase tracking-[0.16em] text-silver-dim">
                 "noise protocol framework · rust · sans-io · no async runtime"
             </p>
-            <h1 class="max-w-[24ch] text-3xl font-semibold leading-tight tracking-tight text-silver-bright [text-wrap:balance] md:text-4xl">
+            <h1 class="max-w-[20ch] text-[clamp(30px,3.4vw,58px)] font-semibold leading-[1.12] tracking-tight text-silver-bright [text-wrap:balance]">
                 "Encrypted, authenticated channels between two peers you control."
             </h1>
-            <p class="mt-4 max-w-[52ch] text-[15px] text-silver-dim">
+            <p class="mt-5 max-w-[46ch] text-[clamp(15px,1.1vw,18px)] leading-relaxed text-silver-dim">
                 "You decide who proves themselves — the handshake enforces it, the compiler checks it."
             </p>
             <a
-                class="mt-5 inline-block rounded-full border border-warn/50 px-3 py-1 text-xs text-warn"
+                class="mt-6 inline-block rounded-full border border-warn/50 px-3 py-1 text-xs text-warn"
                 href="#proof"
             >
                 "unaudited · pre-1.0 — what stands in for an audit ↓"
             </a>
-            <div class="mt-6 flex flex-wrap items-center gap-3.5">
+            <div class="mt-7 flex flex-wrap items-center gap-3.5">
                 <a
                     class="rounded-sm border border-line px-4 py-2 text-[13px] text-silver-dim hover:border-silver-faint hover:text-silver"
                     href="https://docs.rs/hiss"
@@ -94,21 +98,49 @@ fn Hero() -> impl IntoView {
     }
 }
 
-/// The one big call to action on the splash.
+/// The one big call to action on the splash — the resolve motif above it:
+/// static enters, signal leaves.
 #[component]
 fn Invite(open: RwSignal<bool>) -> impl IntoView {
     view! {
-        <section class="py-12 text-center">
-            <p class="text-[15px] text-silver-dim">
+        <section class="flex flex-col items-center text-center lg:w-[400px] lg:shrink-0">
+            <svg
+                viewBox="0 0 260 44"
+                class="mb-8 w-56 md:w-64"
+                aria-hidden="true"
+            >
+                <g stroke="#5a6068" stroke-width="1.5" stroke-linecap="round" opacity="0.6">
+                    <line x1="6" y1="15" x2="6" y2="29"></line>
+                    <line x1="14" y1="10" x2="14" y2="34"></line>
+                    <line x1="22" y1="17" x2="22" y2="27"></line>
+                    <line x1="30" y1="12" x2="30" y2="32"></line>
+                    <line x1="38" y1="8" x2="38" y2="36"></line>
+                    <line x1="46" y1="16" x2="46" y2="28"></line>
+                    <line x1="54" y1="11" x2="54" y2="33"></line>
+                    <line x1="62" y1="18" x2="62" y2="26"></line>
+                    <line x1="70" y1="13" x2="70" y2="31"></line>
+                    <line x1="78" y1="9" x2="78" y2="35"></line>
+                    <line x1="86" y1="15" x2="86" y2="29"></line>
+                    <line x1="94" y1="12" x2="94" y2="32"></line>
+                </g>
+                <path
+                    d="M112 22 q 15 -26 30 0 t 30 0 t 30 0 t 30 0 t 24 0"
+                    fill="none"
+                    stroke="#5bc8d6"
+                    stroke-width="2.5"
+                    stroke-linecap="round"
+                ></path>
+            </svg>
+            <p class="text-[clamp(15px,1.1vw,17px)] text-silver-dim">
                 "The way you handshake decides who is authenticated."
             </p>
             <button
-                class="mt-6 cursor-pointer rounded-sm border-2 border-cyan-dim px-10 py-4 text-[16px] font-semibold text-cyan transition-colors hover:border-cyan hover:bg-cyan/10"
+                class="mt-7 cursor-pointer rounded-sm border-2 border-cyan-dim px-12 py-5 text-[clamp(16px,1.2vw,19px)] font-semibold text-cyan transition-colors hover:border-cyan hover:bg-cyan/10"
                 on:click=move |_| open.set(true)
             >
                 "find your handshake →"
             </button>
-            <p class="mt-4 text-xs text-silver-faint">
+            <p class="mt-5 max-w-[38ch] text-xs leading-5 text-silver-faint">
                 "three questions · a pattern, its properties, the code · real bytes, pinned by test"
             </p>
         </section>
@@ -622,7 +654,7 @@ fn ProofStrip() -> impl IntoView {
 #[component]
 fn PageFooter() -> impl IntoView {
     view! {
-        <footer class="mt-10 border-t border-line-soft pt-6 text-xs leading-6 text-silver-faint">
+        <footer class="mt-5 border-t border-line-soft pt-5 text-xs leading-6 text-silver-faint">
             <p class="mb-3">
                 "0.2 is unreleased — the 0.1.0 on crates.io predates the "
                 <span class="text-silver-dim">"noise!"</span>
