@@ -1,7 +1,7 @@
 //! Frozen **third-party** Noise known-answer-test (KAT) vectors, from the
 //! `cacophony` corpus.
 //!
-//! `tests/vectors/cacophony/cacophony.json` is a 136-vector subset of a
+//! `tests/vectors/cacophony/cacophony.json` is a 160-vector subset of a
 //! 944-vector community corpus that neither hiss nor `snow` produced —
 //! acquired from the `snow` 0.10.0 crate package and byte-identical to the
 //! copy in the Cacophony Haskell implementation's own repository. See
@@ -24,10 +24,14 @@
 //!
 //! # Shape
 //!
-//! 136 initiator replays and 136 responder replays — every one of the
-//! seventeen patterns hiss implements, in **both roles**, over
-//! `{25519, 448} × ChaChaPoly × {BLAKE2b, BLAKE2s, SHA256, SHA512}`, for 272
-//! tests.
+//! 160 initiator replays and 160 responder replays — every one of the
+//! seventeen patterns hiss implements plus the three psk-placement variants
+//! `NNpsk0`, `NNpsk2` and `XXpsk3`, in **both roles**, over
+//! `{25519, 448} × ChaChaPoly × {BLAKE2b, BLAKE2s, SHA256, SHA512}`, for 320
+//! tests. With `Kpsk0` and `IKpsk1`, every position a `pskN` modifier can
+//! name — psk0 through psk3 — has a third-party-pinned representative;
+//! there is no psk4 to pin, because no fundamental pattern has a fourth
+//! message.
 //!
 //! The two roles do not buy the same thing, and the split is worth stating.
 //! The thirteen interactive patterns have a responder-**written** message, so
@@ -89,7 +93,7 @@ const VECTORS_PATH: &str = concat!(
 ///
 /// Fixed by message *index* across the whole corpus, which is what lets the
 /// `noise!` declarations below spell `[16]`, `[15]` and `[11]` uniformly
-/// across all seventeen patterns.
+/// across all twenty patterns.
 const PAYLOAD_LENS: [usize; 6] = [16, 15, 11, 11, 17, 21];
 
 // ── Vector schema (cacophony's own) ──────────────────────────────
@@ -307,9 +311,10 @@ fn check_invariants(v: &Vector) {
 
 // ── Per-suite replays ────────────────────────────────────────────
 
-/// The seventeen patterns and their replays, instantiated once per suite.
+/// The twenty patterns and their replays, instantiated once per suite.
 ///
-/// A `macro_rules!` rather than eighty-eight hand-written bodies: the
+/// A `macro_rules!` rather than three hundred and twenty hand-written
+/// bodies: the
 /// declarations and the replay logic are hash- and curve-independent, so
 /// writing them once and substituting the suite is the only way the full
 /// cross product costs one line per cell.
@@ -348,6 +353,14 @@ macro_rules! cacophony_suite {
             hiss::noise! { pub KK<$curve, ChaChaPoly, $hash>     { -> s <- s ... -> e, es, ss [16] <- e, ee, se [15] } }
             hiss::noise! { pub KX<$curve, ChaChaPoly, $hash>     { -> s ... -> e [16] <- e, ee, se, s, es [15] } }
             hiss::noise! { pub IN<$curve, ChaChaPoly, $hash>     { -> e, s [16] <- e, ee, se [15] } }
+            // The three psk-placement variants: together with `Kpsk0` (psk
+            // first) and `IKpsk1` (psk ends message 1) above, every position
+            // a `pskN` modifier can name — psk0 through psk3 — has a
+            // third-party-pinned representative. There is no psk4 to pin: no
+            // fundamental pattern has a fourth message.
+            hiss::noise! { pub NNpsk0<$curve, ChaChaPoly, $hash> { -> psk, e [16] <- e, ee [15] } }
+            hiss::noise! { pub NNpsk2<$curve, ChaChaPoly, $hash> { -> e [16] <- e, ee, psk [15] } }
+            hiss::noise! { pub XXpsk3<$curve, ChaChaPoly, $hash> { -> e [16] <- e, ee, s, es [15] -> s, se, psk [11] } }
 
             /// A recorded private scalar, verbatim.
             ///
@@ -870,6 +883,105 @@ macro_rules! cacophony_suite {
 
                 assert_session_id(&transport, v);
                 replay_transport(&mut transport, v, 2, false, Side::Initiator);
+            }
+
+            #[test]
+            fn cacophony_nnpsk0() {
+                let file = load();
+                let v = load_vector(&file, concat!("Noise_NNpsk0_", $suite));
+
+                // msg1: -> psk, e [16] — the psk keys the cipher before
+                // anything else, so unlike NN's, this msg1 payload goes out
+                // encrypted.
+                let (msg1, hs) = NNpsk0::initiator(init_provider(v), &prologue(v))
+                    .write_message_1(&psk(v), &payload(&v.messages[0].payload))
+                    .unwrap();
+                assert_wire(
+                    &msg1,
+                    &v.messages[0].ciphertext,
+                    concat!("NNpsk0/", $suite, " msg1"),
+                );
+
+                let msg2 = frozen(&v.messages[1].ciphertext);
+                let (got, mut transport) = hs.read_message_2(&msg2).unwrap();
+                assert_eq!(
+                    got,
+                    payload::<15>(&v.messages[1].payload),
+                    concat!("NNpsk0/", $suite, " msg2 payload")
+                );
+
+                assert_session_id(&transport, v);
+                replay_transport(&mut transport, v, 2, false, Side::Initiator);
+            }
+
+            #[test]
+            fn cacophony_nnpsk2() {
+                let file = load();
+                let v = load_vector(&file, concat!("Noise_NNpsk2_", $suite));
+
+                let (msg1, hs) = NNpsk2::initiator(init_provider(v), &prologue(v))
+                    .write_message_1(&payload(&v.messages[0].payload))
+                    .unwrap();
+                assert_wire(
+                    &msg1,
+                    &v.messages[0].ciphertext,
+                    concat!("NNpsk2/", $suite, " msg1"),
+                );
+
+                // msg2: <- e, ee, psk [15] — the psk token sits in a message
+                // we *read*, so the plain reader takes it as an argument.
+                let msg2 = frozen(&v.messages[1].ciphertext);
+                let (got, mut transport) = hs.read_message_2(&msg2, &psk(v)).unwrap();
+                assert_eq!(
+                    got,
+                    payload::<15>(&v.messages[1].payload),
+                    concat!("NNpsk2/", $suite, " msg2 payload")
+                );
+
+                assert_session_id(&transport, v);
+                replay_transport(&mut transport, v, 2, false, Side::Initiator);
+            }
+
+            #[test]
+            fn cacophony_xxpsk3() {
+                let file = load();
+                let v = load_vector(&file, concat!("Noise_XXpsk3_", $suite));
+
+                let (msg1, hs) = XXpsk3::initiator(init_provider(v), &prologue(v))
+                    .write_message_1(&payload(&v.messages[0].payload))
+                    .unwrap();
+                assert_wire(
+                    &msg1,
+                    &v.messages[0].ciphertext,
+                    concat!("XXpsk3/", $suite, " msg1"),
+                );
+
+                let msg2 = frozen(&v.messages[1].ciphertext);
+                let (got, hs) = hs.read_message_2(&msg2).unwrap();
+                assert_eq!(
+                    got,
+                    payload::<15>(&v.messages[1].payload),
+                    concat!("XXpsk3/", $suite, " msg2 payload")
+                );
+                assert_eq!(
+                    hs.remote_static().as_bytes(),
+                    sk(v.resp_static.as_deref().unwrap()).public_key().as_bytes(),
+                    concat!("XXpsk3/", $suite, " revealed responder static")
+                );
+
+                // msg3: -> s, se, psk [11] — writer arguments in token order,
+                // static then psk, payload last.
+                let (msg3, mut transport) = hs
+                    .write_message_3(init_static(v), &psk(v), &payload(&v.messages[2].payload))
+                    .unwrap();
+                assert_wire(
+                    &msg3,
+                    &v.messages[2].ciphertext,
+                    concat!("XXpsk3/", $suite, " msg3"),
+                );
+
+                assert_session_id(&transport, v);
+                replay_transport(&mut transport, v, 3, false, Side::Initiator);
             }
 
             // ── Responder-role replays ───────────────────────────
@@ -1477,6 +1589,111 @@ macro_rules! cacophony_suite {
                 assert_session_id(&transport, v);
                 replay_transport(&mut transport, v, 2, false, Side::Responder);
             }
+
+            /// `NNpsk0` from the other side: the psk arrives with the very
+            /// first read.
+            #[test]
+            fn cacophony_nnpsk0_responder() {
+                let file = load();
+                let v = load_vector(&file, concat!("Noise_NNpsk0_", $suite));
+
+                let hs = NNpsk0::responder(resp_provider(v), &prologue(v));
+
+                let msg1 = frozen(&v.messages[0].ciphertext);
+                let (got, hs) = hs.read_message_1(&msg1, &psk(v)).unwrap();
+                assert_eq!(
+                    got,
+                    payload::<16>(&v.messages[0].payload),
+                    concat!("NNpsk0/", $suite, " responder msg1 payload")
+                );
+
+                let (msg2, mut transport) = hs
+                    .write_message_2(&payload(&v.messages[1].payload))
+                    .unwrap();
+                assert_wire(
+                    &msg2,
+                    &v.messages[1].ciphertext,
+                    concat!("NNpsk0/", $suite, " responder msg2"),
+                );
+
+                assert_session_id(&transport, v);
+                replay_transport(&mut transport, v, 2, false, Side::Responder);
+            }
+
+            /// `NNpsk2` from the other side: the psk token sits in the
+            /// message we *write*, so it is a writer argument here.
+            #[test]
+            fn cacophony_nnpsk2_responder() {
+                let file = load();
+                let v = load_vector(&file, concat!("Noise_NNpsk2_", $suite));
+
+                let hs = NNpsk2::responder(resp_provider(v), &prologue(v));
+
+                let msg1 = frozen(&v.messages[0].ciphertext);
+                let (got, hs) = hs.read_message_1(&msg1).unwrap();
+                assert_eq!(
+                    got,
+                    payload::<16>(&v.messages[0].payload),
+                    concat!("NNpsk2/", $suite, " responder msg1 payload")
+                );
+
+                let (msg2, mut transport) = hs
+                    .write_message_2(&psk(v), &payload(&v.messages[1].payload))
+                    .unwrap();
+                assert_wire(
+                    &msg2,
+                    &v.messages[1].ciphertext,
+                    concat!("NNpsk2/", $suite, " responder msg2"),
+                );
+
+                assert_session_id(&transport, v);
+                replay_transport(&mut transport, v, 2, false, Side::Responder);
+            }
+
+            /// `XXpsk3` from the other side: the final read carries `s`,
+            /// `se` *and* the psk, so — as with `IKpsk1`'s msg1 — the plain
+            /// read takes the PSK as an argument and reveals the initiator's
+            /// static onto the transport.
+            #[test]
+            fn cacophony_xxpsk3_responder() {
+                let file = load();
+                let v = load_vector(&file, concat!("Noise_XXpsk3_", $suite));
+
+                let hs = XXpsk3::responder(resp_provider(v), &prologue(v));
+
+                let msg1 = frozen(&v.messages[0].ciphertext);
+                let (got, hs) = hs.read_message_1(&msg1).unwrap();
+                assert_eq!(
+                    got,
+                    payload::<16>(&v.messages[0].payload),
+                    concat!("XXpsk3/", $suite, " responder msg1 payload")
+                );
+
+                let (msg2, hs) = hs
+                    .write_message_2(resp_static(v), &payload(&v.messages[1].payload))
+                    .unwrap();
+                assert_wire(
+                    &msg2,
+                    &v.messages[1].ciphertext,
+                    concat!("XXpsk3/", $suite, " responder msg2"),
+                );
+
+                let msg3 = frozen(&v.messages[2].ciphertext);
+                let (got, mut transport) = hs.read_message_3(&msg3, &psk(v)).unwrap();
+                assert_eq!(
+                    got,
+                    payload::<11>(&v.messages[2].payload),
+                    concat!("XXpsk3/", $suite, " responder msg3 payload")
+                );
+                assert_eq!(
+                    transport.remote_static().unwrap().as_bytes(),
+                    init_static(v).public_key().as_bytes(),
+                    concat!("XXpsk3/", $suite, " revealed initiator static")
+                );
+
+                assert_session_id(&transport, v);
+                replay_transport(&mut transport, v, 3, false, Side::Responder);
+            }
         }
     };
 }
@@ -1556,9 +1773,9 @@ cacophony_suite!(
 mod extract {
     use super::*;
 
-    const PATTERNS: [&str; 17] = [
+    const PATTERNS: [&str; 20] = [
         "N", "K", "Kpsk0", "IKpsk1", "IK", "NK", "IX", "XK", "NN", "XX", "X", "NX", "XN", "KN",
-        "KK", "KX", "IN",
+        "KK", "KX", "IN", "NNpsk0", "NNpsk2", "XXpsk3",
     ];
     const SUITES: [&str; 8] = [
         "25519_ChaChaPoly_BLAKE2b",
@@ -1591,7 +1808,7 @@ mod extract {
         assert_eq!(
             file.vectors.len(),
             wanted.len(),
-            "expected 17 patterns × 8 ChaChaPoly suites"
+            "expected 20 patterns × 8 ChaChaPoly suites"
         );
         for v in &file.vectors {
             check_invariants(v);

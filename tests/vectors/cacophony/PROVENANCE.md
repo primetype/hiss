@@ -19,29 +19,36 @@ agreement-with-`snow`.
   `centromere/cacophony`), file `vectors/cacophony.txt`, last touched by commit
   `18b7348c54fd61fcd0c220298883de0d09c8364d`.
 - **This directory's `cacophony.json` sha256:**
-  `245dac6c55a70c6278732a89211a8f00ebffa6d37649209710faa9398b485b5d`
+  `05e607e567f892154e2dfb4373e9bb852e0a4df90a4d8549fe501830c2386ee0`
 
 ## Filter
 
-The seventeen patterns hiss implements × the eight `ChaChaPoly` suites the
-corpus provides over the two curves hiss shares with it — 136 of 944:
+The seventeen patterns hiss implements, plus three psk-placement variants,
+× the eight `ChaChaPoly` suites the corpus provides over the two curves hiss
+shares with it — 160 of 944:
 
 ```
-patterns  N K Kpsk0 IKpsk1 IK NK IX XK NN XX X NX XN KN KK KX IN  (17)
+patterns  N K Kpsk0 IKpsk1 IK NK IX XK NN XX X NX XN KN KK KX IN
+          NNpsk0 NNpsk2 XXpsk3                                    (20)
 suites    {25519,448}_ChaChaPoly_{BLAKE2b,BLAKE2s,SHA256,SHA512}   (8)
 ```
 
-Every one of the 136 cells exists upstream; the extractor asserts it selected
-exactly 136 before writing, and its `PATTERNS` array is the single source of
-truth for the filter. The remaining 808 are `AESGCM` suites (hiss ships no
+The second pattern row exists to pin *psk positions*: with `Kpsk0` (psk
+first) and `IKpsk1` (psk ends message 1), every placement a `pskN` modifier
+can name — psk0 through psk3 — has a third-party-pinned representative.
+There is no psk4 row because no fundamental pattern has a fourth message.
+
+Every one of the 160 cells exists upstream; the extractor asserts it selected
+exactly 160 before writing, and its `PATTERNS` array is the single source of
+truth for the filter. The remaining 784 are `AESGCM` suites (hiss ships no
 AES-GCM) or patterns hiss does not implement — an unreplayed vector in a KAT
 directory is a claim with nothing behind it, so they are not vendored.
 
 Upstream order is preserved and every value is re-emitted verbatim; only
 whitespace, key order and the elision of absent optional keys differ, so the
-entries stay `jq`-comparable to the source entry for entry. All 136 are
-replayed by `tests/noise_cacophony.rs`, in **both roles** — 136 initiator and
-136 responder replays, 272 tests.
+entries stay `jq`-comparable to the source entry for entry. All 160 are
+replayed by `tests/noise_cacophony.rs`, in **both roles** — 160 initiator and
+160 responder replays, 320 tests.
 
 ## Refresh
 
