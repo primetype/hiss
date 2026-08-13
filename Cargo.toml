@@ -98,7 +98,7 @@ eccoxide = { version = ">=0.4.3, <0.5", default-features = false, features = ["p
 hex = "0.4"
 # The `noise!` pattern-DSL macro — the built-in patterns are defined with
 # it, so it is a required (build-time-only) dependency.
-hiss-macros = { version = "0.2.0", path = "hiss-macros" }
+hiss-macros = { version = "0.3.0", path = "hiss-macros" }
 packtool = "0.6"
 rand_core = "0.10"
 thiserror = "2"
