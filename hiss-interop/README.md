@@ -44,7 +44,7 @@ new `snow` release is noticed within a week.
 regression.** hiss's own conformance is pinned by frozen vectors that involve
 no second implementation at runtime.
 
-`Cargo.lock` **is** committed (as `demo/`'s is, and unlike hiss's own): this
+`Cargo.lock` **is** committed (as `site/`'s is, and unlike hiss's own): this
 crate is unpublished and has no consumers to resolve it fresh, and a comparison
 benchmark whose `snow` version moves silently is not comparable across time.
 

@@ -1,5 +1,0 @@
-/target
-/dist
-# Commit the lockfile: this is a binary playground, so pin its deps for
-# reproducible builds (the repo root ignores Cargo.lock for the library).
-!/Cargo.lock

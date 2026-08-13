@@ -57,7 +57,8 @@ struct Trace {
 /// Run the transport exchange the device replays — "ping" from you, "pong"
 /// back — proving both directions decrypt, and capture the ciphertexts.
 /// A macro rather than a function: each pattern's `Transport<P>` is its own
-/// concrete type and the demo's post-mortem warns against going generic.
+/// concrete type, and going generic over patterns is what sank the retired
+/// demo crate (see the 0.2.0 changelog).
 macro_rules! transport_exchange {
     ($i_t:ident, $r_t:ident, $pat:ty) => {{
         let overhead = Transport::<$pat>::OVERHEAD;
