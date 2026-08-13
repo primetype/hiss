@@ -10,6 +10,7 @@
 use std::time::Duration;
 
 use leptos::ev;
+use leptos::html;
 use leptos::prelude::*;
 
 use crate::fixtures::{self, Dir};
@@ -28,15 +29,33 @@ const TAB_ON: &str =
 const TAB_OFF: &str = "cursor-pointer rounded-sm border border-line px-3 py-1.5 text-xs \
      text-silver-dim transition-colors hover:border-silver-faint hover:text-silver";
 
+/// rustc's rejection of a pattern that never keys the cipher — the Noise
+/// §7.3 guard. Quoted from the README, where it is pinned by a
+/// `compile_fail` doctest on `WellFormed`; text verbatim, wrapping tidied.
+const NEVER_KEYS_DIAG: &str = r#": this Noise pattern never keys the cipher: it performs no DH
+              (ee/es/se/ss) and no psk token, so it provides no confidentiality
+              or authentication
+ --> src/main.rs:3:9
+  |
+3 |     pub Bad<X25519, ChaChaPoly, Blake2b> {
+  |         ^^^ pattern finalises with an unkeyed cipher"#;
+
 #[component]
 pub fn App() -> impl IntoView {
     let wizard_open = RwSignal::new(false);
+    // The invite button, so the wizard can hand keyboard focus back on close.
+    let invite_btn = NodeRef::<html::Button>::new();
     view! {
-        <main class="flex min-h-dvh flex-col px-5 md:px-10">
+        // `inert` while the wizard is open: the page behind the modal stops
+        // being focusable or clickable, which is the whole focus trap.
+        <main
+            class="flex min-h-dvh flex-col px-5 md:px-10"
+            inert=move || wizard_open.get().then_some("")
+        >
             <Nav />
             <div class="mx-auto flex w-full max-w-6xl flex-1 flex-col justify-center gap-12 py-12 lg:flex-row lg:items-center lg:gap-20">
                 <Hero />
-                <Invite open=wizard_open />
+                <Invite open=wizard_open btn=invite_btn />
             </div>
             <div class="mx-auto w-full max-w-6xl pb-6">
                 <div class="static-band mb-6"></div>
@@ -44,7 +63,7 @@ pub fn App() -> impl IntoView {
                 <PageFooter />
             </div>
         </main>
-        <Wizard open=wizard_open />
+        <Wizard open=wizard_open invite_btn=invite_btn />
     }
 }
 
@@ -98,7 +117,7 @@ fn Hero() -> impl IntoView {
 /// The one big call to action on the splash — the resolve motif above it:
 /// static enters, signal leaves.
 #[component]
-fn Invite(open: RwSignal<bool>) -> impl IntoView {
+fn Invite(open: RwSignal<bool>, btn: NodeRef<html::Button>) -> impl IntoView {
     view! {
         <section class="flex flex-col items-center text-center lg:w-[400px] lg:shrink-0">
             <svg
@@ -132,6 +151,7 @@ fn Invite(open: RwSignal<bool>) -> impl IntoView {
                 "The way you handshake decides who is authenticated."
             </p>
             <button
+                node_ref=btn
                 class="mt-7 cursor-pointer rounded-sm border-2 border-cyan-dim px-12 py-5 text-[clamp(16px,1.2vw,19px)] font-semibold text-cyan transition-colors hover:border-cyan hover:bg-cyan/10"
                 on:click=move |_| open.set(true)
             >
@@ -154,7 +174,7 @@ enum Stage {
 
 /// The modal wizard: three questions → a pattern, explained.
 #[component]
-fn Wizard(open: RwSignal<bool>) -> impl IntoView {
+fn Wizard(open: RwSignal<bool>, invite_btn: NodeRef<html::Button>) -> impl IntoView {
     let stage = RwSignal::new(Stage::AuthYou);
     let you = RwSignal::new(true);
     let peer = RwSignal::new(true);
@@ -163,15 +183,30 @@ fn Wizard(open: RwSignal<bool>) -> impl IntoView {
     // on every transition into `Stage::Result`, then driven by the tabs.
     let selected = RwSignal::new("XX");
 
-    // Opening always starts from the first question.
+    let panel_ref = NodeRef::<html::Div>::new();
+    // Closing hands keyboard focus back to the invite button.
+    let close = move || {
+        open.set(false);
+        if let Some(b) = invite_btn.get_untracked() {
+            let _ = b.focus();
+        }
+    };
+
+    // Opening always starts from the first question, with focus moved into
+    // the dialog (the page behind it is `inert` meanwhile — see App).
     Effect::new(move |_| {
         if open.get() {
             stage.set(Stage::AuthYou);
+            request_animation_frame(move || {
+                if let Some(el) = panel_ref.get_untracked() {
+                    let _ = el.focus();
+                }
+            });
         }
     });
     window_event_listener(ev::keydown, move |e| {
-        if e.key() == "Escape" {
-            open.set(false);
+        if open.get_untracked() && e.key() == "Escape" {
+            close();
         }
     });
 
@@ -182,9 +217,11 @@ fn Wizard(open: RwSignal<bool>) -> impl IntoView {
                 role="dialog"
                 aria-modal="true"
                 aria-label="find your handshake"
-                on:click=move |_| open.set(false)
+                on:click=move |_| close()
             >
                 <div
+                    node_ref=panel_ref
+                    tabindex="-1"
                     class="my-8 w-full max-w-2xl rounded-sm border border-line bg-panel p-6"
                     on:click=move |e| e.stop_propagation()
                 >
@@ -195,7 +232,7 @@ fn Wizard(open: RwSignal<bool>) -> impl IntoView {
                         <button
                             class=GHOST_BTN
                             aria-label="close"
-                            on:click=move |_| open.set(false)
+                            on:click=move |_| close()
                         >
                             "close ✕"
                         </button>
@@ -409,6 +446,25 @@ fn Wizard(open: RwSignal<bool>) -> impl IntoView {
                                             <p class="mt-3 rounded-sm border border-warn/50 bg-warn/5 p-3 text-xs leading-5 text-warn">
                                                 {format!("⚠ {w}")}
                                             </p>
+                                        }
+                                    })}
+                                {(sel == "NN")
+                                    .then(|| {
+                                        view! {
+                                            <div class="mt-3">
+                                                <p class="text-xs text-silver-dim">
+                                                    "One step further — a pattern with no key exchange at all — and hiss refuses to compile it:"
+                                                </p>
+                                                <pre class="mt-2 overflow-x-auto rounded-sm border border-line-soft bg-ink p-3 text-[11px] leading-5 text-silver-dim">
+                                                    <code>
+                                                        <span class="text-blocked">"error[E0277]"</span>
+                                                        {NEVER_KEYS_DIAG}
+                                                    </code>
+                                                </pre>
+                                                <p class="mt-1 text-[10.5px] text-silver-faint">
+                                                    "rustc's diagnostic — pinned by a compile_fail doctest in hiss (text verbatim, wrapping tidied)"
+                                                </p>
+                                            </div>
                                         }
                                     })}
                                 <ul class="mt-4 space-y-1.5 text-[13px] text-silver-dim">

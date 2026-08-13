@@ -13,6 +13,16 @@
       property="og:description"
       content="You decide who proves themselves — the handshake enforces it, the compiler checks it. A Rust Noise Protocol implementation."
     />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://primetype.github.io/hiss/" />
+    <!-- Absolute URL on purpose: crawlers do not resolve relative og:image
+         paths reliably. Regenerate the card with the script noted in
+         site/README.md if the brand moves. -->
+    <meta property="og:image" content="https://primetype.github.io/hiss/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:image" content="https://primetype.github.io/hiss/og.png" />
 
     <!-- The brand monogram: three static ticks resolving into one signal period. -->
     <link
@@ -26,6 +36,47 @@
 
     <!-- Trunk downloads the tailwindcss CLI and compiles this stylesheet. -->
     <link data-trunk rel="tailwind-css" href="styles/input.css" />
+
+    <!-- The social card, copied into dist/ as /og.png. -->
+    <link data-trunk rel="copy-file" href="assets/og.png" />
   </head>
-  <body class="bg-ink text-silver font-mono"></body>
+  <body class="bg-ink text-silver font-mono">
+    <noscript>
+      <div class="mx-auto max-w-2xl px-5 py-16">
+        <p class="mb-4 text-[11.5px] uppercase tracking-[0.16em] text-silver-dim">
+          noise protocol framework · rust · sans-io · no async runtime
+        </p>
+        <h1 class="text-3xl font-semibold leading-tight text-silver-bright">
+          Encrypted, authenticated channels between two peers you control.
+        </h1>
+        <p class="mt-4 text-[15px] text-silver-dim">
+          You decide who proves themselves — the handshake enforces it, the
+          compiler checks it. This page's interactive parts need JavaScript
+          (it is a WASM app), but everything it says lives in the README too.
+        </p>
+        <p class="mt-4 inline-block rounded-full border border-warn/50 px-3 py-1 text-xs text-warn">
+          unaudited · pre-1.0 — use at your own risk
+        </p>
+        <pre class="mt-6 overflow-x-auto rounded-sm border border-line-soft bg-panel p-4 text-xs leading-6 text-silver-dim"><code><span class="text-cyan">hiss::noise!</span> {
+    pub XX&lt;X25519, ChaChaPoly, Blake2b&gt; {
+        -&gt; e
+        &lt;- e, ee, s, es
+        -&gt; s, se
+    }
+}</code></pre>
+        <p class="mt-6 text-[13px]">
+          <span class="text-silver-faint">$ </span>cargo add hiss
+        </p>
+        <p class="mt-6 text-xs text-silver-dim">
+          <a class="text-cyan" href="https://docs.rs/hiss">docs.rs</a>
+          ·
+          <a class="text-cyan" href="https://crates.io/crates/hiss">crates.io</a>
+          ·
+          <a class="text-cyan" href="https://github.com/primetype/hiss">github</a>
+          ·
+          <a class="text-cyan" href="https://github.com/primetype/hiss#how-this-is-tested">how this is tested</a>
+        </p>
+      </div>
+    </noscript>
+  </body>
 </html>
