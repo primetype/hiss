@@ -1084,6 +1084,45 @@ macro_rules! cacophony_suite {
                 replay_transport(&mut transport, v, 2, false, Side::Responder);
             }
 
+            /// `IK` from the other side, read **staged**: intro reveals the
+            /// claimed initiator static after one DH, `complete()` recovers
+            /// the payload, and the msg2 the previously-suspended responder
+            /// writes is byte-identical to the corpus — a third-party oracle
+            /// that suspension leaves no trace in the transcript.
+            #[test]
+            fn cacophony_ik_responder_staged() {
+                let file = load();
+                let v = load_vector(&file, concat!("Noise_IK_", $suite));
+
+                let hs = IK::responder(resp_provider(v), &prologue(v), resp_static(v)).unwrap();
+
+                let msg1 = frozen(&v.messages[0].ciphertext);
+                let (claimed, mid) = hs.read_message_1_intro(&msg1).unwrap();
+                assert_eq!(
+                    claimed.as_bytes(),
+                    init_static(v).public_key().as_bytes(),
+                    concat!("IK/", $suite, " claimed initiator static at intro")
+                );
+                let (got, hs) = mid.complete().unwrap();
+                assert_eq!(
+                    got,
+                    payload::<16>(&v.messages[0].payload),
+                    concat!("IK/", $suite, " staged msg1 payload")
+                );
+
+                let (msg2, mut transport) = hs
+                    .write_message_2(&payload(&v.messages[1].payload))
+                    .unwrap();
+                assert_wire(
+                    &msg2,
+                    &v.messages[1].ciphertext,
+                    concat!("IK/", $suite, " staged responder msg2"),
+                );
+
+                assert_session_id(&transport, v);
+                replay_transport(&mut transport, v, 2, false, Side::Responder);
+            }
+
             /// `IKpsk1` from the other side. The `psk` token trails the `s`
             /// it protects, so the plain read takes the PSK as an argument.
             #[test]

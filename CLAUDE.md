@@ -53,12 +53,13 @@ So what the gate adds, concretely:
    via a dev-dependency surfaces as a build failure only here.
 3. The README quickstart is compiled *and executed* against the exact
    dependency pairing the README advertises (`hiss` + `rand = "0.10"`).
-4. The `# Usage` doctests `noise!` emits are compiled — over four
+4. The `# Usage` doctests `noise!` emits are compiled — over five
    patterns chosen to reach every arm of the generator, not just one
    shape: pre-message keys (local and remote), a plain PSK and a
    per-peer lookup, declared payloads on a sent and a received message,
-   the identity hook on a read that reveals `s`, and a one-way role that
-   only writes. Nothing else compiles them: doctests do not run for
+   the identity hook on a read that reveals `s`, a one-way role that
+   only writes, and the staged intro/complete walkthrough on a msg1
+   ending `…, s, ss` (with a payload on one arm and a psk on another). Nothing else compiles them: doctests do not run for
    binaries, and hiss's own `noise!` invocations are marker-mode, which
    emits no walkthrough. Sabotage one arm and every other gate stays
    green while this one goes red — which is the point. The arms also

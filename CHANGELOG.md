@@ -9,6 +9,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The staged msg1 read: `read_message_1_intro` → mid-state → `complete()`.**
+  A first message whose token sequence ends `…, s, ss` (IK's shape — a msg1
+  with a *trailing* `psk`, IKpsk1's shape, is deliberately excluded: its
+  `complete()` would need the PSK re-supplied mid-read, and the per-peer
+  lookup closure already serves it) now also generates a suspending read
+  pair alongside the untouched one-shot and `_with` styles: `read_message_1_intro` processes the message through its
+  `s` token — exactly one DH, `es` — returning the peer's **claimed** static
+  by value together with a `{Pattern}{Role}Msg1Intro` mid-state that owns
+  the message's un-read tail as a fixed-size array (`MSG1_INTRO_TAIL`, a
+  `WireSize`-derived const: the declared payload plus its tag). The
+  mid-state is a self-contained owned value — no borrow of the input,
+  nothing re-supplied later, `#[must_use]`, deliberately not `Clone` —
+  built to be parked across event-loop turns while the application judges
+  the identity (exposed again via `claimed_static()`); dropping it abandons
+  the handshake at exactly the DH already paid, with scrubbing inherited
+  from the handshake state's own `Drop` impls. `complete(self)` pays the
+  proving `ss`, decrypts the payload, and verifies the tag, returning
+  exactly what the one-shot read would have — transcript byte-identical —
+  or, on failure, consuming the state so a failed read cannot be retried,
+  even by mistake.
+
+  Why: a synchronous identity hook (the `Verify` closure) cannot serve a
+  staged accept that **suspends** on the claimed identity — think
+  human-in-the-loop accept decisions parked across turns — without
+  re-paying `es` afterwards, and a downstream DoS cost ladder priced at
+  "1 DH to inspect, 2 cumulative to authenticate" (slither's, and anyone
+  else's shaped like it) cannot absorb a 3-DH accepted read.
+
+  What stands behind it: no new runtime crypto — intro+complete is the
+  one-shot read's exact `support` call sequence split across two methods —
+  plus a seed-twin equivalence test (same claimed static, same payload,
+  byte-identical msg2 and session id), DH-cost pins through a counting
+  provider (intro = 1; reject-by-drop = 1 total; complete = 2), a
+  tampered-tail test (intro passes, `complete` fails and consumes), a
+  one-way `X` staged read completing into the `Transport`, and the
+  Cacophony IK corpus replayed **through the split path** on all eight
+  suites — a third-party oracle that suspension leaves no trace in the
+  transcript. Qualifying patterns' emitted `# Usage` docs gain a third,
+  staged walkthrough, compiled downstream by a fifth `downstream-build.sh`
+  arm (payload shape) and the existing IKpsk0 arm (psk shape).
+
 - **`DatagramSend::next_counter()`** — a `&self` accessor for the counter the
   next **successful** `encrypt_next` will seal under (the current cipher-state
   `n`). Until now that counter was only learnable from `encrypt_next`'s return

@@ -675,6 +675,192 @@ fn ik_payload_verify_fires_after_es_and_before_ss() {
     assert_eq!(plain_sid, with_sid);
 }
 
+// ── the staged read: intro / mid-state / complete ─────────────────
+//
+// Msg1's token sequence ends `…, s, ss`, so IKPayload (and its plain
+// twin, and one-way X) also carry the suspending read pair:
+// `read_message_1_intro` stops after the claimed static — one DH — and
+// hands back a self-contained owned mid-state; `complete()` pays `ss`
+// and the tail. These pin the DH-cost split, equivalence with the
+// one-shot read (byte-identical msg2 and session id), the
+// consumed-on-failure tamper path, and what the mid-state carries.
+
+#[test]
+fn staged_read_equals_the_one_shot_read() {
+    // Two identical handshakes (same seeds), one read one-shot and one
+    // staged: same claimed identity, same payload, byte-identical msg2
+    // and session id afterwards — the suspension leaves no trace in the
+    // transcript.
+    let stamp: [u8; 12] = *b"ts5555555555";
+    let run = |staged: bool| {
+        let mut ip = provider(871);
+        let i_static = ip.generate::<X25519>().unwrap();
+        let i_pub = ip.public(&i_static).unwrap();
+        let mut rp = provider(872);
+        let r_static = rp.generate::<X25519>().unwrap();
+        let r_pub = rp.public(&r_static).unwrap();
+
+        let (msg1, i_hs) = IKPayload::initiator(ip, PROLOGUE, r_pub)
+            .write_message_1(i_static, &stamp)
+            .unwrap();
+
+        let dhs = Rc::new(Cell::new(0usize));
+        let counting = CountingDh {
+            inner: rp,
+            dhs: dhs.clone(),
+        };
+        let hs = IKPayload::responder(counting, PROLOGUE, r_static).unwrap();
+        let (got, hs) = if staged {
+            let (claimed, mid) = hs.read_message_1_intro(&msg1).unwrap();
+            assert_eq!(
+                claimed.as_ref(),
+                i_pub.as_ref(),
+                "the claimed identity, by value",
+            );
+            assert_eq!(
+                mid.claimed_static().as_ref(),
+                i_pub.as_ref(),
+                "…and via the mid-state's accessor",
+            );
+            assert_eq!(dhs.get(), 1, "intro pays exactly the one `es` DH");
+            mid.complete().unwrap()
+        } else {
+            hs.read_message_1(&msg1).unwrap()
+        };
+        assert_eq!(dhs.get(), 2, "the completed read ran both `es` and `ss`");
+        assert_eq!(got, stamp);
+
+        let (msg2, r_t) = hs.write_message_2().unwrap();
+        let i_t = i_hs.read_message_2(&msg2).unwrap();
+        assert_eq!(i_t.session_id(), r_t.session_id());
+        (msg2, i_t.session_id().as_ref().to_vec())
+    };
+
+    let (plain_msg2, plain_sid) = run(false);
+    let (staged_msg2, staged_sid) = run(true);
+    assert_eq!(
+        plain_msg2, staged_msg2,
+        "byte-identical msg2 — the transcript never diverged",
+    );
+    assert_eq!(plain_sid, staged_sid);
+}
+
+#[test]
+fn staged_reject_by_drop_costs_exactly_one_dh() {
+    let mut ip = provider(881);
+    let i_static = ip.generate::<X25519>().unwrap();
+    let i_pub = ip.public(&i_static).unwrap();
+    let mut rp = provider(882);
+    let r_static = rp.generate::<X25519>().unwrap();
+    let r_pub = rp.public(&r_static).unwrap();
+    let stamp = [0x3C; 12];
+
+    let (msg1, _i_hs) = IKPayload::initiator(ip, PROLOGUE, r_pub)
+        .write_message_1(i_static, &stamp)
+        .unwrap();
+
+    let dhs = Rc::new(Cell::new(0usize));
+    let counting = CountingDh {
+        inner: rp,
+        dhs: dhs.clone(),
+    };
+    let (claimed, mid) = IKPayload::responder(counting, PROLOGUE, r_static)
+        .unwrap()
+        .read_message_1_intro(&msg1)
+        .unwrap();
+    assert_eq!(claimed.as_ref(), i_pub.as_ref());
+
+    // The rejection: no closure, no further call — the mid-state is
+    // simply dropped, however many event-loop turns later.
+    drop(mid);
+    assert_eq!(
+        dhs.get(),
+        1,
+        "a dropped mid-state spent exactly the one `es` DH — `ss` never ran",
+    );
+}
+
+#[test]
+fn staged_tampered_tail_passes_intro_and_fails_complete() {
+    let mut ip = provider(886);
+    let i_static = ip.generate::<X25519>().unwrap();
+    let i_pub = ip.public(&i_static).unwrap();
+    let mut rp = provider(887);
+    let r_static = rp.generate::<X25519>().unwrap();
+    let r_pub = rp.public(&r_static).unwrap();
+    let stamp = [0x7E; 12];
+
+    let (mut msg1, _i_hs) = IKPayload::initiator(ip, PROLOGUE, r_pub)
+        .write_message_1(i_static, &stamp)
+        .unwrap();
+    // First byte of the payload ciphertext: after e (32) + encrypted s (48).
+    msg1[80] ^= 0xFF;
+
+    // The tamper sits in the tail intro never touches: intro still
+    // reveals the claimed identity…
+    let (claimed, mid) = IKPayload::responder(rp, PROLOGUE, r_static)
+        .unwrap()
+        .read_message_1_intro(&msg1)
+        .unwrap();
+    assert_eq!(claimed.as_ref(), i_pub.as_ref());
+
+    // …and `complete` fails the tag, consuming the mid-state: neither
+    // payload nor state comes back, and the moved value leaves nothing
+    // to retry.
+    let outcome = mid.complete();
+    assert!(matches!(outcome, Err(HandshakeError::DecryptionFailed)));
+}
+
+#[test]
+fn staged_read_on_a_one_way_final_message_completes_into_transport() {
+    // X's single message ends `…, s, ss`, so its recipient gets the pair
+    // too — and `complete()` is the final read, so it yields the
+    // `Transport` directly, exactly as the one-shot read would.
+    let mut ip = provider(891);
+    let i_static = ip.generate::<X25519>().unwrap();
+    let i_pub = ip.public(&i_static).unwrap();
+    let mut rp = provider(892);
+    let r_static = rp.generate::<X25519>().unwrap();
+    let r_pub = rp.public(&r_static).unwrap();
+
+    let (msg1, mut i_t) = X::initiator(ip, PROLOGUE, r_pub)
+        .write_message_1(i_static)
+        .unwrap();
+
+    let (claimed, mid) = X::responder(rp, PROLOGUE, r_static)
+        .unwrap()
+        .read_message_1_intro(&msg1)
+        .unwrap();
+    assert_eq!(claimed.as_ref(), i_pub.as_ref());
+    let mut r_t = mid.complete().unwrap();
+    assert_eq!(i_t.session_id(), r_t.session_id());
+
+    let word = b"one way, staged";
+    let mut sealed = vec![0u8; word.len() + Transport::<X>::OVERHEAD];
+    let n = i_t.send(word, &mut sealed).unwrap();
+    let mut opened = vec![0u8; n];
+    let m = r_t.receive(&sealed[..n], &mut opened).unwrap();
+    assert_eq!(&opened[..m], word);
+}
+
+#[test]
+fn staged_mid_state_owns_the_tail_not_the_message() {
+    // The tail const is exactly the message's unread remainder: the
+    // declared payload plus the AEAD tag (DH tokens are zero-width).
+    assert_eq!(IKPayload::MSG1_INTRO_TAIL, 12 + 16);
+    assert_eq!(IK::MSG1_INTRO_TAIL, 16);
+
+    // And the mid-state stores those 28 un-read bytes, not the 108-byte
+    // message: its size sits strictly below "state + message", with
+    // layout-proof margin — no re-derivation of rustc's padding rules.
+    type State = IKPayloadResponderMsg1<EphemeralOnly<StdRng>>;
+    type Mid = IKPayloadResponderMsg1Intro<EphemeralOnly<StdRng>>;
+    assert!(
+        std::mem::size_of::<Mid>() < std::mem::size_of::<State>() + IKPayload::MSG1_SIZE,
+        "the mid-state must carry the tail, not the whole message",
+    );
+}
+
 // ── T2: byte-level interop against the classic io_sync driver ─────
 
 // ── T6: negative paths ───────────────────────────────────────────

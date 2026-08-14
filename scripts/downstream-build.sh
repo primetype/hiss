@@ -38,7 +38,7 @@
 #   3. Resolves and builds it WITHOUT `--offline`, so Cargo picks the newest
 #      semver-compatible release of every dependency, then runs it.
 #   4. Builds a lib target — the README's `hiss::noise!` invocation plus
-#      three more patterns chosen to reach every arm of the walkthrough (see
+#      four more patterns chosen to reach every arm of the walkthrough (see
 #      section 1b) — and runs `cargo test --doc` over it. `noise!` emits a
 #      `# Usage` walkthrough onto every pattern type it generates, as a
 #      doctest, and that doctest is compiled *nowhere else*: doctests do not
@@ -138,21 +138,28 @@ main_rs="$work/main.rs"
 # generates, as a doctest — and the shape of that walkthrough varies with the
 # pattern: pre-message keys, a PSK (plain, or a per-peer lookup), declared
 # payloads, an identity hook on a read that reveals `s`, a role that only
-# writes. The README's `XX` reaches none of those arms, so on its own this
-# gate would let a walkthrough that does not compile ship to every consumer
-# of every other pattern. These four cover the generator:
+# writes — and, on a msg1 ending `…, s, ss`, the staged third walkthrough
+# (`read_message_1_intro` → `complete`). The README's `XX` reaches none of
+# those arms, so on its own this gate would let a walkthrough that does not
+# compile ship to every consumer of every other pattern. These five cover
+# the generator:
 #
 #   XX      (from the README) — verify hook, no pre-messages, no PSK.
 #             X25519 / ChaChaPoly / Blake2b
 #   IKpsk1  — pre-messages, `s` ahead of `psk` (per-peer lookup), payloads
 #             on both a sent and a received message. P256 / ChaChaPoly / Sha512
 #   IKpsk0  — `psk` ahead of `s`: a read taking a plain PSK *and* a
-#             verification closure. X448 / ChaChaPoly / Sha256
+#             verification closure; msg1 ends `…, s, ss`, so its staged
+#             walkthrough carries the intro-with-psk arm.
+#             X448 / ChaChaPoly / Sha256
 #   K       — one-way: a role that only writes, a role that only reads, and
 #             a local static in both constructors (the fallible arm).
 #             X25519 / ChaChaPoly / Blake2s
+#   IK      — the staged walkthrough with a declared payload: intro returns
+#             the claimed static, `complete()` returns the payload.
+#             X25519 / ChaChaPoly / Sha512
 #
-# The suites are spread deliberately: between them the four arms spell
+# The suites are spread deliberately: between them the five arms spell
 # **every** type in `hiss-macros`' `HISS_SUITE_TYPES` — three curves, one
 # cipher, four hashes. The sketch-degrade guard below only fires for a type
 # some arm actually writes, so this is what makes it total rather than
@@ -194,6 +201,17 @@ pub mod arms {
             <- s
             ...
             -> e, es, ss
+        }
+    }
+
+    hiss::noise! {
+        /// Msg1 ends `…, s, ss` with a declared payload: the staged
+        /// walkthrough, payload returned at `complete()`.
+        pub IK<X25519, ChaChaPoly, Sha512> {
+            <- s
+            ...
+            -> e, es, s, ss [12]
+            <- e, ee, se
         }
     }
 }

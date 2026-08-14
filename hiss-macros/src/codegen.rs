@@ -46,6 +46,14 @@
 //! lookup closure `FnOnce(&PublicKey) -> Result<Psk, _>`, for
 //! deployments that select a per-peer PSK (or reject unknown peers)
 //! from the just-revealed identity.
+//!
+//! A first message whose token sequence ends `…, s, ss` (IK's shape)
+//! additionally gets a **staged** read: `read_message_1_intro` stops
+//! after the revealed static — exactly the DH work up to that point —
+//! and suspends into an owned mid-state whose `complete()` pays the
+//! rest. The synchronous styles above decide *inside* the read; the
+//! staged pair returns control to the caller at the identity boundary,
+//! for decisions held across event-loop turns. See [`gen_split_read`].
 
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
@@ -119,6 +127,25 @@ impl Ctx<'_> {
     /// `IKpsk1InitiatorMsg2`.
     fn state_ident(&self, role: Role, msg: usize) -> Ident {
         format_ident!("{}{}Msg{}", self.name, role.name(), msg + 1)
+    }
+
+    /// The qualifying staged first message, if any — the one predicate
+    /// behind every "does this pattern stage?" question outside a real
+    /// message loop (see [`split_read_on`]).
+    fn staged_msg1(&self) -> Option<&Line> {
+        self.input
+            .messages
+            .first()
+            .filter(|line| split_read_on(0, line))
+    }
+}
+
+/// The role that *reads* a line — the side the staged pair lands on.
+fn reader_of(line: &Line) -> Role {
+    if line.dir == Role::Initiator.send_dir() {
+        Role::Responder
+    } else {
+        Role::Initiator
     }
 }
 
@@ -277,27 +304,50 @@ fn gen_main_struct(ctx: &Ctx<'_>) -> TokenStream {
     let diagram = pattern_diagram(ctx.input);
     let suite = &ctx.suite;
     // Both roles share one suite, so either both walkthroughs compile or
-    // neither can — see `usage_doctest`.
+    // neither can — see `usage_doctest`. A pattern with a staged msg1
+    // read gets a third walkthrough, from whichever role *reads* msg1.
+    let staged_reader = ctx.staged_msg1().map(reader_of);
     let usage = match (
-        usage_doctest(ctx, Role::Initiator),
-        usage_doctest(ctx, Role::Responder),
+        usage_doctest(ctx, Role::Initiator, false),
+        usage_doctest(ctx, Role::Responder, false),
     ) {
-        (Some(initiator), Some(responder)) => format!(
-            "\n\n# Usage\n\nAs the initiator:\n\n```\n{initiator}```\n\nAs \
-             the responder:\n\n```\n{responder}```"
-        ),
+        (Some(initiator), Some(responder)) => {
+            let mut out = format!(
+                "\n\n# Usage\n\nAs the initiator:\n\n```\n{initiator}```\n\nAs \
+                 the responder:\n\n```\n{responder}```"
+            );
+            if let Some(role) = staged_reader
+                && let Some(staged) = usage_doctest(ctx, role, true)
+            {
+                out.push_str(&format!(
+                    "\n\nAs the {}, **staged** — suspend on the claimed \
+                     identity and decide across turns before paying the \
+                     proving DH:\n\n```\n{staged}```",
+                    role.name().to_lowercase(),
+                ));
+            }
+            out
+        }
         _ => {
-            let initiator = usage_snippet(ctx, Role::Initiator);
-            let responder = usage_snippet(ctx, Role::Responder);
-            format!(
+            let initiator = usage_snippet(ctx, Role::Initiator, false);
+            let responder = usage_snippet(ctx, Role::Responder, false);
+            let mut out = format!(
                 "\n\n# Usage\n\nSketches rather than doctests: this suite is \
                  named through paths `noise!` cannot respell for a doctest \
-                 crate (a local alias, or a `Curve` of your own), so the two \
+                 crate (a local alias, or a `Curve` of your own), so the \
                  walkthroughs below are uncompiled. Spell the suite as \
                  `hiss::noise::…` to get compiled ones.\n\nAs the \
                  initiator:\n\n```text\n{initiator}```\n\nAs the \
                  responder:\n\n```text\n{responder}```"
-            )
+            );
+            if let Some(role) = staged_reader {
+                let staged = usage_snippet(ctx, role, true);
+                out.push_str(&format!(
+                    "\n\nAs the {}, staged:\n\n```text\n{staged}```",
+                    role.name().to_lowercase(),
+                ));
+            }
+            out
         }
     };
     let generated = format!(
@@ -416,6 +466,33 @@ fn gen_sizes(ctx: &Ctx<'_>) -> TokenStream {
                 0
             }) #payload_term;
         });
+        // The staged read's mid-state owns this message's un-read tail —
+        // the bytes after its final `s` token. DH tokens are zero-width
+        // on the wire, so that tail is the message size minus the token
+        // bytes: the same engine terms the size const above is built
+        // from, subtracted rather than re-derived, so the two cannot
+        // drift apart.
+        if split_read_on(i, line) {
+            let tail_const = format_ident!("MSG{}_INTRO_TAIL", i + 1);
+            let intro_tail_doc = format!(
+                "Bytes of handshake message {} left un-read by \
+                 `read_message_{}_intro` — the declared payload (if any) \
+                 plus its authentication tag. The staged read's mid-state \
+                 carries exactly this many bytes between `intro` and \
+                 `complete`.",
+                i + 1,
+                i + 1,
+            );
+            consts.extend(quote! {
+                #[doc = #intro_tail_doc]
+                pub const #tail_const: usize = Self::#size
+                    - (if Self::#before {
+                        #wire::SIZE_KEYED
+                    } else {
+                        #wire::SIZE_UNKEYED
+                    });
+            });
+        }
     }
     quote! {
         impl #name {
@@ -580,6 +657,9 @@ fn gen_role(ctx: &Ctx<'_>, role: Role) -> TokenStream {
             out.extend(gen_write_message(ctx, role, msg));
         } else {
             out.extend(gen_read_message(ctx, role, msg));
+            if split_read_on(msg, line) {
+                out.extend(gen_split_read(ctx, role, msg));
+            }
         }
         if has_tok(line, Tok::E) {
             if ours {
@@ -712,6 +792,17 @@ fn method_ident(sending: bool, msg: usize) -> Ident {
     } else {
         format_ident!("read_message_{}", msg + 1)
     }
+}
+
+/// The staged pair's phase-1 method — one spelling for the definition
+/// and every doc cross-link, so a rename cannot orphan a link.
+fn intro_ident(msg: usize) -> Ident {
+    format_ident!("read_message_{}_intro", msg + 1)
+}
+
+/// The identity-hook variant's name (`read_message_N_with`).
+fn with_ident(msg: usize) -> Ident {
+    format_ident!("read_message_{}_with", msg + 1)
 }
 
 /// The expression producing the state (or transport) after message `msg`.
@@ -955,6 +1046,28 @@ fn verify_on_read(line: &Line) -> bool {
     has_tok(line, Tok::S) && !psk_after_s(line)
 }
 
+/// Whether a *received* message gets the staged `intro`/`complete` read
+/// pair: the first message, with its token sequence ending `…, s, ss` (a
+/// declared payload may follow). At that boundary the claimed static has
+/// just been revealed, and everything still unpaid — the proving `ss`
+/// and the tail — needs no further input bytes, so the read can suspend
+/// into a self-contained mid-state and resume later.
+///
+/// Deliberately narrower than the mechanism could carry:
+///
+/// * a msg1 with a **trailing `psk`** (IKpsk1's shape) is excluded — its
+///   `complete()` would need the PSK re-supplied mid-read, breaking the
+///   mid-state's "nothing re-supplied later" contract, and the `_with`
+///   lookup closure already serves per-peer PSK selection there;
+/// * later messages, and shapes with non-DH tokens after the last `s`,
+///   are excluded until something needs them. The split point itself is
+///   derived, not enumerated — everything after the *last* `s` (see
+///   [`gen_split_read`]) — so widening this predicate is a policy
+///   decision, not a rewrite.
+fn split_read_on(msg: usize, line: &Line) -> bool {
+    msg == 0 && matches!(line.tokens.as_slice(), [.., (Tok::S, _), (Tok::Ss, _)])
+}
+
 fn gen_read_message(ctx: &Ctx<'_>, role: Role, msg: usize) -> TokenStream {
     let line = &ctx.input.messages[msg];
     let id = ctx.state_ident(role, msg);
@@ -987,7 +1100,6 @@ fn gen_read_message(ctx: &Ctx<'_>, role: Role, msg: usize) -> TokenStream {
 fn gen_read_method(ctx: &Ctx<'_>, role: Role, msg: usize, style: ReadStyle) -> TokenStream {
     let line = &ctx.input.messages[msg];
     let size = ctx.size_path(msg);
-    let support = quote!(::hiss::noise::support);
     let base = method_ident(false, msg);
     let method = match style {
         ReadStyle::Plain => base.clone(),
@@ -1088,20 +1200,65 @@ fn gen_read_method(ctx: &Ctx<'_>, role: Role, msg: usize, style: ReadStyle) -> T
              payload is only ever returned from an accepted read.",
         );
     }
+    // A qualifying first message also carries the staged pair; point the
+    // synchronous styles at it.
+    if split_read_on(msg, line) {
+        let intro = intro_ident(msg);
+        doc.push_str(&format!(
+            "\n\nTo hold the trust decision **across event-loop turns** \
+             instead of inside this call — inspect the claimed identity, \
+             suspend, and pay the remaining DH only on acceptance — use \
+             [`{intro}`](Self::{intro})."
+        ));
+    }
 
+    let (args, stmts) = read_token_stmts(ctx, role, style, &line.tokens, false);
+
+    let (ret_ty, tail, ok_expr) =
+        recv_tail_arm(line, &(next_ty, next_expr), quote!(&message[cursor..]));
+
+    quote! {
+        #[doc = #doc]
+        pub fn #method(
+            mut self,
+            message: &[u8; #size]
+            #args
+        ) -> ::core::result::Result<#ret_ty, ::hiss::noise::HandshakeError> {
+            let cursor = 0usize;
+            #stmts
+            #tail
+            Ok(#ok_expr)
+        }
+    }
+}
+
+/// Per-token parameters and statements for a received message's token
+/// slice — the one engine-call sequence behind every read surface
+/// (one-shot, `_with`, and the staged pair, which splits this sequence
+/// across two methods rather than re-deriving it).
+///
+/// `expose_s` binds the revealed static as `remote_static` even in
+/// `Plain` style, for a caller that returns it (the staged intro read).
+/// Otherwise the revealed static is not bound: it stays observable via
+/// `remote_static()` on the next state (or on the `Transport`), and the
+/// binding is only consumed by a PSK-lookup or verification closure.
+fn read_token_stmts(
+    ctx: &Ctx<'_>,
+    role: Role,
+    style: ReadStyle,
+    tokens: &[(Tok, proc_macro2::Span)],
+    expose_s: bool,
+) -> (TokenStream, TokenStream) {
+    let support = quote!(::hiss::noise::support);
     let mut args = TokenStream::new();
     let mut stmts = TokenStream::new();
-    for (tok, _) in &line.tokens {
+    for (tok, _) in tokens {
         match tok {
             Tok::E => stmts.extend(quote! {
                 let (_remote_ephemeral, n) =
                     #support::recv_e(&mut self.inner, &message[cursor..])?;
                 let cursor = cursor + n;
             }),
-            // The revealed static is not returned: it stays observable via
-            // `remote_static()` on the next state (or on the `Transport`).
-            // The binding is only consumed by a PSK-lookup or verification
-            // closure.
             Tok::S if style == ReadStyle::Lookup => stmts.extend(quote! {
                 let (remote_static, n) =
                     #support::recv_s(&mut self.inner, &message[cursor..])?;
@@ -1121,6 +1278,11 @@ fn gen_read_method(ctx: &Ctx<'_>, role: Role, msg: usize, style: ReadStyle) -> T
                     verify(&remote_static)?;
                 });
             }
+            Tok::S if expose_s => stmts.extend(quote! {
+                let (remote_static, n) =
+                    #support::recv_s(&mut self.inner, &message[cursor..])?;
+                let cursor = cursor + n;
+            }),
             Tok::S => stmts.extend(quote! {
                 let (_remote_static, n) =
                     #support::recv_s(&mut self.inner, &message[cursor..])?;
@@ -1158,19 +1320,34 @@ fn gen_read_method(ctx: &Ctx<'_>, role: Role, msg: usize, style: ReadStyle) -> T
             }
         }
     }
+    (args, stmts)
+}
 
-    // A `[N]` payload is recovered from the tail into a caller-owned
-    // array, returned by value alongside the next state. On the error
-    // paths nothing authenticated was written: the cipher zeroes the
-    // output on a failed tag, and the array never leaves this frame.
-    let (ret_ty, tail, ok_expr) = match line.payload {
+/// A received message's tail — return type, recovery statements, success
+/// expression — parameterized over where the tail bytes come from:
+/// `&message[cursor..]` for the synchronous styles, the mid-state's
+/// owned array for the staged `complete`. One definition, so the two
+/// surfaces cannot drift.
+///
+/// A `[N]` payload is recovered into a caller-owned array, returned by
+/// value alongside the next state. On the error paths nothing
+/// authenticated was written: the cipher zeroes the output on a failed
+/// tag, and the array never leaves the generated frame.
+fn recv_tail_arm(
+    line: &Line,
+    next: &(TokenStream, TokenStream),
+    source: TokenStream,
+) -> (TokenStream, TokenStream, TokenStream) {
+    let support = quote!(::hiss::noise::support);
+    let (next_ty, next_expr) = next;
+    match line.payload {
         Some(payload) => {
             let n = payload.len;
             (
                 quote!(([u8; #n], #next_ty)),
                 quote! {
                     let mut payload = [0u8; #n];
-                    #support::recv_tail(&mut self.inner, &message[cursor..], &mut payload)?;
+                    #support::recv_tail(&mut self.inner, #source, &mut payload)?;
                 },
                 quote!((payload, #next_expr)),
             )
@@ -1178,23 +1355,211 @@ fn gen_read_method(ctx: &Ctx<'_>, role: Role, msg: usize, style: ReadStyle) -> T
         None => (
             quote!(#next_ty),
             quote! {
-                #support::recv_tail(&mut self.inner, &message[cursor..], &mut [])?;
+                #support::recv_tail(&mut self.inner, #source, &mut [])?;
             },
             quote!(#next_expr),
         ),
+    }
+}
+
+/// The staged read for a qualifying first message (see
+/// [`split_read_on`]): an `intro` method on the message's state that
+/// stops after the revealed static, the owned mid-state it suspends
+/// into, and the consuming `complete` that pays the rest.
+///
+/// The synchronous styles are untouched; this is their suspending
+/// sibling — the same [`read_token_stmts`] engine calls in the same
+/// order, with control returned to the caller at the identity boundary
+/// instead of a closure called inside the read. The mid-state is the one
+/// deliberate exception to "one state type per message per role": a
+/// suspension point *is* a state, and only qualifying patterns pay for
+/// it.
+fn gen_split_read(ctx: &Ctx<'_>, role: Role, msg: usize) -> TokenStream {
+    let line = &ctx.input.messages[msg];
+    let vis = &ctx.input.vis;
+    let name = ctx.name;
+    let state = ctx.state_ident(role, msg);
+    let mid = format_ident!("{}{}Msg{}Intro", ctx.name, role.name(), msg + 1);
+    let curve = ctx.curve;
+    let pubkey = ctx.pubkey_ty();
+    let inner_ty = ctx.inner_ty();
+    let size = ctx.size_path(msg);
+    let read_method = method_ident(false, msg);
+    let intro_method = intro_ident(msg);
+    let with_method = with_ident(msg);
+    let tail_const = format_ident!("MSG{}_INTRO_TAIL", msg + 1);
+    let next = next_state(ctx, role, msg);
+
+    // Split point: everything through the *last* `s` is intro's; the
+    // trailing DH token(s) and the tail are `complete`'s. Derived from
+    // the token list rather than assumed from the predicate's current
+    // shape, so widening `split_read_on` cannot desynchronise it.
+    let split = line
+        .tokens
+        .iter()
+        .rposition(|(t, _)| *t == Tok::S)
+        .expect("split_read_on guarantees an `s`")
+        + 1;
+    let prefix = &line.tokens[..split];
+    let (intro_args, intro_stmts) = read_token_stmts(ctx, role, ReadStyle::Plain, prefix, true);
+    let (_, complete_stmts) =
+        read_token_stmts(ctx, role, ReadStyle::Plain, &line.tokens[split..], false);
+
+    let intro_dhs = prefix
+        .iter()
+        .filter(|(t, _)| matches!(t, Tok::Ee | Tok::Es | Tok::Se | Tok::Ss))
+        .count();
+    let dh_ops = if intro_dhs == 1 {
+        "1 DH operation".to_string()
+    } else {
+        format!("{intro_dhs} DH operations")
     };
 
+    let mut intro_doc = format!(
+        "Begin reading handshake message 1 (`{}`) in two stages — the \
+         suspending sibling of [`{with_method}`](Self::{with_method}): \
+         instead of a closure deciding inside the read, the read stops at \
+         the revealed identity and hands control back. Token by token, \
+         this call performs:\n",
+        line.render(),
+    );
+    for (tok, _) in prefix {
+        if *tok == Tok::S {
+            intro_doc.push_str(
+                "\n* `s` — reads (and decrypts) the peer's **claimed** \
+                 static public key: returned by value, and observable on \
+                 the mid-state via `claimed_static()`",
+            );
+        } else {
+            intro_doc.push_str(&format!("\n* {}", token_bullet(*tok, false)));
+        }
+    }
+    intro_doc.push_str(&format!(
+        "\n\nThat is exactly {dh_ops}; the proving `ss` and the message's \
+         tail wait in the returned [`{mid}`]. Nothing of `message` is \
+         borrowed — the un-read tail is copied into the mid-state, so it \
+         is a plain owned value to park across event-loop turns while the \
+         identity is judged. Continue with [`complete`]({mid}::complete), \
+         or drop the mid-state to reject the peer: rejection costs only \
+         the DH work above.\n\nAt this point the identity is **claimed, \
+         not yet proven** — ownership of the key is only established by \
+         the tokens `complete()` pays — so rejecting is always safe, but \
+         nothing may treat the key as authenticated until `complete()` \
+         succeeds."
+    ));
+
+    let mid_doc = format!(
+        "**{name}** {} — suspended inside message 1 (`{}`), after its \
+         revealed `s` and before the rest: created by \
+         [`{intro_method}`]({state}::{intro_method}), finished by \
+         [`complete`](Self::complete).\n\nThe peer's **claimed** static is \
+         revealed ([`claimed_static`](Self::claimed_static)); the proving \
+         `ss` and the message's tail are unpaid. A self-contained owned \
+         value: the handshake state plus the message's remaining \
+         [`{name}::{tail_const}`] bytes — no borrow of the input buffer, \
+         and no bytes re-supplied at `complete()`. Park it and decide at \
+         leisure; dropping it abandons the handshake with no further \
+         work. Key material is scrubbed on drop by the handshake state's \
+         own `Drop` implementations — this type holds none outside types \
+         that already scrub themselves.",
+        role.name().to_lowercase(),
+        line.render(),
+    );
+
+    let claimed_doc = "The peer's **claimed** static public key, as revealed by \
+         message 1's `s` token — decrypted, but not yet proven: ownership \
+         of the key is only established when [`complete`](Self::complete) \
+         succeeds. Judge it against your trust store; side effects must \
+         not treat it as authenticated.";
+
+    let (ret_ty, tail_stmts, ok_expr) = recv_tail_arm(line, &next, quote!(&self.tail));
+    let payload_sentence = match line.payload {
+        Some(payload) => format!(
+            "decrypts the {}-byte payload and verifies the message's tag",
+            payload.len
+        ),
+        None => "verifies the message's authentication tag".to_string(),
+    };
+
+    // `claimed_static` sits on its own `CryptoKeyProvider` impl — the
+    // same bound split `gen_key_accessors` uses for every state's
+    // accessors — even though only a `DhProvider` entry point can ever
+    // construct the mid-state: accessors never need DH, and the
+    // convention stays uniform across the generated surface.
+
+    let complete_doc = format!(
+        "Finish reading message 1: pays the remaining `ss` DH, then \
+         {payload_sentence}.\n\nOn success this returns exactly what the \
+         one-shot [`{read_method}`]({state}::{read_method}) would have — \
+         transcript byte-identical, so the handshake proceeds as if the \
+         read had never been suspended. On failure it returns the error \
+         and yields **neither** payload nor state: `complete` consumes \
+         the mid-state, so a failed read cannot be retried."
+    );
+
     quote! {
-        #[doc = #doc]
-        pub fn #method(
-            mut self,
-            message: &[u8; #size]
-            #args
-        ) -> ::core::result::Result<#ret_ty, ::hiss::noise::HandshakeError> {
-            let cursor = 0usize;
-            #stmts
-            #tail
-            Ok(#ok_expr)
+        impl<CP> #state<CP>
+        where
+            CP: ::hiss::provider::DhProvider<#curve>,
+        {
+            #[doc = #intro_doc]
+            pub fn #intro_method(
+                mut self,
+                message: &[u8; #size]
+                #intro_args
+            ) -> ::core::result::Result<(#pubkey, #mid<CP>), ::hiss::noise::HandshakeError>
+            {
+                let cursor = 0usize;
+                #intro_stmts
+                debug_assert_eq!(
+                    cursor + #name::#tail_const,
+                    #size,
+                    "message size bookkeeping"
+                );
+                let mut tail = [0u8; #name::#tail_const];
+                tail.copy_from_slice(&message[cursor..]);
+                Ok((remote_static, #mid { inner: self.inner, tail }))
+            }
+        }
+
+        // The staged pair is opt-in surface: a consumer that never
+        // suspends leaves the mid-state unconstructed, and generated
+        // code must not warn for an API choice.
+        #[allow(dead_code)]
+        #[doc = #mid_doc]
+        #[must_use = "dropping this abandons the handshake; call `complete()` to finish reading message 1"]
+        #vis struct #mid<CP>
+        where
+            CP: ::hiss::provider::CryptoKeyProvider<#curve>,
+        {
+            inner: #inner_ty,
+            tail: [u8; #name::#tail_const],
+        }
+
+        impl<CP> #mid<CP>
+        where
+            CP: ::hiss::provider::CryptoKeyProvider<#curve>,
+        {
+            #[doc = #claimed_doc]
+            pub fn claimed_static(&self) -> &#pubkey {
+                ::hiss::noise::support::remote_static(&self.inner)
+                    .expect("set by this message's `s` token; guaranteed by the state machine")
+            }
+        }
+
+        impl<CP> #mid<CP>
+        where
+            CP: ::hiss::provider::DhProvider<#curve>,
+        {
+            #[doc = #complete_doc]
+            pub fn complete(
+                mut self
+            ) -> ::core::result::Result<#ret_ty, ::hiss::noise::HandshakeError>
+            {
+                #complete_stmts
+                #tail_stmts
+                Ok(#ok_expr)
+            }
         }
     }
 }
@@ -1271,7 +1636,7 @@ fn doctest_suite_path(path: &Path) -> Option<String> {
 /// the walkthrough's placeholders — `provider`, `prologue`, the peer's
 /// message bytes — at their real types. Nothing runs; what is checked is
 /// that this call sequence is the API the macro actually generates.
-fn usage_doctest(ctx: &Ctx<'_>, role: Role) -> Option<String> {
+fn usage_doctest(ctx: &Ctx<'_>, role: Role, staged: bool) -> Option<String> {
     let curve = doctest_suite_path(ctx.curve)?;
     let cipher = doctest_suite_path(ctx.cipher)?;
     let hash = doctest_suite_path(ctx.hash)?;
@@ -1358,12 +1723,12 @@ fn usage_doctest(ctx: &Ctx<'_>, role: Role) -> Option<String> {
     out.push_str(&format!(
         "# where\n#     CP: ::hiss::provider::DhProvider<{curve}>,\n# {{\n"
     ));
-    out.push_str(&usage_snippet(ctx, role));
+    out.push_str(&usage_snippet(ctx, role, staged));
     out.push_str("# Ok(())\n# }\n");
     Some(out)
 }
 
-fn usage_snippet(ctx: &Ctx<'_>, role: Role) -> String {
+fn usage_snippet(ctx: &Ctx<'_>, role: Role, staged: bool) -> String {
     let name = ctx.name;
     let params = premessage_params(ctx, role);
     let fallible = params.iter().any(|(local, _)| *local);
@@ -1405,6 +1770,31 @@ fn usage_snippet(ctx: &Ctx<'_>, role: Role) -> String {
                 i + 1,
                 line.render(),
             ));
+        } else if staged && split_read_on(i, line) {
+            // The staged read: intro, the trust decision in the open, then
+            // complete. A pre-`s` psk rides intro; the payload arrives at
+            // complete. `accept_peer` plays the decision the reader would
+            // otherwise make inside the `_with` closure.
+            let mut args = format!("&msg{}", i + 1);
+            if has_tok(line, Tok::Psk) {
+                args.push_str(", &psk");
+            }
+            let binding = if line.payload.is_some() {
+                format!("(payload{}, {state})", i + 1)
+            } else {
+                state.to_string()
+            };
+            out.push_str(
+                "// The claimed identity arrives with the proving DH still unpaid —\n\
+                 // hold `mid` across turns while deciding; dropping it rejects.\n",
+            );
+            out.push_str(&format!(
+                "let (claimed, mid) = hs.read_message_{}_intro({args})?; // {}\n",
+                i + 1,
+                line.render(),
+            ));
+            out.push_str("accept_peer(&claimed)?;\n");
+            out.push_str(&format!("let {binding} = mid.complete()?;\n"));
         } else {
             // A read that reveals the peer's static is shown in its
             // `_with` form. Completing a Noise pattern proves the peer
