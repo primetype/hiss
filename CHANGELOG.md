@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-08-14
+
 ### Added
 
 - **The staged msg1 read: `read_message_1_intro` → mid-state → `complete()`.**
@@ -75,6 +77,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   authoritative fixed key (RFC 7748 §6.1/§6.2, RFC 8032 §7.1, RFC 6979
   A.2.5) — so a refactor that changes the encoding trips a test instead of
   silently re-keying a downstream MAC.
+
+### Fixed
+
+- **`SymmetricState` now zeroes `h` on drop, as its comment always promised.**
+  The `Drop` impl's comment declared the handshake hash zeroed "for defence in
+  depth", but the code only zeroed `ck` — the cipher keys already self-scrub.
+  `h` is not secret (it is the public transcript hash), so nothing was
+  exposed; the code merely did less than it said. It now does what it says.
+
+## [0.3.1] - 2026-08-13
+
+No library changes. README corrections for the crates.io page, and additional
+third-party test coverage pinning every `pskN` placement against the
+cacophony vectors.
+
+## [0.3.0] - 2026-08-13
+
+### Added
 
 - **`hiss::noise::Sha256`**, a second `Hash` implementation — `NAME = "SHA256"`,
   HASHLEN 32 — so a `noise!` declaration can name it and speak
@@ -173,12 +193,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   walkthroughs are type-checked on a curve other than `X25519`.
 
 ### Fixed
-
-- **`SymmetricState` now zeroes `h` on drop, as its comment always promised.**
-  The `Drop` impl's comment declared the handshake hash zeroed "for defence in
-  depth", but the code only zeroed `ck` — the cipher keys already self-scrub.
-  `h` is not secret (it is the public transcript hash), so nothing was
-  exposed; the code merely did less than it said. It now does what it says.
 
 - **`SECURITY.md`'s payload-security table understated three shipped patterns.**
   These are corrections to documentation of behaviour that has always been this
