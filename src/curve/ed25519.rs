@@ -299,6 +299,32 @@ mod tests {
         assert!(pk.verify(sig, msg));
     }
 
+    /// The canonical public-key encoding (`as_ref()`) is wire-relevant:
+    /// downstream protocols key MACs over these octets and compare them
+    /// for tie-breaks. Pin it — 32 bytes, the RFC 8032 §7.1 TEST 1 public
+    /// key, byte for byte — so an encoding refactor trips here instead of
+    /// silently re-keying a downstream MAC.
+    #[test]
+    fn public_key_canonical_encoding_pinned() {
+        let seed: [u8; 32] =
+            hex::decode("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60")
+                .unwrap()
+                .try_into()
+                .unwrap();
+        let expected =
+            hex::decode("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a")
+                .unwrap();
+
+        let pk = SoftwareEd25519PrivateKey::from_seed(seed).public_key();
+        assert_eq!(Ed25519::PUBLIC_KEY_SIZE, 32);
+        assert_eq!(pk.as_ref().len(), 32);
+        assert_eq!(pk.as_ref(), &expected[..]);
+
+        // The canonical bytes reparse to the same encoding.
+        let reparsed = Ed25519PublicKey::from_bytes(pk.as_ref()).unwrap();
+        assert_eq!(reparsed.as_ref(), pk.as_ref());
+    }
+
     #[test]
     fn deterministic_signatures() {
         let sk = SoftwareEd25519PrivateKey::generate(rand::rng());

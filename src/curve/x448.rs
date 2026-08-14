@@ -261,6 +261,28 @@ mod tests {
         assert_eq!(ss_ba.as_bytes(), &shared);
     }
 
+    /// The canonical public-key encoding (`as_ref()`) is wire-relevant:
+    /// downstream protocols key MACs over these octets and compare them
+    /// for tie-breaks. Pin it — 56 bytes, the raw RFC 7748 u-coordinate,
+    /// byte for byte — so an encoding refactor trips here instead of
+    /// silently re-keying a downstream MAC.
+    #[test]
+    fn public_key_canonical_encoding_pinned() {
+        let sk = h56("9a8f4925d1519f5775cf46b04b5800d4ee9ee8bae8bc5565d498c28d\
+             d9c9baf574a9419744897391006382a6f127ab1d9ac2d8c0a598726b");
+        let expected = h56("9b08f7cc31b7e3e67d22d5aea121074a273bd2b83de09c63faa73d2c\
+             22c5d9bbc836647241d953d40c5b12da88120d53177f80e532c41fa0");
+
+        let pk = SoftwareX448PrivateKey::from_bytes(sk).public_key();
+        assert_eq!(X448::PUBLIC_KEY_SIZE, 56);
+        assert_eq!(pk.as_ref().len(), 56);
+        assert_eq!(pk.as_ref(), &expected[..]);
+
+        // The canonical bytes reparse to the same encoding.
+        let reparsed = X448PublicKey::from_bytes(pk.as_ref()).unwrap();
+        assert_eq!(reparsed.as_ref(), pk.as_ref());
+    }
+
     /// RFC 7748 §5.2 — the authoritative single-iteration scalar/u-coordinate
     /// known-answer test (a non-base u-coordinate, exercising the ladder
     /// directly rather than only the base point).

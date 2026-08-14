@@ -711,6 +711,39 @@ mod tests {
         }
     }
 
+    /// The canonical public-key encoding (`as_ref()`) is wire-relevant:
+    /// downstream protocols key MACs over these octets and compare them
+    /// for tie-breaks. Pin it — 65 bytes, the uncompressed SEC1 tag, the
+    /// RFC 6979 A.2.5 coordinates byte for byte, and the compressed-input
+    /// normalisation — so an encoding refactor trips here instead of
+    /// silently re-keying a downstream MAC.
+    #[test]
+    fn public_key_canonical_encoding_pinned() {
+        let x = hex32("C9AFA9D845BA75166B5C215767B1D6934E50C3DB36E89B127B8A622B120F6721");
+        let pk = P256r1PrivateKey::from_bytes(x).unwrap().public();
+        let enc = pk.as_ref();
+
+        assert_eq!(P256::PUBLIC_KEY_SIZE, 65);
+        assert_eq!(enc.len(), 65);
+        assert_eq!(enc[0], 0x04, "uncompressed SEC1 tag");
+        assert_eq!(
+            hex::encode_upper(&enc[1..33]),
+            "60FED4BA255A9D31C961EB74C6356D68C049B8923B61FA6CE669622E60F29FB6"
+        );
+        assert_eq!(
+            hex::encode_upper(&enc[33..65]),
+            "7903FE1008B8BC99A41AE9E95628BC64F2F1B20C2D7E9F5177A3C294D4462299"
+        );
+
+        // A compressed encoding of the same point normalises to the same
+        // 65 canonical bytes.
+        let mut compressed = [0u8; 33];
+        compressed[0] = 0x02 | (enc[64] & 1);
+        compressed[1..].copy_from_slice(&enc[1..33]);
+        let reparsed = P256r1PublicKey::from_bytes(&compressed).unwrap();
+        assert_eq!(reparsed.as_ref(), enc);
+    }
+
     /// Public key and signature generated on iPhone 12 Pro, iOS 16,
     /// Secure Enclave using `.ecdsaSignatureMessageX962SHA256`.
     const PKSTR: &str =

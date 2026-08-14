@@ -23,6 +23,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   itself refuses with `NonceOverflow`. Read-only: the counter stays owned by
   `hiss`, and nothing lets a caller choose it.
 
+- **Per-curve canonical-encoding pins.** Every shipped public-key type already
+  exposes its canonical encoding through `AsRef<[u8]>` — P-256's 65-byte
+  uncompressed SEC1 form (any accepted input, compressed included, normalises
+  to it at construction), the raw 32/56-byte u-coordinates for X25519/X448,
+  and the 32-byte RFC 8032 form for Ed25519. Those octets are wire-relevant
+  the moment a downstream protocol keys a MAC over them or compares them for
+  tie-breaks, so each curve now carries a test pinning the encoding —
+  length, P-256's leading `0x04` tag, and the exact bytes for an
+  authoritative fixed key (RFC 7748 §6.1/§6.2, RFC 8032 §7.1, RFC 6979
+  A.2.5) — so a refactor that changes the encoding trips a test instead of
+  silently re-keying a downstream MAC.
+
 - **`hiss::noise::Sha256`**, a second `Hash` implementation — `NAME = "SHA256"`,
   HASHLEN 32 — so a `noise!` declaration can name it and speak
   `Noise_<pattern>_<curve>_ChaChaPoly_SHA256`. Purely additive: no existing
