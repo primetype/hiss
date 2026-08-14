@@ -1892,6 +1892,44 @@ mod tests {
         assert_eq!(ct2, [0xABu8; 64]);
     }
 
+    /// `next_counter` promises the counter of the next successful seal: it
+    /// agrees with what `encrypt_next` then returns across many seals, is
+    /// left unchanged by a failed (oversize) seal, and still reads
+    /// `u64::MAX` at exhaustion — where the seal itself refuses.
+    #[test]
+    fn datagram_next_counter_matches_next_seal() {
+        let (i_transport, _) = ikpsk1_transport_pair();
+        let (mut i_send, _) = i_transport.into_datagram();
+
+        // The promise holds seal after seal.
+        let mut ct = [0u8; 256];
+        for _ in 0..8 {
+            let promised = i_send.next_counter();
+            let (counter, _) = i_send.encrypt_next(&[], b"payload", &mut ct).unwrap();
+            assert_eq!(counter, promised);
+        }
+
+        // A failed seal advances nothing: a payload whose on-wire message
+        // would exceed the Noise length cap errors, and the promise is
+        // unchanged.
+        let before = i_send.next_counter();
+        let oversize = vec![0u8; 65535];
+        let mut big_out = vec![0u8; 65535 + 64];
+        let err = i_send
+            .encrypt_next(&[], &oversize, &mut big_out)
+            .unwrap_err();
+        assert!(matches!(err, error::HandshakeError::MessageTooLong { .. }));
+        assert_eq!(i_send.next_counter(), before);
+
+        // At exhaustion the accessor reads u64::MAX — the counter that will
+        // never be used — while the seal itself refuses.
+        i_send.set_counter_for_test(u64::MAX);
+        assert_eq!(i_send.next_counter(), u64::MAX);
+        let err = i_send.encrypt_next(&[], b"x", &mut ct).unwrap_err();
+        assert!(matches!(err, error::HandshakeError::NonceOverflow));
+        assert_eq!(i_send.next_counter(), u64::MAX);
+    }
+
     /// A datagram half and a stream half from the *same* handshake transcript
     /// interoperate for the in-order counter sequence 0, 1, 2, …: the
     /// explicit-nonce datagram path computes exactly the bytes the implicit-
@@ -2081,6 +2119,24 @@ mod tests {
             let n = rb.decrypt_at(i, &[], &sealed[i as usize], &mut pt).unwrap();
             assert_eq!(&pt[..n], format!("m{i}").as_bytes());
         }
+    }
+
+    /// `next_counter` is oblivious to the epoch ratchet: across the epoch
+    /// boundary the promise still names exactly the counter each successful
+    /// seal returns — the ratchet changes the key, never the counter.
+    #[test]
+    fn datagram_next_counter_spans_epoch_boundary() {
+        let size = epoch(4);
+        let (mut send, _) = fixed_epoch_transport().into_datagram_with_epoch(size);
+
+        // Counters 0..=5 cross the N = 4 boundary into epoch 1.
+        let mut ct = [0u8; 64];
+        for i in 0..6u64 {
+            assert_eq!(send.next_counter(), i);
+            let (c, _) = send.encrypt_next(&[], b"m", &mut ct).unwrap();
+            assert_eq!(c, i);
+        }
+        assert_eq!(send.next_counter(), 6);
     }
 
     /// A datagram from two epochs back — older than the retained previous

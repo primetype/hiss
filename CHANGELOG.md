@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`DatagramSend::next_counter()`** — a `&self` accessor for the counter the
+  next **successful** `encrypt_next` will seal under (the current cipher-state
+  `n`). Until now that counter was only learnable from `encrypt_next`'s return
+  value, which is one seal too late for a protocol whose cleartext header
+  carries the counter *and* is the seal's associated data: the header must be
+  built first, so downstream code was forced to mirror hiss-owned state and
+  assert it back into agreement. The accessor's guarantees are documented and
+  pinned by tests: it equals the counter the following successful seal
+  returns — across many seals and across an epoch-ratchet boundary (the
+  ratchet changes the key, never the counter) — a failed seal leaves it
+  unchanged, and at `u64::MAX` it still reads `u64::MAX` while the seal
+  itself refuses with `NonceOverflow`. Read-only: the counter stays owned by
+  `hiss`, and nothing lets a caller choose it.
+
 - **`hiss::noise::Sha256`**, a second `Hash` implementation — `NAME = "SHA256"`,
   HASHLEN 32 — so a `noise!` declaration can name it and speak
   `Noise_<pattern>_<curve>_ChaChaPoly_SHA256`. Purely additive: no existing

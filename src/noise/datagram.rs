@@ -226,6 +226,25 @@ impl<Proto: Protocol> DatagramSend<Proto> {
         self.cipher.encrypt_next_with_ad(ad, plaintext, output)
     }
 
+    /// The counter the next **successful** [`encrypt_next`](Self::encrypt_next)
+    /// will seal under — the current cipher-state `n`. Read-only: the
+    /// counter stays owned by `hiss`, and only a successful seal advances
+    /// it.
+    ///
+    /// This is what lets a packet header that carries the counter — and is
+    /// then fed back in as the seal's associated data — be constructed
+    /// *before* the seal, without mirroring hiss-owned state. The value
+    /// returned equals the `counter` the next successful `encrypt_next`
+    /// returns. A failed seal leaves it unchanged (on any `encrypt_next`
+    /// error the counter does not advance, so the promise stands until a
+    /// seal succeeds). At `u64::MAX` the accessor still returns `u64::MAX`
+    /// — the counter that will never be used: the next seal fails with
+    /// [`NonceOverflow`](HandshakeError::NonceOverflow) rather than reuse
+    /// it.
+    pub fn next_counter(&self) -> u64 {
+        self.cipher.nonce()
+    }
+
     /// The session identifier — the same value on both halves and on the
     /// peer.
     pub fn session_id(&self) -> &SessionId {
