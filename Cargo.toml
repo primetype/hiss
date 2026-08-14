@@ -6,7 +6,7 @@ exclude = ["site", "hiss-interop", "hiss-aesgcm-lab"]
 
 [package]
 name = "hiss"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2024"
 # MSRV policy: pinned to a recent stable release, floored at `stable - 3` —
 # i.e. bump only once it falls more than three releases behind current
