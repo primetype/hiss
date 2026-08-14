@@ -107,6 +107,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`SymmetricState` now zeroes `h` on drop, as its comment always promised.**
+  The `Drop` impl's comment declared the handshake hash zeroed "for defence in
+  depth", but the code only zeroed `ck` — the cipher keys already self-scrub.
+  `h` is not secret (it is the public transcript hash), so nothing was
+  exposed; the code merely did less than it said. It now does what it says.
+
 - **`SECURITY.md`'s payload-security table understated three shipped patterns.**
   These are corrections to documentation of behaviour that has always been this
   way — the defects predate this release and did not arrive with the new

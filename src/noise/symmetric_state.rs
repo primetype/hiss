@@ -204,5 +204,6 @@ impl<Ci: Cipher, H: Hash> Drop for SymmetricState<Ci, H> {
         zeroize_bytes(&mut self.ck);
         // h is the handshake hash — not secret, but zero it anyway
         // for defence in depth. CipherState handles its own key.
+        zeroize_bytes(&mut self.h);
     }
 }
