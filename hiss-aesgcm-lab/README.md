@@ -107,21 +107,23 @@ shared runner are not meaningful, but a bench that stops compiling is a real
 break.
 
 **Read the numbers with the host in hand.** Per the backend section below,
-the hiss/AESGCM arm measures hardware AES *block* + portable GHASH on a Mac
-and all-portable on CI's x86 runner; the snow arm is RustCrypto's hardware
-path on both. Never compare a figure from one host against a figure from the
-other.
+the hiss/AESGCM arm measures hardware AES *block* + hardware PMULL GHASH on
+a Mac and all-portable on CI's x86 runner; the snow arm is RustCrypto's
+hardware path on both. Never compare a figure from one host against a figure
+from the other.
 
 Measured on `aarch64-apple-darwin` (M-series), 1 KiB messages, with the
-`.cargo/config.toml` cfgs in place (snow arm on RustCrypto's hardware paths):
+`.cargo/config.toml` cfgs in place (snow arm on RustCrypto's hardware paths),
+against cryptoxide master `00b97d99`:
 
 | Group | hiss/AESGCM | snow/AESGCM | hiss/ChaChaPoly |
 |---|---|---|---|
-| `transport_1KiB` (round trip) | 11.10 µs | **1.31 µs** | 2.01 µs |
-| `transport_1KiB_encrypt` | 5.78 µs | 0.65 µs | 1.00 µs |
-| `transport_1KiB_decrypt` | 5.79 µs | 0.71 µs | 1.03 µs |
+| `transport_1KiB` (round trip) | **0.98 µs** | 1.27 µs | 2.08 µs |
+| `transport_1KiB_encrypt` | **0.50 µs** | 0.64 µs | 0.98 µs |
+| `transport_1KiB_decrypt` | **0.58 µs** | 0.77 µs | 1.04 µs |
 
-Three things those numbers say — the first is a correction:
+Four things those numbers say — the first two are the history, kept so the
+superseded figures cannot be quoted without their correction:
 
 - **This lab's first committed measurement got the headline wrong.** It ran
   before `.cargo/config.toml` existed, so the snow arm was RustCrypto's
@@ -129,33 +131,50 @@ Three things those numbers say — the first is a correction:
   "cryptoxide and RustCrypto land within ~3%; the gap to ChaChaPoly is the
   state of both pure-Rust stacks on Apple Silicon". Wrong on both counts:
   RustCrypto's hardware path is ~8.5× faster than what was measured, and
-  **hardware AES-GCM beats ChaChaPoly** (1.31 µs vs 2.01 µs round trip) — as
-  it should on silicon with AES and PMULL. The software-vs-software numbers
-  remain in git history; this paragraph is kept so they cannot be quoted
-  without their correction.
-- **The real gap is cryptoxide's GHASH, nothing else.** cryptoxide's
-  hardware path covers the AES block function only; its GHASH is portable
-  GF(2^128) arithmetic on every target, and that is essentially the whole
-  11 µs — the 64 hardware AES block calls of a 1 KiB message are noise
-  beside it. This is the lab's most concrete piece of upstream feedback: a
-  PMULL/CLMUL GHASH in cryptoxide's `aes_gcm` closes roughly all of the ~8×
-  to RustCrypto.
-- **It is not the per-message key schedule.** hiss's `Cipher` trait takes
-  the key per call, so `AesGcm256::new` re-expands on every message — the
-  obvious suspect. Measured directly: **≈110 ns**, about **2%** of the
-  total. Hoisting it would buy almost nothing. (Worth recording because the
-  design note that predicted this cost flagged it as a question for the exit
-  review; the answer is that it is negligible.)
+  **hardware AES-GCM beats ChaChaPoly** — as it should on silicon with AES
+  and PMULL.
+- **The second measurement diagnosed the gap correctly, and upstream fixed
+  it.** At rev `62056f46` the hiss/AESGCM arm was 11.10/5.78/5.79 µs, and
+  this README concluded: "the real gap is cryptoxide's GHASH, nothing else
+  … a PMULL/CLMUL GHASH in cryptoxide's `aes_gcm` closes roughly all of the
+  ~8× to RustCrypto." cryptoxide `9cb5ee9` (2026-08-14) landed exactly that
+  — a `pmull`/`pmull2` GHASH in `src/aes_gcm/ghash/aarch64.rs`, behind the
+  same `all(target_arch = "aarch64", target_feature = "aes")` gate as the
+  AES block path. The rev bump to `00b97d99` is that change and nothing
+  else of substance; the public API is unchanged, and all 328 tests pass on
+  both feature legs.
+- **The prediction was right, and it undershot.** Measured: **−91%** on
+  every hiss/AESGCM arm (round trip 11.115 → 0.984 µs, ~11.3×). The GHASH
+  was not merely most of the gap to RustCrypto, it was more than the whole
+  of it: cryptoxide is now **~23% faster than RustCrypto** on round trip
+  where it was 8.4× slower, and **2.1× faster than ChaChaPoly**. The two
+  arms that did not change moved −3.8%/+8.7%/+4.1% on identical code in the
+  same run — that is this host's noise band, and it is what makes −91%
+  unambiguous.
+- **The per-message key schedule is now the thing to look at.** hiss's
+  `Cipher` trait takes the key per call, so `AesGcm256::new` re-expands on
+  every message. Its absolute cost did not change — re-measured at
+  **116 ns**, consistent with the ≈110 ns recorded before — but its *share*
+  did, because everything around it got 11× cheaper: it was **~2%** of an
+  encrypt and is now **~25%** (116 ns of a 471 ns raw 1 KiB seal). The
+  earlier verdict that hoisting it "would buy almost nothing" was true of
+  the portable-GHASH build and is **false now**. This does not block
+  anything — it is a note for the exit review, where the trait shape is the
+  lever.
 
-The ship-it advice this correction changes: AESGCM as an *option* rather
-than a default remains right for hiss **today**, but the reason is now
-precise — it is cryptoxide's current GHASH implementation, not the AEAD and
-not the platform. If upstream lands a carry-less-multiply GHASH before the
-release, re-measure; the default question reopens.
+The ship-it advice this changes: the reason to keep AESGCM an *option*
+rather than a default was cryptoxide's GHASH, and that reason is gone on
+aarch64-with-`aes`. On this host AESGCM is now the fastest cipher hiss could
+offer. Two things must land before that becomes a decision: the portable
+path needs numbers (see below — `a7a9fee` restructured the reference backend
+too, and it is what x86-64 and non-Apple aarch64 get), and none of this has
+been *released* — master still reports 0.6.2, so the exit trigger has not
+fired.
 
 ### AES backends: what your machine actually tests
 
-cryptoxide picks its AES implementation at compile time:
+cryptoxide picks its AES implementation at compile time — and since
+`9cb5ee9`, its GHASH implementation behind the *same* cfg:
 
 ```rust
 #[cfg(all(target_arch = "aarch64", target_feature = "aes"))]  // hardware
@@ -163,9 +182,9 @@ cryptoxide picks its AES implementation at compile time:
 
 Measured, and it is narrower than it looks:
 
-| Target | `target_feature="aes"` | cryptoxide path |
+| Target | `target_feature="aes"` | cryptoxide AES + GHASH path |
 |---|---|---|
-| `aarch64-apple-darwin` | **yes** | aarch64 hardware intrinsics |
+| `aarch64-apple-darwin` | **yes** | aarch64 hardware intrinsics (AES + `pmull`) |
 | `x86_64-unknown-linux-gnu` | no | portable reference |
 | `aarch64-unknown-linux-gnu` | no | portable reference |
 
@@ -187,10 +206,16 @@ always RustCrypto at its best. (An ordinary snow consumer on Apple Silicon
 who does not know about the flags gets the software path — worth
 remembering when reading snow numbers published by anyone.)
 
-One asymmetry survives every flag: **cryptoxide's GHASH is portable
-software on every target.** Its hardware story covers the AES block
-function only, and at transport sizes GHASH is where the time goes — see
-the results above.
+The asymmetry that used to survive every flag — **cryptoxide's GHASH is
+portable software on every target** — is gone as of `9cb5ee9`, but only
+where the cfg above is satisfied. So the split now cuts the other way, and
+it matters more than it did: on a Mac both stacks are hardware AES *and*
+hardware carry-less multiply, and cryptoxide wins; on CI's x86 leg
+cryptoxide is fully portable while RustCrypto still gets runtime-detected
+AES-NI and CLMUL, so expect that arm to look roughly like the old
+software-GHASH numbers. **x86-64 has no CLMUL GHASH in cryptoxide.** That
+is the natural next piece of upstream feedback, and the reason the ubuntu
+leg of the matrix is now the interesting one rather than a formality.
 
 **Do not try to reach the portable path locally with
 `RUSTFLAGS="-C target-feature=-aes"`.** It cannot work: `snow`'s default `std`
@@ -223,7 +248,7 @@ and is **not** touched by any of this — this crate carries its own copy.
 
 `Cargo.lock` records the rev hash, not the bytes. If `typed-io/cryptoxide` is
 deleted, made private, or force-pushed such that
-`62056f46e2a5001b11d505dce37d301cb8ec7e28` becomes unreachable, every fresh
+`00b97d991e589c937afa2b98aa0f19151e3ea697` becomes unreachable, every fresh
 clone of this crate fails to resolve.
 
 This is **accepted, not mitigated**. Nothing degrades quietly — it is a hard
@@ -258,6 +283,13 @@ which would defeat the rev pin).
    the previous message's plaintext."* Same guarantee, accurate mechanism.
    (`src/lib.rs` here already carries that wording, and
    `raw_cryptoxide_verifies_before_writing` pins the mechanism it describes.)
+
+   **Decide the key-schedule question here.** Moving the impl verbatim keeps
+   `AesGcm256::new` on every message, which the results above now measure at
+   ~25% of an encrypt (it was ~2% before the PMULL GHASH). Either accept that
+   and say so, or change `Cipher` so an expanded key can be hoisted — a trait
+   change that touches ChaChaPoly too, and so is a decision for the exit
+   review rather than something to discover afterwards.
 3. Add `"AesGcm"` to `HISS_SUITE_TYPES` (`hiss-macros/src/codegen.rs`) — **now
    correct**, because hiss finally exports it. Without this, every `noise!`
    naming `AesGcm` degrades to an uncompiled sketch and the downstream gate's

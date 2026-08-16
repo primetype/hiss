@@ -33,7 +33,7 @@ hiss = { path = "..", default-features = false }
 # The rev is the full 40-char form deliberately — a pin should be unambiguous —
 # and NOT `branch = "master"`, because the whole point is a frozen commit.
 # **Accepted risk:** the pin has no source escrow; see README.md.
-cryptoxide_git = { package = "cryptoxide", git = "https://github.com/typed-io/cryptoxide", rev = "62056f46e2a5001b11d505dce37d301cb8ec7e28", default-features = false, features = ["aes-gcm"] }
+cryptoxide_git = { package = "cryptoxide", git = "https://github.com/typed-io/cryptoxide", rev = "00b97d991e589c937afa2b98aa0f19151e3ea697", default-features = false, features = ["aes-gcm"] }
 
 [features]
 # Mirrors `hiss-interop/Cargo.toml`'s passthrough shape verbatim, and for the

@@ -342,7 +342,7 @@ checksum = "93f80e26fec88f5ae9450cd5f4e59f5c6421abafc919ea68a3edd521f9580c9b"
 [[package]]
 name = "cryptoxide"
 version = "0.6.2"
-source = "git+https://github.com/typed-io/cryptoxide?rev=62056f46e2a5001b11d505dce37d301cb8ec7e28#62056f46e2a5001b11d505dce37d301cb8ec7e28"
+source = "git+https://github.com/typed-io/cryptoxide?rev=00b97d991e589c937afa2b98aa0f19151e3ea697#00b97d991e589c937afa2b98aa0f19151e3ea697"
 
 [[package]]
 name = "ctr"
@@ -511,7 +511,7 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "hiss"
-version = "0.2.0"
+version = "0.3.2"
 dependencies = [
  "core-foundation",
  "cryptoxide 0.6.2 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -530,7 +530,7 @@ name = "hiss-aesgcm-lab"
 version = "0.1.0"
 dependencies = [
  "criterion",
- "cryptoxide 0.6.2 (git+https://github.com/typed-io/cryptoxide?rev=62056f46e2a5001b11d505dce37d301cb8ec7e28)",
+ "cryptoxide 0.6.2 (git+https://github.com/typed-io/cryptoxide?rev=00b97d991e589c937afa2b98aa0f19151e3ea697)",
  "hex",
  "hiss",
  "rand",
@@ -541,7 +541,7 @@ dependencies = [
 
 [[package]]
 name = "hiss-macros"
-version = "0.2.0"
+version = "0.3.1"
 dependencies = [
  "proc-macro2",
  "quote",
