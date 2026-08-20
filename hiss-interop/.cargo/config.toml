@@ -1,0 +1,24 @@
+# Make the snow AESGCM arms of the comparison bench compete at RustCrypto's
+# best.
+#
+# In the versions snow resolves, RustCrypto's aarch64 hardware paths are
+# OPT-IN: `aes` 0.8.x gates its ARMv8 AES intrinsics behind `--cfg aes_armv8`
+# and `polyval` 0.6.x gates PMULL behind `--cfg polyval_armv8`. Neither is on
+# by default, so a plain build — an ordinary snow consumer's — runs
+# RustCrypto's *software* AES and POLYVAL on Apple Silicon. (x86-64 is
+# different: AES-NI and CLMUL are runtime-detected there, no flag needed.)
+#
+# The comparison bench exists to judge hiss's ciphers against the strongest
+# available reference, so these cfgs pin the snow arms to RustCrypto's
+# hardware path on aarch64. Measured effect on `transport_1KiB` snow/AESGCM
+# (M-series): 11.1 µs → 1.3 µs. The flags are inert for every other crate in
+# the graph — including hiss, cryptoxide, `ring` and the ChaChaPoly arms —
+# because they are plain `--cfg`s, consumed only by `aes`/`polyval`'s own
+# `cfg(...)` gates. (Contrast `-C target-feature=-aes`, which breaks `ring`'s
+# const-eval on aarch64-apple-darwin and must not be used here.)
+#
+# Gotcha: a RUSTFLAGS environment variable OVERRIDES config-file rustflags
+# entirely. If you set RUSTFLAGS for any reason, the snow AESGCM arms
+# silently degrade to the software path — re-add these two cfgs to your value.
+[target.'cfg(target_arch = "aarch64")']
+rustflags = ["--cfg", "aes_armv8", "--cfg", "polyval_armv8"]

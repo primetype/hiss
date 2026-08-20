@@ -1,8 +1,8 @@
 [workspace]
 members = ["hiss-macros"]
-# The one-page site, the snow interop suite and the AES-GCM validation lab
-# are each their own independent crate/workspace.
-exclude = ["site", "hiss-interop", "hiss-aesgcm-lab"]
+# The one-page site and the snow interop suite are each their own
+# independent crate/workspace.
+exclude = ["site", "hiss-interop"]
 
 [package]
 name = "hiss"
@@ -23,18 +23,15 @@ homepage = "https://primetype.co.uk/hiss/"
 documentation = "https://docs.rs/hiss"
 keywords = ["noise", "handshake", "secure-enclave", "x25519", "keychain"]
 categories = ["cryptography", "network-programming"]
-# `site/` (the one-page site), `hiss-interop/` (the `snow` comparison suite)
-# and `hiss-aesgcm-lab/` (the AES-GCM validation lab) are separate,
-# non-published crates that depend on this one by path (`site` only as a
-# dev-dependency of its fixture-pinning test); `hiss-macros` is published
-# separately. Keep all four out of the packaged crate. NOTE:
-# `hiss-aesgcm-lab/` carries a **git** dependency; it must never appear in
-# this manifest's `[dependencies]` or in a root `[patch]`, or hiss stops
-# being publishable. The second row is repo infrastructure that means nothing
-# outside the repository; tests/ (vectors included) ships on purpose, so the
-# KAT and Wycheproof gates run against the exact published bytes.
+# `site/` (the one-page site) and `hiss-interop/` (the `snow` comparison
+# suite) are separate, non-published crates that depend on this one by path
+# (`site` only as a dev-dependency of its fixture-pinning test);
+# `hiss-macros` is published separately. Keep all three out of the packaged
+# crate. The second row is repo infrastructure that means nothing outside
+# the repository; tests/ (vectors included) ships on purpose, so the KAT and
+# Wycheproof gates run against the exact published bytes.
 exclude = [
-    "/site", "/hiss-macros", "/hiss-interop", "/hiss-aesgcm-lab",
+    "/site", "/hiss-macros", "/hiss-interop",
     "/.github", "/scripts", "/CLAUDE.md", "/TODO.md", "/deny.toml", "/.gitignore",
 ]
 
@@ -58,17 +55,19 @@ targets = ["aarch64-apple-darwin"]
 [dependencies]
 # Written as an explicit range, both ends deliberate.
 #
-# Lower bound — 0.6.0 is where the API this crate uses arrived, and the
-# reason this is no longer `>=0.5.1, <0.6`. 0.6.0 deleted `src/mac.rs` and
-# the generic `Hmac<D: Digest>`, replaced them with `hmac::Context<A:
+# Lower bound — 0.6.3 is where `aes_gcm` arrived: the `aes-gcm` feature and
+# the `cryptoxide::aes_gcm` module behind `src/noise/cipher.rs`'s `AesGcm`,
+# which is the reason this is no longer `>=0.6.0`. The previous floor was an
+# API floor of its own and still binds: 0.6.0 deleted `src/mac.rs` and the
+# generic `Hmac<D: Digest>`, replaced them with `hmac::Context<A:
 # Algorithm>`, and stopped auto-building the legacy root hashing modules in
-# favour of the `hashing` submodule. `src/noise/hash.rs` and
-# `src/curve/p256/mod.rs` are written against the new shape and do not
-# compile against 0.5.x. Nothing here reaches for anything newer: the files
-# carrying every API this crate touches — `hmac.rs`, `hashing/blake2b.rs`,
+# favour of the `hashing` submodule — `src/noise/hash.rs` and
+# `src/curve/p256/mod.rs` are written against that shape. The files carrying
+# every other API this crate touches — `hmac.rs`, `hashing/blake2b.rs`,
 # `hashing/blake2s.rs`, `hashing/sha2/mod.rs`, `chacha20poly1305.rs` — are
-# byte-identical between 0.6.0 and 0.6.2, so 0.6.1 (arm32) and 0.6.2
-# (SHAKE, ML-KEM) buy this crate nothing and are not required.
+# byte-identical from 0.6.0 through 0.6.3 (0.6.3's `ed25519.rs` only adds
+# `_with` variants; the SHA-512 entry points hiss calls are unchanged), so
+# the AES-GCM module alone is what makes 0.6.3 the floor.
 #
 # Upper bound — the same ceiling `^0.6.0` already implied (`<0.7.0`),
 # spelled out rather than inferred. Note what it does *not* buy: a breaking
@@ -85,7 +84,19 @@ targets = ["aarch64-apple-darwin"]
 # local because the orphan rule forbids implementing cryptoxide's trait for
 # cryptoxide's type. `digest` is deliberately absent: it would restore the
 # deprecated root modules and pull in `alloc` without restoring `mac`.
-cryptoxide = { version = ">=0.6.0, <0.7", default-features = false, features = ["chacha", "poly1305", "blake2", "sha2", "hmac", "ed25519"] }
+#
+# `aes-gcm` (which implies `aes`) backs the second Noise cipher, `AesGcm`.
+# It is unconditional rather than behind a hiss feature, on purpose: the
+# crate's rule is that no feature turns API on or off (see `# Feature flags`
+# in src/lib.rs), cryptoxide has no dependencies of its own so there is no
+# supply chain to save, and a suite type that only sometimes exists would
+# be the first name in `hiss-macros`' `HISS_SUITE_TYPES` that could make an
+# emitted `# Usage` doctest fail to compile in a consumer. Keep `chacha` on
+# this list even if ChaChaPoly ever moved: in 0.6.3 `aes-gcm` does not build
+# on its own (`aes_gcm/ctr.rs` imports `cryptoutil::xor_keystream_mut`, which
+# is gated on `chacha`/`salsa`) — an upstream feature-gating bug, worth a
+# cryptoxide issue; not hiss's to work around beyond keeping `chacha` here.
+cryptoxide = { version = ">=0.6.3, <0.7", default-features = false, features = ["aes-gcm", "chacha", "poly1305", "blake2", "sha2", "hmac", "ed25519"] }
 # Written as an explicit range, both ends deliberate.
 #
 # Lower bound — a hard API floor, and the reason this is not still `"0.4"`.

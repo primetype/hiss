@@ -120,7 +120,11 @@ use syn::parse_macro_input;
 ///
 /// Each type this macro generates also carries its own walkthrough: a
 /// `# Usage` section, per role, written against that pattern's messages
-/// — and likewise a doctest that compiles.
+/// — and likewise a doctest that compiles, provided the suite is
+/// written as `hiss::noise`'s own type names (`X25519`, `X448`, `P256`,
+/// `ChaChaPoly`, `AesGcm`, `Blake2b`, `Blake2s`, `Sha256`, `Sha512`) or
+/// as paths starting `hiss::`. Any other spelling still gets the
+/// walkthrough, as an uncompiled sketch.
 ///
 /// [`hiss::noise!`]: https://docs.rs/hiss/latest/hiss/macro.noise.html
 #[proc_macro]

@@ -54,7 +54,6 @@ use super::cipher_state::{CipherState, MAX_MESSAGE_LEN, rekey_key};
 use super::error::HandshakeError;
 use super::session_id::SessionId;
 use super::transport::Transport;
-use crate::zeroize::zeroize_array;
 use std::marker::PhantomData;
 use std::num::NonZeroU64;
 
@@ -134,7 +133,7 @@ impl<Proto: Protocol> Transport<Proto> {
         self,
         epoch_size: NonZeroU64,
     ) -> (DatagramSend<Proto>, DatagramRecv<Proto>) {
-        let (send, recv, session_id) = self.into_cipher_states();
+        let (send, mut recv, session_id) = self.into_cipher_states();
         let sender = DatagramSend {
             cipher: send,
             session_id: session_id.clone(),
@@ -143,12 +142,17 @@ impl<Proto: Protocol> Transport<Proto> {
                 key_epoch: 0,
             }),
         };
-        // Seed the ratchet with a copy of the epoch-0 receive key; the source
-        // `CipherState` is dropped straight after, scrubbing its own copy. A
-        // completed transport is always keyed, but should a plaintext-mode
-        // state ever reach here it degrades to the no-ratchet path rather
-        // than panicking.
-        let keys = match recv.key() {
+        // **Move** the epoch-0 receive key into the ratchet. The source
+        // `CipherState` is left unkeyed, so the ratchet holds the only key
+        // anything will use from here on — but a move copies rather than
+        // erases, so the moved-from slot's bytes survive as dead stack of
+        // this function, unscrubbed. That is the same class as every other
+        // move of a key-bearing value (see `CipherState::take_key`, and
+        // SECURITY.md's "Honest limits"), not something this call site can
+        // close. A completed transport is always keyed, but should a
+        // plaintext-mode state ever reach here it degrades to the no-ratchet
+        // path rather than panicking.
+        let keys = match recv.take_key() {
             Some(base) => RecvKeys::Ratchet(RecvRatchet::new(epoch_size, base)),
             None => RecvKeys::Plain(recv),
         };
@@ -298,15 +302,17 @@ struct RecvRatchet<Ci: Cipher> {
     /// The highest epoch whose key has been committed.
     current_epoch: u64,
     /// The key for `current_epoch`.
-    current_key: [u8; 32],
+    current_key: Ci::Key,
     /// The key for `current_epoch − 1`, or `None` while `current_epoch == 0`.
-    prev_key: Option<[u8; 32]>,
-    _cipher: PhantomData<Ci>,
+    prev_key: Option<Ci::Key>,
+    /// `fn() -> Ci`, not `Ci`, so the marker cannot strip an auto trait the
+    /// keys themselves keep — see [`CipherState`].
+    _cipher: PhantomData<fn() -> Ci>,
 }
 
 impl<Ci: Cipher> RecvRatchet<Ci> {
     /// Seed a fresh ratchet at epoch 0 with the handshake key.
-    fn new(epoch_size: NonZeroU64, base_key: [u8; 32]) -> Self {
+    fn new(epoch_size: NonZeroU64, base_key: Ci::Key) -> Self {
         Self {
             epoch_size,
             current_epoch: 0,
@@ -365,55 +371,43 @@ impl<Ci: Cipher> RecvRatchet<Ci> {
         //   1. Beyond `MAX_EPOCH_JUMP` we refuse WITHOUT deriving any key, so
         //      a forged far-future counter cannot demand an unbounded REKEY
         //      chain (a CPU denial of service).
-        //   2. Within the cap we derive CANDIDATE keys from a copy and leave
-        //      the committed keys untouched until the AEAD tag verifies, so a
-        //      single forged packet cannot advance — and thereby desync — the
-        //      receiver (a one-packet denial of service).
+        //   2. Within the cap we derive CANDIDATE keys, leaving the committed
+        //      keys in place until the AEAD tag verifies, so a single forged
+        //      packet cannot advance — and thereby desync — the receiver (a
+        //      one-packet denial of service).
         let steps = msg_epoch - self.current_epoch;
         if steps > MAX_EPOCH_JUMP {
             return Err(HandshakeError::DecryptionFailed);
         }
 
-        // Chain `Rekey()` from the current key. `prev_cand` trails one epoch
-        // behind `cur_cand`, so on exit it holds key(msg_epoch − 1) and
-        // `cur_cand` holds key(msg_epoch).
-        let mut prev_cand = self.current_key;
-        let mut cur_cand = rekey_key::<Ci>(&prev_cand)?;
+        // Chain `Rekey()` from the committed current key, which is only
+        // borrowed. `prev_cand` trails one epoch behind `cur_cand`; `None`
+        // means "the committed current key", which is where the chain starts
+        // and is therefore key(msg_epoch − 1) exactly when `steps == 1`. On
+        // exit `cur_cand` holds key(msg_epoch).
+        let mut cur_cand = rekey_key::<Ci>(&self.current_key)?;
+        let mut prev_cand: Option<Ci::Key> = None;
         for _ in 1..steps {
             let next = rekey_key::<Ci>(&cur_cand)?;
-            zeroize_array(&mut prev_cand);
-            prev_cand = cur_cand;
-            cur_cand = next;
+            // The displaced value drops here, scrubbing itself.
+            prev_cand = Some(core::mem::replace(&mut cur_cand, next));
         }
 
         // Open under the candidate. Committed state advances ONLY on success.
         match Ci::decrypt(&cur_cand, counter, ad, ciphertext, output) {
             Ok(len) => {
-                zeroize_array(&mut self.current_key);
-                if let Some(old) = self.prev_key.as_mut() {
-                    zeroize_array(old);
-                }
-                self.current_key = cur_cand;
-                self.prev_key = Some(prev_cand);
+                let old_current = core::mem::replace(&mut self.current_key, cur_cand);
+                // steps == 1: the old current key IS key(msg_epoch − 1), so it
+                // becomes `prev`. steps > 1: `prev_cand` is key(msg_epoch − 1)
+                // and the old current key drops here, scrubbing itself. The
+                // displaced `prev_key` drops on assignment either way.
+                self.prev_key = Some(prev_cand.unwrap_or(old_current));
                 self.current_epoch = msg_epoch;
-                zeroize_array(&mut cur_cand);
-                zeroize_array(&mut prev_cand);
                 Ok(len)
             }
-            Err(err) => {
-                zeroize_array(&mut cur_cand);
-                zeroize_array(&mut prev_cand);
-                Err(err)
-            }
-        }
-    }
-}
-
-impl<Ci: Cipher> Drop for RecvRatchet<Ci> {
-    fn drop(&mut self) {
-        zeroize_array(&mut self.current_key);
-        if let Some(prev) = self.prev_key.as_mut() {
-            zeroize_array(prev);
+            // The candidates drop and scrub themselves; committed state is
+            // untouched.
+            Err(err) => Err(err),
         }
     }
 }
@@ -442,11 +436,12 @@ impl<Proto: Protocol> DatagramRecv<Proto> {
     /// unauthenticated input:
     ///
     /// - **Commit only after the tag verifies.** A datagram claiming a
-    ///   future epoch is opened under a *candidate* key derived from a copy;
-    ///   the receiver's committed keys advance only once the AEAD tag
-    ///   authenticates the packet. A forged packet bearing a huge counter is
-    ///   therefore rejected without moving the receiver forward, so it cannot
-    ///   desynchronise the session (a one-packet denial of service).
+    ///   future epoch is opened under a *candidate* key, derived without
+    ///   disturbing the committed ones; the receiver's committed keys advance
+    ///   only once the AEAD tag authenticates the packet. A forged packet
+    ///   bearing a huge counter is therefore rejected without moving the
+    ///   receiver forward, so it cannot desynchronise the session (a
+    ///   one-packet denial of service).
     /// - **Bounded look-ahead.** A datagram more than [`MAX_EPOCH_JUMP`]
     ///   epochs beyond the committed epoch is refused **without deriving any
     ///   key**, so a forged far-future counter cannot demand an unbounded

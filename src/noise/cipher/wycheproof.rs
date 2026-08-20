@@ -1,61 +1,71 @@
-//! Wycheproof AES-GCM — the **primitive-level** leg of the validation.
+//! Google Project Wycheproof vectors for the AES-256-GCM primitive behind
+//! [`AesGcm`](super::AesGcm).
 //!
-//! This file drives `cryptoxide_git::aes_gcm::AesGcm256` directly. hiss is not
-//! involved at all: no handshake, no `Cipher` trait, no Noise framing. The
-//! question it answers is narrow and worth keeping narrow — *is the primitive
-//! AES-256-GCM?* — against a corpus written by Google, i.e. by none of
-//! cryptoxide, hiss or `snow`.
+//! This is the **primitive-level** leg of the AESGCM validation: it drives
+//! `cryptoxide::aes_gcm::AesGcm256` directly — no handshake, no [`Cipher`]
+//! trait, no Noise framing. The question it answers is narrow and worth
+//! keeping narrow — *is the primitive AES-256-GCM?* — against a corpus
+//! written by Google, i.e. by none of cryptoxide, hiss or `snow`. The Noise
+//! framing (big-endian nonce, appended tag) is pinned separately by the
+//! third-party `cacophony` replays in `tests/noise_cacophony.rs`.
 //!
-//! Scope, pins and the measured census live in
-//! `vectors/wycheproof/PROVENANCE.md`. The short version: Noise **§12.4**
-//! AESGCM is AES-256 / 96-bit nonce / 128-bit tag, which selects **66** of the
-//! file's 316 tests — 39 `valid` and 27 `invalid`.
+//! Noise §12.4 AESGCM is AES-**256** with a **96**-bit nonce and a
+//! **128**-bit tag, which selects **66** of the file's 316 tests — 39
+//! `valid` and 27 `invalid` (measured at the pinned commit and asserted
+//! below). The out-of-scope groups are dropped rather than run-and-ignored:
+//! an unreplayed vector in a KAT directory is a claim with nothing behind
+//! it.
 //!
-//! **What this corpus does not cover:** every vector at the pinned commit has
-//! `tagSize: 128`, so there are no truncated-tag cases. Tag truncation is
-//! covered by the bespoke negative tests in `src/lib.rs` instead.
+//! **What this corpus does not cover:** every vector at the pinned commit
+//! has `tagSize: 128`, so there are no truncated-tag cases. Tag truncation
+//! is covered by the bespoke negative tests in the parent module instead
+//! (`truncated_tags_rejected`, `every_flipped_tag_bit_rejected`).
+//!
+//! Vectors are vendored under `tests/vectors/wycheproof/` (Apache-2.0; see
+//! that directory's `PROVENANCE.md`).
 
-use cryptoxide_git::aes_gcm::{AesGcm256, DecryptionResult, Tag};
+use cryptoxide::aes_gcm::{AesGcm256, DecryptionResult, Tag};
 use serde::Deserialize;
 
-const VECTORS_PATH: &str = concat!(
+#[cfg(doc)]
+use super::Cipher;
+
+const VECTORS: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/vectors/wycheproof/aes_gcm_test.json"
-);
+    "/tests/vectors/wycheproof/aes_gcm_test.json"
+));
 
 /// Noise §12.4's three parameters, as Wycheproof spells them (in bits).
 const KEY_SIZE: u32 = 256;
 const IV_SIZE: u32 = 96;
 const TAG_SIZE: u32 = 128;
 
-/// The applicable subset, measured at the pinned commit. Asserted rather than
-/// counted-and-printed: a refresh that changes the corpus must be noticed,
-/// not silently absorbed into a smaller (or larger) run.
+/// The applicable subset, measured at the pinned commit: (ran, valid,
+/// invalid). Asserted rather than counted-and-printed: a refresh that
+/// changes the corpus must be noticed, not silently absorbed into a smaller
+/// (or larger) run.
 const EXPECTED: (u32, u32, u32) = (66, 39, 27);
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct VectorFile {
     algorithm: String,
-    #[serde(rename = "numberOfTests")]
     number_of_tests: u32,
-    #[serde(rename = "testGroups")]
     test_groups: Vec<TestGroup>,
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct TestGroup {
-    #[serde(rename = "keySize")]
     key_size: u32,
-    #[serde(rename = "ivSize")]
     iv_size: u32,
-    #[serde(rename = "tagSize")]
     tag_size: u32,
     tests: Vec<TestCase>,
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct TestCase {
-    #[serde(rename = "tcId")]
     tc_id: u32,
     key: String,
     iv: String,
@@ -70,15 +80,9 @@ fn decode(hex_str: &str) -> Vec<u8> {
     hex::decode(hex_str).expect("hex")
 }
 
-fn load() -> VectorFile {
-    let raw = std::fs::read_to_string(VECTORS_PATH)
-        .unwrap_or_else(|e| panic!("missing {VECTORS_PATH} ({e})"));
-    serde_json::from_str(&raw).expect("valid wycheproof json")
-}
-
 #[test]
 fn wycheproof_aes_gcm_256_96_128() {
-    let file = load();
+    let file: VectorFile = serde_json::from_str(VECTORS).expect("valid wycheproof json");
 
     // The file is the file we think it is, before any crypto runs.
     assert_eq!(file.algorithm, "AES-GCM", "wrong Wycheproof corpus");
@@ -91,9 +95,10 @@ fn wycheproof_aes_gcm_256_96_128() {
             continue;
         }
         // Not a filter — a claim. Every vector at this pin is 128-bit-tagged,
-        // which is *why* truncation needs its own test elsewhere. If a refresh
-        // ever introduces short tags this fails loudly rather than quietly
-        // widening the run into cases the assertions below do not fit.
+        // which is *why* truncation needs its own test elsewhere. If a
+        // refresh ever introduces short tags this fails loudly rather than
+        // quietly widening the run into cases the assertions below do not
+        // fit.
         assert_eq!(
             group.tag_size, TAG_SIZE,
             "unexpected truncated-tag group at this pin"
@@ -113,7 +118,8 @@ fn wycheproof_aes_gcm_256_96_128() {
 
                     // Encryption must reproduce ciphertext AND tag exactly.
                     // Pinning the tag is the part that matters: a round-trip
-                    // alone would pass under a wrong-but-self-consistent GHASH.
+                    // alone would pass under a wrong-but-self-consistent
+                    // GHASH.
                     let mut got_ct = vec![0u8; msg.len()];
                     let mut got_tag = Tag([0u8; 16]);
                     cipher.encrypt(&iv, &aad, &msg, &mut got_ct, &mut got_tag);
@@ -145,7 +151,6 @@ fn wycheproof_aes_gcm_256_96_128() {
         }
     }
 
-    println!("wycheproof AES-GCM 256/96/128: ran={ran} valid={valid} invalid={invalid}");
     assert_eq!(
         (ran, valid, invalid),
         EXPECTED,

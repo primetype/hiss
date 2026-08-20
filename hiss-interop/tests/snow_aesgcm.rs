@@ -1,7 +1,9 @@
-//! **Live** hiss↔`snow` AESGCM interop — the second validation leg.
+//! **Live** hiss↔`snow` AESGCM interop — the running-implementation leg of
+//! `hiss::noise::AesGcm`'s validation.
 //!
-//! The cacophony replays prove agreement with a *recorded* third
-//! implementation. This proves agreement with a *running* one: `snow`'s
+//! hiss's own `tests/noise_cacophony.rs` proves agreement with a *recorded*
+//! third implementation on 160 AESGCM vectors, and its Wycheproof unit test
+//! pins the primitive. This proves agreement with a *running* one: `snow`'s
 //! default resolver backs `CipherChoice::AESGCM` with RustCrypto's
 //! `aes_gcm::Aes256Gcm`, which is a genuinely independent AES-GCM from
 //! cryptoxide's — different authors, different code, no shared lineage. If
@@ -16,8 +18,8 @@
 //! | Hash | all four (BLAKE2b, BLAKE2s, SHA256, SHA512) | `use-sha2`/`use-blake2` are in the dev-dependency for exactly this. |
 //! | Pattern | `N`, `NN`, `XX`, `IK`, `Kpsk0` | the structurally distinct shapes: one-way, mutual-with-ephemerals, deferred-static, pre-shared-static, and psk. |
 //!
-//! Exhaustiveness is the corpus's job and the corpus is exhaustive (17 × 8,
-//! both roles). This leg is a spot check by design — its value is the
+//! Exhaustiveness is the corpus's job and the corpus is exhaustive (20 × 8
+//! per cipher, both roles). This leg is a spot check by design — its value is the
 //! *second implementation*, not the matrix size. Stating that plainly matters,
 //! because "three independent legs" reads stronger than what actually runs.
 //!
@@ -35,12 +37,8 @@
 //! message 2 for one-way patterns and message **4** for interactive ones,
 //! whose senders alternate. Four messages per direction clears both.
 
-mod common;
-
-use common::ScriptedRng;
-use hiss::noise::{Blake2b, Blake2s, Curve, Sha256, Sha512, X25519};
+use hiss::noise::{AesGcm, Blake2b, Blake2s, Curve, Sha256, Sha512, X25519};
 use hiss::provider::{EphemeralOnly, ProviderExt};
-use hiss_aesgcm_lab::AesGcm;
 use rand::rngs::StdRng;
 
 /// The pre-shared key `Kpsk0` uses on both sides.
@@ -48,7 +46,7 @@ const PSK: [u8; 32] = [0x2b; 32];
 
 /// A non-empty prologue, mixed in by both parties — a mismatch here fails the
 /// handshake, so passing means both sides hashed the same bytes.
-const PROLOGUE: &[u8] = b"hiss-aesgcm-lab";
+const PROLOGUE: &[u8] = b"hiss-interop aesgcm";
 
 /// How many transport messages each direction sends. Four, so the nonce
 /// counter passes 0 in every pattern shape (see the module docs).
@@ -530,5 +528,4 @@ fn every_hash_is_instantiated() {
     }
     // 5 patterns × 2 role assignments × 4 hashes.
     assert_eq!(5 * 2 * instantiated.len(), 40, "live interop test count");
-    let _ = ScriptedRng::new(&[]); // `common` is shared; keep the import honest.
 }

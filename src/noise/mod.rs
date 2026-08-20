@@ -22,7 +22,7 @@
 //! |-----------|----------|----------------|---------------------------------|
 //! | `P`       | [`Pattern`] | [`IKpsk1`](pattern::IKpsk1) | Token sequences, pre-messages |
 //! | `Cu`      | [`Curve`]   | [`P256`]    | Key sizes, DH output length     |
-//! | `Ci`      | [`Cipher`]  | [`ChaChaPoly`] | Tag size, AEAD operations    |
+//! | `Ci`      | [`Cipher`]  | [`ChaChaPoly`], [`AesGcm`] | Tag size, AEAD operations    |
 //! | `H`       | [`Hash`]    | [`Blake2b`] | Hash length, HMAC, HKDF         |
 //!
 //! A type alias pins the protocol for an entire application:
@@ -174,7 +174,7 @@ pub mod tokens;
 pub mod transport;
 pub mod well_formed;
 
-pub use self::cipher::{ChaChaPoly, Cipher};
+pub use self::cipher::{AesGcm, AesGcmKey, ChaChaPoly, ChaChaPolyKey, Cipher};
 pub use self::cipher_state::CipherState;
 pub use self::curve::{Curve, DhCurve, P256, X448, X25519};
 pub use self::datagram::{DatagramRecv, DatagramSend};
@@ -259,7 +259,7 @@ pub trait Protocol {
     type Pattern: Pattern;
     /// The DH curve (e.g. [`P256`]).
     type Curve: DhCurve;
-    /// The AEAD cipher (e.g. [`ChaChaPoly`]).
+    /// The AEAD cipher — [`ChaChaPoly`] or [`AesGcm`].
     type Cipher: Cipher;
     /// The hash function (e.g. [`Blake2b`]).
     type Hash: Hash;
@@ -299,6 +299,38 @@ mod tests {
     hiss::noise! { pub Kpsk0<P256, ChaChaPoly, Blake2b>  { -> s <- s ... -> psk, e, es, ss } }
     hiss::noise! {
         pub IKpsk1<P256, ChaChaPoly, Blake2b> { <- s ... -> e, es, s, ss, psk <- e, ee, se }
+    }
+
+    // An AES-GCM suite, for the auto-trait assertion below: `AesGcmKey` is
+    // the one `Cipher::Key` with a foreign type inside it, so it is where a
+    // lost `Send`/`Sync` would show up first.
+    hiss::noise! {
+        pub IkAes<P256, AesGcm, Sha256> { <- s ... -> e, es, s, ss <- e, ee, se }
+    }
+
+    /// Naming a cipher must never be what stops a session type from crossing
+    /// a thread boundary — the examples move handshake and transport state
+    /// into `tokio::spawn` and `std::thread::spawn`, so this is load-bearing
+    /// rather than hypothetical.
+    ///
+    /// Two things could take `Send`/`Sync` away and both are closed here:
+    /// the associated `Cipher::Key`, which the trait bounds
+    /// `Send + Sync + 'static`, and the `PhantomData` marker, which is
+    /// `PhantomData<fn() -> Ci>` so that a `!Send` *cipher marker* cannot
+    /// poison a state either. Compile-time only; the body runs nothing.
+    #[test]
+    fn session_types_are_send_and_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+
+        assert_send_sync::<Transport<IkAes>>();
+        assert_send_sync::<DatagramRecv<IkAes>>();
+        assert_send_sync::<DatagramSend<IkAes>>();
+        assert_send_sync::<CipherState<AesGcm>>();
+
+        assert_send_sync::<Transport<IKpsk1>>();
+        assert_send_sync::<DatagramRecv<IKpsk1>>();
+        assert_send_sync::<DatagramSend<IKpsk1>>();
+        assert_send_sync::<CipherState<ChaChaPoly>>();
     }
 
     /// Complete an IKpsk1 handshake hiss↔hiss and hand back both
@@ -752,11 +784,13 @@ mod tests {
         let ad = b"associated data";
 
         let mut ct = [0u8; 128];
-        let ct_len = ChaChaPoly::encrypt(&key, 0, ad, plaintext, &mut ct).unwrap();
+        let ct_len =
+            ChaChaPoly::encrypt(&ChaChaPoly::key(&key), 0, ad, plaintext, &mut ct).unwrap();
         assert_eq!(ct_len, plaintext.len() + 16);
 
         let mut pt = [0u8; 128];
-        let pt_len = ChaChaPoly::decrypt(&key, 0, ad, &ct[..ct_len], &mut pt).unwrap();
+        let pt_len =
+            ChaChaPoly::decrypt(&ChaChaPoly::key(&key), 0, ad, &ct[..ct_len], &mut pt).unwrap();
         assert_eq!(&pt[..pt_len], plaintext);
     }
 
@@ -766,13 +800,15 @@ mod tests {
         let plaintext = b"test data";
 
         let mut ct = [0u8; 64];
-        let ct_len = ChaChaPoly::encrypt(&key, 0, &[], plaintext, &mut ct).unwrap();
+        let ct_len =
+            ChaChaPoly::encrypt(&ChaChaPoly::key(&key), 0, &[], plaintext, &mut ct).unwrap();
 
         // Corrupt the last byte (part of the tag).
         ct[ct_len - 1] ^= 0xFF;
 
         let mut pt = [0u8; 64];
-        let err = ChaChaPoly::decrypt(&key, 0, &[], &ct[..ct_len], &mut pt).unwrap_err();
+        let err = ChaChaPoly::decrypt(&ChaChaPoly::key(&key), 0, &[], &ct[..ct_len], &mut pt)
+            .unwrap_err();
         assert!(
             matches!(err, error::HandshakeError::DecryptionFailed),
             "expected DecryptionFailed, got {err:?}"
@@ -784,7 +820,8 @@ mod tests {
         let key = [0u8; 32];
         let mut pt = [0u8; 64];
         // Less than TAG_SIZE bytes — must fail.
-        let err = ChaChaPoly::decrypt(&key, 0, &[], &[0u8; 15], &mut pt).unwrap_err();
+        let err =
+            ChaChaPoly::decrypt(&ChaChaPoly::key(&key), 0, &[], &[0u8; 15], &mut pt).unwrap_err();
         assert!(matches!(err, error::HandshakeError::DecryptionFailed));
     }
 
@@ -794,11 +831,13 @@ mod tests {
         let plaintext = b"nonce matters";
 
         let mut ct = [0u8; 64];
-        let ct_len = ChaChaPoly::encrypt(&key, 0, &[], plaintext, &mut ct).unwrap();
+        let ct_len =
+            ChaChaPoly::encrypt(&ChaChaPoly::key(&key), 0, &[], plaintext, &mut ct).unwrap();
 
         // Decrypt with nonce 1 instead of 0.
         let mut pt = [0u8; 64];
-        let err = ChaChaPoly::decrypt(&key, 1, &[], &ct[..ct_len], &mut pt).unwrap_err();
+        let err = ChaChaPoly::decrypt(&ChaChaPoly::key(&key), 1, &[], &ct[..ct_len], &mut pt)
+            .unwrap_err();
         assert!(matches!(err, error::HandshakeError::DecryptionFailed));
     }
 
@@ -809,10 +848,12 @@ mod tests {
         let plaintext = b"key matters";
 
         let mut ct = [0u8; 64];
-        let ct_len = ChaChaPoly::encrypt(&key, 0, &[], plaintext, &mut ct).unwrap();
+        let ct_len =
+            ChaChaPoly::encrypt(&ChaChaPoly::key(&key), 0, &[], plaintext, &mut ct).unwrap();
 
         let mut pt = [0u8; 64];
-        let err = ChaChaPoly::decrypt(&wrong_key, 0, &[], &ct[..ct_len], &mut pt).unwrap_err();
+        let err = ChaChaPoly::decrypt(&ChaChaPoly::key(&wrong_key), 0, &[], &ct[..ct_len], &mut pt)
+            .unwrap_err();
         assert!(matches!(err, error::HandshakeError::DecryptionFailed));
     }
 
@@ -822,10 +863,12 @@ mod tests {
         let plaintext = b"ad matters";
 
         let mut ct = [0u8; 64];
-        let ct_len = ChaChaPoly::encrypt(&key, 0, b"correct", plaintext, &mut ct).unwrap();
+        let ct_len =
+            ChaChaPoly::encrypt(&ChaChaPoly::key(&key), 0, b"correct", plaintext, &mut ct).unwrap();
 
         let mut pt = [0u8; 64];
-        let err = ChaChaPoly::decrypt(&key, 0, b"wrong", &ct[..ct_len], &mut pt).unwrap_err();
+        let err = ChaChaPoly::decrypt(&ChaChaPoly::key(&key), 0, b"wrong", &ct[..ct_len], &mut pt)
+            .unwrap_err();
         assert!(matches!(err, error::HandshakeError::DecryptionFailed));
     }
 
@@ -833,11 +876,12 @@ mod tests {
     fn chacha_empty_plaintext() {
         let key = [0x42u8; 32];
         let mut ct = [0u8; 16]; // tag only
-        let ct_len = ChaChaPoly::encrypt(&key, 0, &[], &[], &mut ct).unwrap();
+        let ct_len = ChaChaPoly::encrypt(&ChaChaPoly::key(&key), 0, &[], &[], &mut ct).unwrap();
         assert_eq!(ct_len, 16);
 
         let mut pt = [0u8; 0];
-        let pt_len = ChaChaPoly::decrypt(&key, 0, &[], &ct[..ct_len], &mut pt).unwrap();
+        let pt_len =
+            ChaChaPoly::decrypt(&ChaChaPoly::key(&key), 0, &[], &ct[..ct_len], &mut pt).unwrap();
         assert_eq!(pt_len, 0);
     }
 
@@ -2006,34 +2050,80 @@ mod tests {
     /// from an all-zero key, cross-checking the raw definition path
     /// (`ENCRYPT(k, 2^64−1, "", zeros)[..32]`), the `rekey_key` helper, and
     /// `CipherState::rekey` against one another and against the pinned hex.
+    ///
+    /// The pinned hex is unchanged from when `rekey_key` returned raw bytes;
+    /// what changed is how the other two paths are checked against it. A
+    /// [`Cipher::Key`] is opaque — no `PartialEq`, no `Debug`, no way back to
+    /// bytes — so the derived keys are compared **behaviourally**: seal the
+    /// same probe under each and require identical ciphertext and tag. Two
+    /// different ChaCha20-Poly1305 keys agreeing on 47 bytes at a fixed nonce
+    /// and AD is not something that happens by accident, so the pin is as
+    /// tight as the byte comparison it replaces.
     #[test]
     fn rekey_kat() {
         use super::cipher_state::rekey_key;
+
+        const PROBE: &[u8] = b"probe payload for the rekey KAT";
+        const PROBE_AD: &[u8] = b"rekey-kat";
+
+        /// Seal the probe under `key`: a fingerprint of the key bytes.
+        fn seal(key: &<ChaChaPoly as Cipher>::Key) -> Vec<u8> {
+            let mut out = [0u8; 64];
+            let n = ChaChaPoly::encrypt(key, 7, PROBE_AD, PROBE, &mut out).unwrap();
+            out[..n].to_vec()
+        }
 
         let k = [0u8; 32];
 
         // Definition path: encrypt 32 zeros at nonce 2^64−1 with empty ad,
         // take the first 32 ciphertext bytes (the 16-byte tag is discarded).
         let mut scratch = [0u8; 48];
-        ChaChaPoly::encrypt(&k, u64::MAX, &[], &[0u8; 32], &mut scratch).unwrap();
+        ChaChaPoly::encrypt(
+            &ChaChaPoly::key(&k),
+            u64::MAX,
+            &[],
+            &[0u8; 32],
+            &mut scratch,
+        )
+        .unwrap();
         let mut definition = [0u8; 32];
         definition.copy_from_slice(&scratch[..32]);
-
-        // The helper path must agree with the definition, byte for byte.
-        let derived = rekey_key::<ChaChaPoly>(&k).unwrap();
-        assert_eq!(derived, definition);
-
-        // `CipherState::rekey` installs exactly that next key.
-        let mut cs = CipherState::<ChaChaPoly>::from_key(k);
-        cs.rekey().unwrap();
-        assert_eq!(cs.key(), Some(definition));
 
         // The pinned answer (computed once, cross-checked against the
         // definition above).
         assert_eq!(
-            hex::encode(derived),
+            hex::encode(definition),
             "25ce5d37df19f3783185f2ffd5ab17fa3397c212f02d62fb1733e0b875b74c58",
             "REKEY next-key KAT drifted"
+        );
+
+        // The helper path must agree with the definition.
+        let expected = seal(&ChaChaPoly::key(&definition));
+        let derived = rekey_key::<ChaChaPoly>(&ChaChaPoly::key(&k)).unwrap();
+        assert_eq!(
+            seal(&derived),
+            expected,
+            "rekey_key does not derive the REKEY definition"
+        );
+
+        // `CipherState::rekey` installs exactly that next key: a rekeyed
+        // state seals at nonce 0 exactly as a state freshly keyed with the
+        // definition does.
+        let mut cs = CipherState::<ChaChaPoly>::from_key(k);
+        cs.rekey().unwrap();
+        let mut after = [0u8; 64];
+        let n = cs.encrypt_with_ad(PROBE_AD, PROBE, &mut after).unwrap();
+
+        let mut reference = CipherState::<ChaChaPoly>::from_key(definition);
+        let mut want = [0u8; 64];
+        let m = reference
+            .encrypt_with_ad(PROBE_AD, PROBE, &mut want)
+            .unwrap();
+
+        assert_eq!(
+            &after[..n],
+            &want[..m],
+            "CipherState::rekey installed a key other than the REKEY definition"
         );
     }
 
@@ -2363,7 +2453,8 @@ mod tests {
         let key = [0u8; 32];
         let plaintext = b"hello world";
         let mut output = [0u8; 10]; // needs 11 + 16 = 27
-        let err = ChaChaPoly::encrypt(&key, 0, &[], plaintext, &mut output).unwrap_err();
+        let err = ChaChaPoly::encrypt(&ChaChaPoly::key(&key), 0, &[], plaintext, &mut output)
+            .unwrap_err();
         assert!(matches!(
             err,
             error::HandshakeError::OutputBufferTooSmall { .. }
@@ -2376,11 +2467,13 @@ mod tests {
         // First encrypt something.
         let plaintext = b"hello world";
         let mut ct = [0u8; 64];
-        let ct_len = ChaChaPoly::encrypt(&key, 0, &[], plaintext, &mut ct).unwrap();
+        let ct_len =
+            ChaChaPoly::encrypt(&ChaChaPoly::key(&key), 0, &[], plaintext, &mut ct).unwrap();
 
         // Try to decrypt into a too-small buffer.
         let mut output = [0u8; 5]; // needs 11 bytes
-        let err = ChaChaPoly::decrypt(&key, 0, &[], &ct[..ct_len], &mut output).unwrap_err();
+        let err = ChaChaPoly::decrypt(&ChaChaPoly::key(&key), 0, &[], &ct[..ct_len], &mut output)
+            .unwrap_err();
         assert!(matches!(
             err,
             error::HandshakeError::OutputBufferTooSmall { .. }
@@ -2510,10 +2603,10 @@ mod tests {
                 plaintext in proptest::collection::vec(any::<u8>(), 0..4096),
             ) {
                 let mut ct = vec![0u8; plaintext.len() + 16];
-                let ct_len = ChaChaPoly::encrypt(&key, nonce, &ad, &plaintext, &mut ct).unwrap();
+                let ct_len = ChaChaPoly::encrypt(&ChaChaPoly::key(&key), nonce, &ad, &plaintext, &mut ct).unwrap();
 
                 let mut pt = vec![0u8; plaintext.len()];
-                let pt_len = ChaChaPoly::decrypt(&key, nonce, &ad, &ct[..ct_len], &mut pt).unwrap();
+                let pt_len = ChaChaPoly::decrypt(&ChaChaPoly::key(&key), nonce, &ad, &ct[..ct_len], &mut pt).unwrap();
                 prop_assert_eq!(&pt[..pt_len], &plaintext[..]);
             }
 
@@ -2527,13 +2620,13 @@ mod tests {
                 flip_bit in 0u8..8,
             ) {
                 let mut ct = vec![0u8; plaintext.len() + 16];
-                let ct_len = ChaChaPoly::encrypt(&key, 0, &[], &plaintext, &mut ct).unwrap();
+                let ct_len = ChaChaPoly::encrypt(&ChaChaPoly::key(&key), 0, &[], &plaintext, &mut ct).unwrap();
 
                 let pos = flip_pos_seed % ct_len;
                 ct[pos] ^= 1 << flip_bit;
 
                 let mut pt = vec![0u8; plaintext.len()];
-                let result = ChaChaPoly::decrypt(&key, 0, &[], &ct[..ct_len], &mut pt);
+                let result = ChaChaPoly::decrypt(&ChaChaPoly::key(&key), 0, &[], &ct[..ct_len], &mut pt);
                 prop_assert!(result.is_err());
             }
         }

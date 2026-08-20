@@ -4,10 +4,6 @@ Short-term direction, one line each. Nothing here is a commitment or a date, and
 nothing here is needed to use what `hiss` ships today — see the
 [README](README.md) for that.
 
-## Suite
-
-- **AES-GCM cipher**, alongside ChaCha20-Poly1305.
-
 ## Providers
 
 Beyond the software and Apple Secure Enclave backends that ship today. A backend

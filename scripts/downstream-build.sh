@@ -151,7 +151,7 @@ main_rs="$work/main.rs"
 #   IKpsk0  — `psk` ahead of `s`: a read taking a plain PSK *and* a
 #             verification closure; msg1 ends `…, s, ss`, so its staged
 #             walkthrough carries the intro-with-psk arm.
-#             X448 / ChaChaPoly / Sha256
+#             X448 / AesGcm / Sha256
 #   K       — one-way: a role that only writes, a role that only reads, and
 #             a local static in both constructors (the fallible arm).
 #             X25519 / ChaChaPoly / Blake2s
@@ -160,8 +160,8 @@ main_rs="$work/main.rs"
 #             X25519 / ChaChaPoly / Sha512
 #
 # The suites are spread deliberately: between them the five arms spell
-# **every** type in `hiss-macros`' `HISS_SUITE_TYPES` — three curves, one
-# cipher, four hashes. The sketch-degrade guard below only fires for a type
+# **every** type in `hiss-macros`' `HISS_SUITE_TYPES` — three curves, two
+# ciphers, four hashes. The sketch-degrade guard below only fires for a type
 # some arm actually writes, so this is what makes it total rather than
 # per-suite. Keep it that way: a new entry in `HISS_SUITE_TYPES` that no arm
 # spells is guarded by nothing.
@@ -172,7 +172,7 @@ lib_rs="$work/lib.rs"
 
 /// Patterns picked to reach every arm of the walkthrough `noise!` emits.
 pub mod arms {
-    use hiss::noise::{Blake2s, ChaChaPoly, P256, Sha256, Sha512, X25519, X448};
+    use hiss::noise::{AesGcm, Blake2s, ChaChaPoly, P256, Sha256, Sha512, X25519, X448};
 
     hiss::noise! {
         /// Pre-messages, a per-peer PSK lookup, and declared payloads.
@@ -185,8 +185,8 @@ pub mod arms {
     }
 
     hiss::noise! {
-        /// `psk` ahead of the `s` it protects, over X448.
-        pub IKpsk0<X448, ChaChaPoly, Sha256> {
+        /// `psk` ahead of the `s` it protects, over X448 and AESGCM.
+        pub IKpsk0<X448, AesGcm, Sha256> {
             <- s
             ...
             -> psk, e, es, s, ss

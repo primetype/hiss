@@ -185,18 +185,29 @@ fn handshakes_xx(c: &mut Criterion) {
     g.finish();
 }
 
-// ── Bulk transport throughput (curve-independent: ChaCha20-Poly1305) ───
+// ── Bulk transport throughput (curve-independent; one arm per cipher) ──
 //
 // Both sides encrypt and decrypt into flat slices, with no I/O abstraction in
-// the measured region.
+// the measured region. The handshake (N over P256) runs once, unmeasured;
+// only the AEAD differs between the two arms.
+//
+// Which AES-GCM you are measuring depends on the host: cryptoxide compiles
+// its ARMv8 AES + `pmull` GHASH path only for `aarch64` with the `aes` target
+// feature (on by default for `aarch64-apple-darwin`, not for Linux aarch64),
+// and a portable fixsliced AES + portable GHASH everywhere else. State the
+// host next to any AESGCM number.
 
-fn transport(c: &mut Criterion) {
-    // Set up a completed N/P256 handshake, then measure transport only.
-    let (mut h_send, mut h_recv) = {
+/// Drive a complete `N` handshake over `$cipher` and hand back the two
+/// transports. A macro rather than a function because each expansion needs
+/// its own `noise!` invocation: the generated `N` types are distinct per
+/// cipher, and the identifier must stay `N` since it *is* the protocol name
+/// mixed into the handshake hash.
+macro_rules! transport_pair {
+    ($cipher:ident) => {{
         let mut p = provider();
         let r_static = p.generate::<P256>().unwrap();
         let r_pub = p.public(&r_static).unwrap();
-        hiss::noise! { pub N<P256, ChaChaPoly, Blake2b> { <- s ... -> e, es } }
+        hiss::noise! { pub N<P256, $cipher, Blake2b> { <- s ... -> e, es } }
         let (msg1, i_t) = N::initiator(provider(), &[], r_pub)
             .write_message_1()
             .unwrap();
@@ -205,7 +216,12 @@ fn transport(c: &mut Criterion) {
             .read_message_1(&msg1)
             .unwrap();
         (i_t, r_t)
-    };
+    }};
+}
+
+fn transport(c: &mut Criterion) {
+    let (mut c_send, mut c_recv) = transport_pair!(ChaChaPoly);
+    let (mut a_send, mut a_recv) = transport_pair!(AesGcm);
 
     let plaintext = [0x42u8; 1024];
     let mut ct = [0u8; 1056]; // 1024 + 16 tag + headroom
@@ -214,8 +230,15 @@ fn transport(c: &mut Criterion) {
     let mut g = c.benchmark_group("transport_1KiB");
     g.bench_function(BenchmarkId::new("hiss", "ChaChaPoly"), |b| {
         b.iter(|| {
-            let n = h_send.send(&plaintext, &mut ct).unwrap();
-            let m = h_recv.receive(&ct[..n], &mut pt).unwrap();
+            let n = c_send.send(&plaintext, &mut ct).unwrap();
+            let m = c_recv.receive(&ct[..n], &mut pt).unwrap();
+            black_box(m)
+        });
+    });
+    g.bench_function(BenchmarkId::new("hiss", "AESGCM"), |b| {
+        b.iter(|| {
+            let n = a_send.send(&plaintext, &mut ct).unwrap();
+            let m = a_recv.receive(&ct[..n], &mut pt).unwrap();
             black_box(m)
         });
     });

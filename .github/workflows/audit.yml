@@ -13,7 +13,7 @@ name: Audit
 # idle windows in which `Check` never fires.
 #
 # Why a workflow of its own rather than a job in `Check`: the same reason as
-# `Downstream`, `Interop` and the AES-GCM lab — it needs a `schedule:`
+# `Downstream` and `Interop` — it needs a `schedule:`
 # trigger, and `Check` is the trigger for `Test` and `Coverage` (both
 # `workflow_run: workflows: ["Check"]`), so a cron on `Check` would drag the
 # full matrix through a run on every tick. A separate name costs exactly the
@@ -26,7 +26,7 @@ name: Audit
 
 on:
   schedule:
-    # Daily, offset from the Monday cron trio (17 6 / 43 6 / 43 7).
+    # Daily, offset from the Monday cron duo (17 6 / 43 6).
     - cron: "31 5 * * *"
   workflow_dispatch:
 

@@ -1588,6 +1588,7 @@ fn dh_call(tok: Tok, role: Role) -> Ident {
 /// as a bare `X25519` only resolves there if we can respell it
 /// absolutely. These are the names we can — see [`doctest_suite_path`].
 const HISS_SUITE_TYPES: &[&str] = &[
+    "AesGcm",
     "Blake2b",
     "Blake2s",
     "ChaChaPoly",

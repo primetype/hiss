@@ -6,7 +6,7 @@ checked by the compiler, and private keys that can stay in an Apple Secure Encla
 Built on the [Noise Protocol Framework][noise]: you write the handshake in Noise's own
 notation; `hiss` generates it, sizes every message at compile time, and rejects malformed ones.
 
-> **Status: `0.3` — pre-1.0: unstable API, not independently audited.** See
+> **Status: `0.4` — pre-1.0: unstable API, not independently audited.** See
 > [How this is tested](#how-this-is-tested) and [Security](#security) before relying on it.
 
 [noise]: https://noiseprotocol.org/
@@ -21,7 +21,7 @@ runs; assembled, they are [`examples/quickstart.rs`](examples/quickstart.rs).
 
 ```toml
 [dependencies]
-hiss = "0.3"
+hiss = "0.4"
 rand = "0.10"
 ```
 
@@ -143,12 +143,13 @@ be the Apple Secure Enclave, which generates the static key internally and never
 it — your process only ever holds a handle. See [Providers](#providers).
 
 **Choose snow** if you need more of Noise than this covers — the **23 deferred
-patterns** (spec §7.6), the `fallback` modifier, more ciphers (AES-GCM, XChaChaPoly),
-and swappable crypto backends including `ring`. Three axes where it is no longer
+patterns** (spec §7.6), the `fallback` modifier, the non-specification `XChaChaPoly`
+cipher, and swappable crypto backends including `ring`. Four axes where it is no longer
 ahead: the **fundamental** patterns, all fifteen of which hiss now ships; the hashes —
-snow's set is the specification's four, and so is hiss's; and PSK placement — `noise!`
-takes a `psk` token anywhere in a message, and every position a `pskN` modifier can
-name (`psk0`–`psk3`) is pinned by a third-party `cacophony` vector.
+snow's set is the specification's four, and so is hiss's; the ciphers — both of the
+specification's, `ChaChaPoly` and `AESGCM`; and PSK placement — `noise!` takes a `psk`
+token anywhere in a message, and every position a `pskN` modifier can name
+(`psk0`–`psk3`) is pinned by a third-party `cacophony` vector.
 
 One choice that isn't a comparison: production cryptography here is `cryptoxide` and
 `eccoxide`, nothing else.
@@ -161,7 +162,7 @@ This release targets a narrow suite matrix and a fixed set of patterns:
 |---------|-----------|
 | Patterns | `N`, `K`, `Kpsk0`, `IKpsk1`, `IK`, `NK`, `IX`, `XK`, `NN`, `XX`, `X`, `NX`, `XN`, `KN`, `KK`, `KX`, `IN`, `NNpsk0`, `NNpsk2`, `XXpsk3` |
 | Curves  | NIST **P-256** (secp256r1), **X25519** (Curve25519, the Noise `25519` curve), and **X448** (the Noise `448` curve) |
-| Cipher  | **ChaCha20-Poly1305** |
+| Cipher  | **ChaCha20-Poly1305** and **AES-256-GCM** — the Noise specification's two (§12.3 `ChaChaPoly`, §12.4 `AESGCM`) |
 | Hash    | **BLAKE2b**-512, **SHA-512**, **SHA-256**, **BLAKE2s** — the Noise specification's four |
 
 That pattern row is **all fifteen** of Noise's fundamental patterns plus five PSK
@@ -176,7 +177,15 @@ this — and what is deliberately not — is in [TODO.md](TODO.md).
 
 There is no default suite — every `noise!` declaration names its curve, cipher and hash,
 and one that omits them generates a bare pattern marker rather than a working protocol.
-The cipher row has one entry, so the choices are the curve and the hash. For the curve,
+For the cipher, **use `ChaChaPoly`**, as the Quickstart does: it is what every frozen
+P-256 vector was generated over, and it is fast in portable code everywhere. `AesGcm` is
+pinned by the same third-party `cacophony` corpus and by live `snow` interop; on Apple
+Silicon, where `cryptoxide` reaches the ARMv8 AES and `pmull` instructions, it is over
+five times as fast, but on every other target `cryptoxide`'s AES-GCM is portable software,
+and it is the cipher that costs memory — a cipher state holds the *expanded* key, which for
+AES-256-GCM makes the state 528 bytes on `aarch64` and 992 on the portable path,
+against `ChaChaPoly`'s 48. So reach for it when a peer requires it or you have measured
+on your hardware. For the curve,
 **use `X25519`**, as the Quickstart does, unless you need the Apple Secure Enclave, which
 speaks `P256` and nothing else, or want `X448`'s larger margin. For the hash, **use
 `Blake2b`** — it is what the Quickstart uses and the only one with the full
@@ -342,10 +351,10 @@ commit.
 
 | Check | What it establishes |
 |-------|---------------------|
-| **Interoperability with [`snow`](https://crates.io/crates/snow)** | 28 tests over P-256 and 5 over X25519 run one side of a handshake with `hiss` and the other with `snow`, then require both to derive the same handshake hash and to exchange transport messages in both directions. A one-byte disagreement between the two implementations fails the suite. These live in the separate `hiss-interop` crate and run weekly plus on demand — **not** on every `cargo test`, and not as a release gate; what runs per-commit is the frozen vectors above. |
+| **Interoperability with [`snow`](https://crates.io/crates/snow)** | 28 tests over P-256 and 5 over X25519, plus 40 over X25519 with `AESGCM` across all four hashes, run one side of a handshake with `hiss` and the other with `snow`, then require both to derive the same handshake hash and to exchange transport messages in both directions. A one-byte disagreement between the two implementations fails the suite. These live in the separate `hiss-interop` crate and run weekly plus on demand — **not** on every `cargo test`, and not as a release gate; what runs per-commit is the frozen vectors above. |
 | **Frozen known-answer vectors (P-256, `snow`-generated)** | 17 tests replay byte-for-byte expectations across all seventeen patterns, with ephemerals pinned by a scripted RNG, checking every handshake ciphertext, the final handshake hash, and the transport ciphertexts. **These were generated from `snow`, not from a standards body** — P-256 is not in the Noise specification, so no third-party vectors exist for it. Treat them as a regression lock, not independent conformance. |
-| **Frozen third-party vectors (`cacophony`)** | 320 tests replay a 160-vector subset of the community `cacophony` corpus — all twenty patterns, in both roles, over `{25519, 448} × ChaChaPoly × {BLAKE2b, BLAKE2s, SHA256, SHA512}` — checking every handshake ciphertext, every recovered payload, revealed statics, the final handshake hash, and every transport message. Neither hiss nor `snow` produced these vectors, they are the only cross-implementation check `448` has (snow's own harness skips its `448` vectors), and they pin every `pskN` placement, `psk0`–`psk3`. Provenance and licence chain: `tests/vectors/cacophony/PROVENANCE.md`. |
-| **Wycheproof** | 484 ECDSA and 355 ECDH `secp256r1` vectors from Google's Project Wycheproof, vendored verbatim at a pinned commit and run as library unit tests. Third-party and adversarial: malformed points, edge-case scalars, signature malleability. |
+| **Frozen third-party vectors (`cacophony`)** | 656 tests replay a 320-vector subset of the community `cacophony` corpus — all twenty patterns, in both roles, over `{25519, 448} × {ChaChaPoly, AESGCM} × {BLAKE2b, BLAKE2s, SHA256, SHA512}`, plus the staged `IK` responder read on each of the sixteen suites — checking every handshake ciphertext, every recovered payload, revealed statics, the final handshake hash, and every transport message. Neither hiss nor `snow` produced these vectors, they are the only cross-implementation check `448` has (snow's own harness skips its `448` vectors), they pin every `pskN` placement, `psk0`–`psk3`, and their six-message shape is what pins `AESGCM`'s big-endian nonce, which first differs from a little-endian one at transport message 2 (one-way patterns; message 4 for interactive ones, whose senders alternate). Provenance and licence chain: `tests/vectors/cacophony/PROVENANCE.md`. |
+| **Wycheproof** | 484 ECDSA and 355 ECDH `secp256r1` vectors, and the 66 AES-256-GCM vectors with a 96-bit nonce and 128-bit tag (Noise §12.4's parameters), from Google's Project Wycheproof, vendored verbatim at one pinned commit and run as library unit tests. Third-party and adversarial: malformed points, edge-case scalars, signature malleability, forged tags. |
 | **Negative tests** | 26 tests assert the *failures*. Twenty-one are tamper sweeps — every byte of every handshake message of the eleven patterns swept, plus every byte of a transport record; the rest reject a non-canonical ephemeral, a wrong PSK, a replay, and an out-of-order record, and pin the twenty on-wire message sizes of those eleven. (The sweeps stop at eleven deliberately: every message token list in the other six already appears among them, so extending would re-test identical machinery.) There is deliberately no truncation sweep: a wrong-length message is a compile error, not a runtime rejection, so that case is pinned by a `compile_fail` doctest instead. |
 | **Compile-fail tests** | 12 `trybuild` cases pin the compiler diagnostics for malformed patterns, so "it will not build" stays true *and* keeps saying something useful. Separate `compile_fail` doctests cover the §7.3 pattern guard and the wrong-length message case. |
 | **Coverage floor** | CI fails the build below 80% lines / 75% regions. |

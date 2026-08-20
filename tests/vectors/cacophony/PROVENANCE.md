@@ -19,18 +19,19 @@ agreement-with-`snow`.
   `centromere/cacophony`), file `vectors/cacophony.txt`, last touched by commit
   `18b7348c54fd61fcd0c220298883de0d09c8364d`.
 - **This directory's `cacophony.json` sha256:**
-  `05e607e567f892154e2dfb4373e9bb852e0a4df90a4d8549fe501830c2386ee0`
+  `aeca61ba0b93c6da8db1b9b37274d98ef78009aa8e09b1b56bbef6b9332ad58f`
+  (320 vectors, 651,286 bytes)
 
 ## Filter
 
 The seventeen patterns hiss implements, plus three psk-placement variants,
-× the eight `ChaChaPoly` suites the corpus provides over the two curves hiss
-shares with it — 160 of 944:
+× the sixteen suites the corpus provides over the two curves and the two
+ciphers hiss shares with it — 320 of 944:
 
 ```
 patterns  N K Kpsk0 IKpsk1 IK NK IX XK NN XX X NX XN KN KK KX IN
-          NNpsk0 NNpsk2 XXpsk3                                    (20)
-suites    {25519,448}_ChaChaPoly_{BLAKE2b,BLAKE2s,SHA256,SHA512}   (8)
+          NNpsk0 NNpsk2 XXpsk3                                              (20)
+suites    {25519,448}_{ChaChaPoly,AESGCM}_{BLAKE2b,BLAKE2s,SHA256,SHA512}   (16)
 ```
 
 The second pattern row exists to pin *psk positions*: with `Kpsk0` (psk
@@ -38,17 +39,23 @@ first) and `IKpsk1` (psk ends message 1), every placement a `pskN` modifier
 can name — psk0 through psk3 — has a third-party-pinned representative.
 There is no psk4 row because no fundamental pattern has a fourth message.
 
-Every one of the 160 cells exists upstream; the extractor asserts it selected
-exactly 160 before writing, and its `PATTERNS` array is the single source of
-truth for the filter. The remaining 784 are `AESGCM` suites (hiss ships no
-AES-GCM) or patterns hiss does not implement — an unreplayed vector in a KAT
-directory is a claim with nothing behind it, so they are not vendored.
+The two ciphers are exact mirrors in the corpus: every one of the 320 cells
+exists upstream (twenty patterns per suite, sixteen suites, zero gaps), and
+the extractor asserts it selected exactly 320 before writing. `PATTERNS` and
+`SUITES` in `tests/noise_cacophony.rs` are the single source of truth for the
+filter — shared by the extractor and by the coverage test
+(`every_vendored_suite_is_instantiated`) that checks the vendored file against
+them on every run: every vendored vector must be a cell of the instantiated
+matrix, and every cell must have a vector. The remaining 624 upstream vectors
+are patterns hiss does not implement — an unreplayed vector in a KAT directory
+is a claim with nothing behind it, so they are not vendored.
 
 Upstream order is preserved and every value is re-emitted verbatim; only
 whitespace, key order and the elision of absent optional keys differ, so the
-entries stay `jq`-comparable to the source entry for entry. All 160 are
-replayed by `tests/noise_cacophony.rs`, in **both roles** — 160 initiator and
-160 responder replays, 320 tests.
+entries stay `jq`-comparable to the source entry for entry. All 320 are
+replayed by `tests/noise_cacophony.rs`, in **both roles** — 320 initiator and
+320 responder replays, plus the staged `IK` responder read on each suite:
+656 tests.
 
 ## Refresh
 
@@ -59,7 +66,11 @@ CACOPHONY_SRC=~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/\
   extract_cacophony_subset -- --ignored
 ```
 
-Then update both hashes above.
+Then update both hashes above. A refresh from the same upstream commit is a
+no-op; the 2026-08-20 widening from the 160 `ChaChaPoly` vectors to all 320
+was checked additions-only — each previously vendored entry byte-identical and
+in the same relative order, the `AESGCM` entries interleaved where upstream
+has them.
 
 ## Licence
 
@@ -102,6 +113,15 @@ three to five transport messages in the direction the corpus records them.
 For X448 they are the **only** cross-implementation check that exists: `snow`'s
 default resolver returns `None` for `DHChoice::Curve448`, so `snow`'s own
 harness skips all 472 of its `448` vectors at runtime.
+
+For `AESGCM` they are also what pins the cipher's Noise framing against a
+foreign implementation: the 16-byte tag width, through every compile-time
+message size, and the §12.4 nonce — 32 zero bits then the counter
+**big**-endian. Counter 0 is byte-identical in either byte order, so a
+little-endian nonce agrees with the corpus through the handshake message and
+the first transport message and first diverges at transport message 2 for
+one-way patterns and 4 for interactive ones, whose senders alternate
+(measured); every vector carries six messages, so every replay reaches it.
 
 They do **not** make hiss standards-validated at the handshake level. hiss did
 not audit the Cacophony implementation, and cacophony's generation was not

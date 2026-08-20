@@ -14,8 +14,6 @@
 #   - hiss-interop/: its weekly CI cron runs `cargo update` against its own
 #     lockfile on purpose (interop.yml) — a bot bumping the same lockfile
 #     would duplicate that with more noise and less signal.
-#   - hiss-aesgcm-lab/: pinned to one frozen cryptoxide rev by design; the
-#     pin moving is the crate's *exit condition*, not an update.
 #   - site/: own workspace with a committed lockfile, excluded from the
 #     published crate; it rebuilds only when its own workflow triggers fire
 #     and can trail the root at no cost.

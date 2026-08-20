@@ -1,7 +1,7 @@
 //! Frozen **third-party** Noise known-answer-test (KAT) vectors, from the
 //! `cacophony` corpus.
 //!
-//! `tests/vectors/cacophony/cacophony.json` is a 160-vector subset of a
+//! `tests/vectors/cacophony/cacophony.json` is a 320-vector subset of a
 //! 944-vector community corpus that neither hiss nor `snow` produced —
 //! acquired from the `snow` 0.10.0 crate package and byte-identical to the
 //! copy in the Cacophony Haskell implementation's own repository. See
@@ -24,14 +24,28 @@
 //!
 //! # Shape
 //!
-//! 160 initiator replays and 160 responder replays — every one of the
-//! seventeen patterns hiss implements plus the three psk-placement variants
-//! `NNpsk0`, `NNpsk2` and `XXpsk3`, in **both roles**, over
-//! `{25519, 448} × ChaChaPoly × {BLAKE2b, BLAKE2s, SHA256, SHA512}`, for 320
-//! tests. With `Kpsk0` and `IKpsk1`, every position a `pskN` modifier can
-//! name — psk0 through psk3 — has a third-party-pinned representative;
-//! there is no psk4 to pin, because no fundamental pattern has a fourth
-//! message.
+//! Every one of the seventeen patterns hiss implements plus the three
+//! psk-placement variants `NNpsk0`, `NNpsk2` and `XXpsk3`, in **both
+//! roles**, over the full suite matrix the corpus shares with hiss —
+//! `{25519, 448} × {ChaChaPoly, AESGCM} × {BLAKE2b, BLAKE2s, SHA256, SHA512}`,
+//! sixteen suites: 320 initiator and 320 responder replays, plus the staged
+//! `IK` responder read on each suite. With `Kpsk0` and `IKpsk1`, every
+//! position a `pskN` modifier can name — psk0 through psk3 — has a
+//! third-party-pinned representative; there is no psk4 to pin, because no
+//! fundamental pattern has a fourth message.
+//!
+//! The two ciphers are exact mirrors of one another in the corpus (twenty
+//! patterns × eight suites each, zero gaps — the extractor checks), so one
+//! `cacophony_suite!` serves both and the cipher is just another
+//! substitution. What the AESGCM half adds is not more patterns but a second
+//! AEAD under the same third-party oracle: the tag width pins
+//! `AesGcm::TAG_SIZE` against the corpus rather than against itself, and the
+//! transport replays reach the counters where Noise §12.4's **big**-endian
+//! nonce first differs from §12.3's little-endian one. Counter 0 is twelve
+//! zero bytes either way, so a wrong-endian AESGCM agrees with the corpus
+//! through the handshake and the first transport message and diverges at
+//! transport message 2 (one-way patterns) or 4 (interactive ones, whose
+//! senders alternate); six-message vectors reach both.
 //!
 //! The two roles do not buy the same thing, and the split is worth stating.
 //! The thirteen interactive patterns have a responder-**written** message, so
@@ -78,7 +92,7 @@ use common::ScriptedRng;
 use hiss::curve::x448::SoftwareX448PrivateKey;
 use hiss::curve::x25519::SoftwareX25519PrivateKey;
 use hiss::noise::{
-    Blake2b, Blake2s, ChaChaPoly, Curve, Protocol, Sha256, Sha512, Transport, X448, X25519,
+    AesGcm, Blake2b, Blake2s, ChaChaPoly, Curve, Protocol, Sha256, Sha512, Transport, X448, X25519,
 };
 use hiss::provider::EphemeralOnly;
 use hiss::psk::Psk;
@@ -218,7 +232,7 @@ fn psk(v: &Vector) -> Psk {
 ///
 /// A one-way pattern has no `<-` message, so its responder has no `e` token
 /// and draws no randomness at all — which is why the corpus carries no
-/// `resp_ephemeral` for `N`, `K`, `Kpsk0` or `X` (0 of 8 suites each,
+/// `resp_ephemeral` for `N`, `K`, `Kpsk0` or `X` (0 of 16 suites each,
 /// counted). The empty script turns that absence into a positive assertion:
 /// [`ScriptedRng`] panics the moment anything is drawn, so a change that made
 /// a one-way recipient generate a key fails loudly here instead of silently
@@ -309,58 +323,97 @@ fn check_invariants(v: &Vector) {
     }
 }
 
+// ── The filter, as a single source of truth ──────────────────────
+
+/// The seventeen patterns hiss implements plus the three psk-placement
+/// variants — every pattern `cacophony_suite!` replays, and exactly what the
+/// extractor vendors.
+const PATTERNS: [&str; 20] = [
+    "N", "K", "Kpsk0", "IKpsk1", "IK", "NK", "IX", "XK", "NN", "XX", "X", "NX", "XN", "KN", "KK",
+    "KX", "IN", "NNpsk0", "NNpsk2", "XXpsk3",
+];
+
+/// The sixteen suites the corpus provides over the two curves and two
+/// ciphers hiss shares with it — every `cacophony_suite!` instantiation
+/// below, and exactly what the extractor vendors.
+const SUITES: [&str; 16] = [
+    "25519_ChaChaPoly_BLAKE2b",
+    "25519_ChaChaPoly_BLAKE2s",
+    "25519_ChaChaPoly_SHA256",
+    "25519_ChaChaPoly_SHA512",
+    "448_ChaChaPoly_BLAKE2b",
+    "448_ChaChaPoly_BLAKE2s",
+    "448_ChaChaPoly_SHA256",
+    "448_ChaChaPoly_SHA512",
+    "25519_AESGCM_BLAKE2b",
+    "25519_AESGCM_BLAKE2s",
+    "25519_AESGCM_SHA256",
+    "25519_AESGCM_SHA512",
+    "448_AESGCM_BLAKE2b",
+    "448_AESGCM_BLAKE2s",
+    "448_AESGCM_SHA256",
+    "448_AESGCM_SHA512",
+];
+
 // ── Per-suite replays ────────────────────────────────────────────
 
 /// The twenty patterns and their replays, instantiated once per suite.
 ///
-/// A `macro_rules!` rather than three hundred and twenty hand-written
-/// bodies: the
-/// declarations and the replay logic are hash- and curve-independent, so
-/// writing them once and substituting the suite is the only way the full
-/// cross product costs one line per cell.
+/// A `macro_rules!` rather than six hundred and forty hand-written bodies:
+/// the declarations and the replay logic are cipher-, hash- and
+/// curve-independent, so writing them once and substituting the suite is
+/// the only way the full cross product costs one line per cell. The cipher
+/// is a substitution like the other two because the corpus's two halves are
+/// exact mirrors (twenty patterns × eight suites each) — a second harness
+/// would differ from this one by one identifier.
 ///
-/// `$curve` and `$hash` are `ident` fragments, not `ty`: a `ty` fragment
-/// substitutes as an opaque `None`-delimited group, which `hiss-macros`'
-/// `syn::Path` parse of the suite would reject. `$sk` is a `ty` because it is
-/// only ever used in expression position.
+/// `$curve`, `$cipher` and `$hash` are `ident` fragments, not `ty`: a `ty`
+/// fragment substitutes as an opaque `None`-delimited group, which
+/// `hiss-macros`' `syn::Path` parse of the suite would reject. `$sk` is a
+/// `ty` because it is only ever used in expression position.
 ///
 /// The generated types are module-local, so the pattern identifiers stay
 /// `N`/`XX`/… — which they must, since the identifier *is* `Pattern::NAME`
 /// and reaches the protocol name that is mixed into the initial handshake
 /// hash.
 macro_rules! cacophony_suite {
-    ($module:ident, $curve:ident, $sk:ty, $hash:ident, $suite:literal) => {
+    ($module:ident, $curve:ident, $sk:ty, $cipher:ident, $hash:ident, $suite:literal) => {
         pub mod $module {
             use super::*;
+
+            /// This module's suite, so `every_vendored_suite_is_instantiated`
+            /// fails to **compile** if the `cacophony_suite!` invocation that
+            /// creates this module is ever removed.
+            pub const SUITE: &str = $suite;
 
             // Every handshake message carries a payload, because every
             // cacophony message does; the lengths are fixed by message index
             // across the whole corpus (16, 15, 11).
-            hiss::noise! { pub N<$curve, ChaChaPoly, $hash>      { <- s ... -> e, es [16] } }
-            hiss::noise! { pub K<$curve, ChaChaPoly, $hash>      { -> s <- s ... -> e, es, ss [16] } }
-            hiss::noise! { pub Kpsk0<$curve, ChaChaPoly, $hash>  { -> s <- s ... -> psk, e, es, ss [16] } }
-            hiss::noise! { pub IKpsk1<$curve, ChaChaPoly, $hash> { <- s ... -> e, es, s, ss, psk [16] <- e, ee, se [15] } }
-            hiss::noise! { pub IK<$curve, ChaChaPoly, $hash>     { <- s ... -> e, es, s, ss [16] <- e, ee, se [15] } }
-            hiss::noise! { pub NK<$curve, ChaChaPoly, $hash>     { <- s ... -> e, es [16] <- e, ee [15] } }
-            hiss::noise! { pub IX<$curve, ChaChaPoly, $hash>     { -> e, s [16] <- e, ee, se, s, es [15] } }
-            hiss::noise! { pub XK<$curve, ChaChaPoly, $hash>     { <- s ... -> e, es [16] <- e, ee [15] -> s, se [11] } }
-            hiss::noise! { pub NN<$curve, ChaChaPoly, $hash>     { -> e [16] <- e, ee [15] } }
-            hiss::noise! { pub XX<$curve, ChaChaPoly, $hash>     { -> e [16] <- e, ee, s, es [15] -> s, se [11] } }
-            hiss::noise! { pub X<$curve, ChaChaPoly, $hash>      { <- s ... -> e, es, s, ss [16] } }
-            hiss::noise! { pub NX<$curve, ChaChaPoly, $hash>     { -> e [16] <- e, ee, s, es [15] } }
-            hiss::noise! { pub XN<$curve, ChaChaPoly, $hash>     { -> e [16] <- e, ee [15] -> s, se [11] } }
-            hiss::noise! { pub KN<$curve, ChaChaPoly, $hash>     { -> s ... -> e [16] <- e, ee, se [15] } }
-            hiss::noise! { pub KK<$curve, ChaChaPoly, $hash>     { -> s <- s ... -> e, es, ss [16] <- e, ee, se [15] } }
-            hiss::noise! { pub KX<$curve, ChaChaPoly, $hash>     { -> s ... -> e [16] <- e, ee, se, s, es [15] } }
-            hiss::noise! { pub IN<$curve, ChaChaPoly, $hash>     { -> e, s [16] <- e, ee, se [15] } }
+            hiss::noise! { pub N<$curve, $cipher, $hash>      { <- s ... -> e, es [16] } }
+            hiss::noise! { pub K<$curve, $cipher, $hash>      { -> s <- s ... -> e, es, ss [16] } }
+            hiss::noise! { pub Kpsk0<$curve, $cipher, $hash>  { -> s <- s ... -> psk, e, es, ss [16] } }
+            hiss::noise! { pub IKpsk1<$curve, $cipher, $hash> { <- s ... -> e, es, s, ss, psk [16] <- e, ee, se [15] } }
+            hiss::noise! { pub IK<$curve, $cipher, $hash>     { <- s ... -> e, es, s, ss [16] <- e, ee, se [15] } }
+            hiss::noise! { pub NK<$curve, $cipher, $hash>     { <- s ... -> e, es [16] <- e, ee [15] } }
+            hiss::noise! { pub IX<$curve, $cipher, $hash>     { -> e, s [16] <- e, ee, se, s, es [15] } }
+            hiss::noise! { pub XK<$curve, $cipher, $hash>     { <- s ... -> e, es [16] <- e, ee [15] -> s, se [11] } }
+            hiss::noise! { pub NN<$curve, $cipher, $hash>     { -> e [16] <- e, ee [15] } }
+            hiss::noise! { pub XX<$curve, $cipher, $hash>     { -> e [16] <- e, ee, s, es [15] -> s, se [11] } }
+            hiss::noise! { pub X<$curve, $cipher, $hash>      { <- s ... -> e, es, s, ss [16] } }
+            hiss::noise! { pub NX<$curve, $cipher, $hash>     { -> e [16] <- e, ee, s, es [15] } }
+            hiss::noise! { pub XN<$curve, $cipher, $hash>     { -> e [16] <- e, ee [15] -> s, se [11] } }
+            hiss::noise! { pub KN<$curve, $cipher, $hash>     { -> s ... -> e [16] <- e, ee, se [15] } }
+            hiss::noise! { pub KK<$curve, $cipher, $hash>     { -> s <- s ... -> e, es, ss [16] <- e, ee, se [15] } }
+            hiss::noise! { pub KX<$curve, $cipher, $hash>     { -> s ... -> e [16] <- e, ee, se, s, es [15] } }
+            hiss::noise! { pub IN<$curve, $cipher, $hash>     { -> e, s [16] <- e, ee, se [15] } }
             // The three psk-placement variants: together with `Kpsk0` (psk
             // first) and `IKpsk1` (psk ends message 1) above, every position
             // a `pskN` modifier can name — psk0 through psk3 — has a
             // third-party-pinned representative. There is no psk4 to pin: no
             // fundamental pattern has a fourth message.
-            hiss::noise! { pub NNpsk0<$curve, ChaChaPoly, $hash> { -> psk, e [16] <- e, ee [15] } }
-            hiss::noise! { pub NNpsk2<$curve, ChaChaPoly, $hash> { -> e [16] <- e, ee, psk [15] } }
-            hiss::noise! { pub XXpsk3<$curve, ChaChaPoly, $hash> { -> e [16] <- e, ee, s, es [15] -> s, se, psk [11] } }
+            hiss::noise! { pub NNpsk0<$curve, $cipher, $hash> { -> psk, e [16] <- e, ee [15] } }
+            hiss::noise! { pub NNpsk2<$curve, $cipher, $hash> { -> e [16] <- e, ee, psk [15] } }
+            hiss::noise! { pub XXpsk3<$curve, $cipher, $hash> { -> e [16] <- e, ee, s, es [15] -> s, se, psk [11] } }
 
             /// A recorded private scalar, verbatim.
             ///
@@ -1738,61 +1791,219 @@ macro_rules! cacophony_suite {
 }
 
 cacophony_suite!(
-    x25519_blake2b,
+    x25519_chachapoly_blake2b,
     X25519,
     SoftwareX25519PrivateKey,
+    ChaChaPoly,
     Blake2b,
     "25519_ChaChaPoly_BLAKE2b"
 );
 cacophony_suite!(
-    x25519_blake2s,
+    x25519_chachapoly_blake2s,
     X25519,
     SoftwareX25519PrivateKey,
+    ChaChaPoly,
     Blake2s,
     "25519_ChaChaPoly_BLAKE2s"
 );
 cacophony_suite!(
-    x25519_sha256,
+    x25519_chachapoly_sha256,
     X25519,
     SoftwareX25519PrivateKey,
+    ChaChaPoly,
     Sha256,
     "25519_ChaChaPoly_SHA256"
 );
 cacophony_suite!(
-    x25519_sha512,
+    x25519_chachapoly_sha512,
     X25519,
     SoftwareX25519PrivateKey,
+    ChaChaPoly,
     Sha512,
     "25519_ChaChaPoly_SHA512"
 );
 cacophony_suite!(
-    x448_blake2b,
+    x448_chachapoly_blake2b,
     X448,
     SoftwareX448PrivateKey,
+    ChaChaPoly,
     Blake2b,
     "448_ChaChaPoly_BLAKE2b"
 );
 cacophony_suite!(
-    x448_blake2s,
+    x448_chachapoly_blake2s,
     X448,
     SoftwareX448PrivateKey,
+    ChaChaPoly,
     Blake2s,
     "448_ChaChaPoly_BLAKE2s"
 );
 cacophony_suite!(
-    x448_sha256,
+    x448_chachapoly_sha256,
     X448,
     SoftwareX448PrivateKey,
+    ChaChaPoly,
     Sha256,
     "448_ChaChaPoly_SHA256"
 );
 cacophony_suite!(
-    x448_sha512,
+    x448_chachapoly_sha512,
     X448,
     SoftwareX448PrivateKey,
+    ChaChaPoly,
     Sha512,
     "448_ChaChaPoly_SHA512"
 );
+cacophony_suite!(
+    x25519_aesgcm_blake2b,
+    X25519,
+    SoftwareX25519PrivateKey,
+    AesGcm,
+    Blake2b,
+    "25519_AESGCM_BLAKE2b"
+);
+cacophony_suite!(
+    x25519_aesgcm_blake2s,
+    X25519,
+    SoftwareX25519PrivateKey,
+    AesGcm,
+    Blake2s,
+    "25519_AESGCM_BLAKE2s"
+);
+cacophony_suite!(
+    x25519_aesgcm_sha256,
+    X25519,
+    SoftwareX25519PrivateKey,
+    AesGcm,
+    Sha256,
+    "25519_AESGCM_SHA256"
+);
+cacophony_suite!(
+    x25519_aesgcm_sha512,
+    X25519,
+    SoftwareX25519PrivateKey,
+    AesGcm,
+    Sha512,
+    "25519_AESGCM_SHA512"
+);
+cacophony_suite!(
+    x448_aesgcm_blake2b,
+    X448,
+    SoftwareX448PrivateKey,
+    AesGcm,
+    Blake2b,
+    "448_AESGCM_BLAKE2b"
+);
+cacophony_suite!(
+    x448_aesgcm_blake2s,
+    X448,
+    SoftwareX448PrivateKey,
+    AesGcm,
+    Blake2s,
+    "448_AESGCM_BLAKE2s"
+);
+cacophony_suite!(
+    x448_aesgcm_sha256,
+    X448,
+    SoftwareX448PrivateKey,
+    AesGcm,
+    Sha256,
+    "448_AESGCM_SHA256"
+);
+cacophony_suite!(
+    x448_aesgcm_sha512,
+    X448,
+    SoftwareX448PrivateKey,
+    AesGcm,
+    Sha512,
+    "448_AESGCM_SHA512"
+);
+
+// ── Coverage ─────────────────────────────────────────────────────
+
+/// Every suite the extractor vendors is instantiated above, and every vector
+/// it vendors is replayed — sixteen suites × forty-one replays, not some
+/// quietly smaller number.
+///
+/// The teeth are in the array: each element names a suite module's `SUITE`
+/// constant, so **deleting a `cacophony_suite!` invocation stops this file
+/// compiling** rather than dropping forty-one tests from a green run. The
+/// comparison against [`SUITES`] catches the opposite mistake — a suite added
+/// to the filter (and so to the vendored corpus) but never instantiated here,
+/// which would leave twenty vectors in the KAT directory with nothing
+/// replaying them. The last loop closes the remaining gap: a vendored vector
+/// whose suite is instantiated but whose pattern is not would still be
+/// unreplayed, so every vendored protocol name must be a cell of the
+/// instantiated matrix, and the count must be the full product.
+///
+/// What it does *not* catch: deleting an individual `#[test] fn cacophony_*`
+/// body from inside the macro. The backstop for that is the run's own
+/// reported test count.
+#[test]
+fn every_vendored_suite_is_instantiated() {
+    let instantiated = [
+        x25519_chachapoly_blake2b::SUITE,
+        x25519_chachapoly_blake2s::SUITE,
+        x25519_chachapoly_sha256::SUITE,
+        x25519_chachapoly_sha512::SUITE,
+        x448_chachapoly_blake2b::SUITE,
+        x448_chachapoly_blake2s::SUITE,
+        x448_chachapoly_sha256::SUITE,
+        x448_chachapoly_sha512::SUITE,
+        x25519_aesgcm_blake2b::SUITE,
+        x25519_aesgcm_blake2s::SUITE,
+        x25519_aesgcm_sha256::SUITE,
+        x25519_aesgcm_sha512::SUITE,
+        x448_aesgcm_blake2b::SUITE,
+        x448_aesgcm_blake2s::SUITE,
+        x448_aesgcm_sha256::SUITE,
+        x448_aesgcm_sha512::SUITE,
+    ];
+
+    let mut got = instantiated.to_vec();
+    got.sort_unstable();
+    let mut want = SUITES.to_vec();
+    want.sort_unstable();
+    assert_eq!(
+        got, want,
+        "instantiated suites must equal the extractor's filter"
+    );
+
+    // The corpus is exactly the instantiated matrix: no vendored vector
+    // without a replay, no replay without a vector.
+    let file = load();
+    assert_eq!(
+        file.vectors.len(),
+        PATTERNS.len() * SUITES.len(),
+        "vendored vector count must be the full pattern × suite product"
+    );
+    for v in &file.vectors {
+        let (pattern, suite) = v
+            .protocol_name
+            .strip_prefix("Noise_")
+            .and_then(|rest| rest.split_once('_'))
+            .unwrap_or_else(|| panic!("{}: not Noise_<pattern>_<suite>", v.protocol_name));
+        assert!(
+            PATTERNS.contains(&pattern),
+            "{}: vendored but its pattern is not replayed",
+            v.protocol_name
+        );
+        assert!(
+            instantiated.contains(&suite),
+            "{}: vendored but its suite is not instantiated",
+            v.protocol_name
+        );
+    }
+    for suite in instantiated {
+        for pattern in PATTERNS {
+            let name = format!("Noise_{pattern}_{suite}");
+            assert!(
+                file.vectors.iter().any(|v| v.protocol_name == name),
+                "no vendored vector for {name}"
+            );
+        }
+    }
+}
 
 // ── Extractor (reproduces the vendored subset) ───────────────────
 
@@ -1811,21 +2022,6 @@ cacophony_suite!(
 #[cfg(test)]
 mod extract {
     use super::*;
-
-    const PATTERNS: [&str; 20] = [
-        "N", "K", "Kpsk0", "IKpsk1", "IK", "NK", "IX", "XK", "NN", "XX", "X", "NX", "XN", "KN",
-        "KK", "KX", "IN", "NNpsk0", "NNpsk2", "XXpsk3",
-    ];
-    const SUITES: [&str; 8] = [
-        "25519_ChaChaPoly_BLAKE2b",
-        "25519_ChaChaPoly_BLAKE2s",
-        "25519_ChaChaPoly_SHA256",
-        "25519_ChaChaPoly_SHA512",
-        "448_ChaChaPoly_BLAKE2b",
-        "448_ChaChaPoly_BLAKE2s",
-        "448_ChaChaPoly_SHA256",
-        "448_ChaChaPoly_SHA512",
-    ];
 
     #[test]
     #[ignore = "regenerates the vendored corpus from an upstream cacophony.txt"]
@@ -1847,7 +2043,7 @@ mod extract {
         assert_eq!(
             file.vectors.len(),
             wanted.len(),
-            "expected 20 patterns × 8 ChaChaPoly suites"
+            "expected 20 patterns × 16 suites"
         );
         for v in &file.vectors {
             check_invariants(v);

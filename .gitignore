@@ -7,13 +7,8 @@ target/
 Cargo.lock
 # The out-of-workspace crates are the opposite case — unpublished, no consumers
 # to resolve them, and `hiss-interop`'s comparison benchmark is only comparable
-# across time if snow's version holds still. `demo/Cargo.lock` is tracked for
-# the same reason; the scheduled Interop run does `cargo update` first so the
-# pin never hides an upstream release.
+# across time if snow's version holds still; the scheduled Interop run does
+# `cargo update` first so the pin never hides an upstream release.
+# (`site/Cargo.lock` is tracked for the same reason — force-added, so it needs
+# no negation here.)
 !hiss-interop/Cargo.lock
-# `hiss-aesgcm-lab` has the strongest claim of the three: it exists to test one
-# frozen upstream cryptoxide commit, and a `rev`-pinned git dependency without
-# a committed lock re-resolves its transitive graph freely. Its scheduled run
-# deliberately does NOT `cargo update` — that would defeat the pin, which is
-# the whole point of the crate.
-!hiss-aesgcm-lab/Cargo.lock

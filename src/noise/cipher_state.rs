@@ -23,11 +23,17 @@ pub(crate) const MAX_MESSAGE_LEN: usize = 65535;
 /// An "empty" CipherState (no key) passes data through in plaintext,
 /// as required by the Noise specification for pre-keyed messages.
 pub struct CipherState<Ci: Cipher> {
-    /// `k` in the Noise spec. `None` means plaintext mode.
-    k: Option<[u8; 32]>,
+    /// `k` in the Noise spec — the cipher's **expanded** key, built once by
+    /// [`Cipher::key`] and reused for every message under it. `None` means
+    /// plaintext mode. Dropping it is what scrubs it (see [`Cipher::Key`]).
+    k: Option<Ci::Key>,
     /// `n` in the Noise spec — 64-bit message counter.
     n: u64,
-    _cipher: PhantomData<Ci>,
+    /// `fn() -> Ci`, not `Ci`: the marker must not be able to strip an auto
+    /// trait (`Send`, `Sync`, `UnwindSafe`) from a session that a
+    /// [`Cipher::Key`] — which is `Send + Sync + 'static` by the trait —
+    /// would otherwise keep.
+    _cipher: PhantomData<fn() -> Ci>,
 }
 
 impl<Ci: Cipher> CipherState<Ci> {
@@ -41,12 +47,18 @@ impl<Ci: Cipher> CipherState<Ci> {
     }
 
     /// Create a CipherState with the given key.
-    pub(crate) fn from_key(key: [u8; 32]) -> Self {
-        Self {
-            k: Some(key),
+    ///
+    /// Runs the cipher's key schedule ([`Cipher::key`]) once, here, and
+    /// zeroises the caller's 32 raw bytes before returning — so the scrub is
+    /// this constructor's, not something each call site has to remember.
+    pub(crate) fn from_key(mut key: [u8; 32]) -> Self {
+        let state = Self {
+            k: Some(Ci::key(&key)),
             n: 0,
             _cipher: PhantomData,
-        }
+        };
+        zeroize_array(&mut key);
+        state
     }
 
     /// Returns `true` if a key has been established.
@@ -145,14 +157,10 @@ impl<Ci: Cipher> CipherState<Ci> {
     /// Returns `Err` if this CipherState has no key.
     pub fn rekey(&mut self) -> Result<(), HandshakeError> {
         let key = self.k.as_ref().ok_or(HandshakeError::RekeyWithoutKey)?;
-        let mut new_key = rekey_key::<Ci>(key)?;
-
-        // Zero the old key and install the new one.
-        if let Some(ref mut old) = self.k {
-            zeroize_array(old);
-        }
+        let new_key = rekey_key::<Ci>(key)?;
+        // Installing the new key drops the old one, and a `Cipher::Key`
+        // scrubs itself on drop — there is no raw copy left to wipe by hand.
         self.k = Some(new_key);
-        zeroize_array(&mut new_key);
         Ok(())
     }
 
@@ -166,15 +174,29 @@ impl<Ci: Cipher> CipherState<Ci> {
         self.n
     }
 
-    /// A copy of this state's key, or `None` in plaintext mode.
+    /// Take this state's expanded key, leaving it unkeyed, or `None` if it
+    /// already was.
     ///
     /// Crate-internal: the datagram receive half (see
-    /// [`DatagramRecv`](super::datagram::DatagramRecv)) reads it exactly
+    /// [`DatagramRecv`](super::datagram::DatagramRecv)) calls it exactly
     /// once, at construction, to seed the epoch-0 key of its ratchet. The
-    /// source [`CipherState`] is dropped straight afterwards, scrubbing its
-    /// own copy, so no residue outlives the hand-off.
-    pub(crate) fn key(&self) -> Option<[u8; 32]> {
-        self.k
+    /// key travels to the ratchet and this state is left in plaintext mode,
+    /// so only one *live* key exists afterwards.
+    ///
+    /// **The moved-from slot is not scrubbed**, and that is move semantics
+    /// rather than anything the optimiser did: moving a value copies its
+    /// bytes and does not erase the source. So after the `take` the payload
+    /// of `k` still holds the 32 key bytes, and this state's `Drop` will not
+    /// wipe them — the field drop glue that does the wiping sees `None`.
+    /// There is no clean fix at this level: zeroing the source would mean
+    /// writing over a live `None`, whose encoding is all-zero only for a
+    /// niche-free `Ci::Key`, so it is not something a generic `take` may
+    /// assume. In practice the residue is dead stack of the one caller,
+    /// [`into_datagram_with_epoch`](super::transport::Transport::into_datagram_with_epoch),
+    /// the same class as every other move of a key-bearing value;
+    /// SECURITY.md's "Honest limits" records it.
+    pub(crate) fn take_key(&mut self) -> Option<Ci::Key> {
+        self.k.take()
     }
 
     /// Decrypt `ciphertext` with associated data `ad`, writing
@@ -288,10 +310,11 @@ impl<Ci: Cipher> CipherState<Ci> {
 /// sequence of epoch keys. It advances no counter and touches no
 /// [`CipherState`]; the caller owns the returned key.
 ///
-/// The 48-byte AEAD scratch (32 key bytes + 16 tag) is zeroised before
-/// return, so no derived-key residue is left on the stack frame. The
-/// returned key is the live value and is the caller's to scrub.
-pub(crate) fn rekey_key<Ci: Cipher>(key: &[u8; 32]) -> Result<[u8; 32], HandshakeError> {
+/// The 48-byte AEAD scratch (32 key bytes + 16 tag) and the raw 32-byte
+/// intermediate are zeroised before return, so no derived-key residue is
+/// left on the stack frame. The returned [`Cipher::Key`] is the live value
+/// and scrubs itself when the caller drops it.
+pub(crate) fn rekey_key<Ci: Cipher>(key: &Ci::Key) -> Result<Ci::Key, HandshakeError> {
     const {
         assert!(
             Ci::TAG_SIZE <= 16,
@@ -306,17 +329,28 @@ pub(crate) fn rekey_key<Ci: Cipher>(key: &[u8; 32]) -> Result<[u8; 32], Handshak
 
     let mut new_key = [0u8; 32];
     new_key.copy_from_slice(&output[..32]);
+    let expanded = Ci::key(&new_key);
 
-    // Scrub the scratch, which holds a copy of the new key alongside the tag.
+    // Scrub the scratch, which holds a copy of the new key alongside the tag,
+    // and the raw copy the schedule was run over. The returned `Ci::Key` is
+    // the live value and scrubs itself when the caller drops it.
+    zeroize_array(&mut new_key);
     zeroize_array(&mut output);
-    Ok(new_key)
+    Ok(expanded)
 }
 
 impl<Ci: Cipher> Drop for CipherState<Ci> {
     fn drop(&mut self) {
-        if let Some(ref mut key) = self.k {
-            zeroize_array(key);
-        }
+        // The key is wiped by the field drop glue that runs after this body —
+        // the `Cipher::Key` contract — and deliberately **not** by an
+        // `self.k = None` here. That assignment looks equivalent and is
+        // worse: it drops the old key (wiping it) and then copies a whole
+        // `Option<Ci::Key>` temporary over the field, and in a debug build
+        // that temporary's payload bytes are uninitialised stack. Observed
+        // in a probe: eight bytes of the just-wiped key came back, because
+        // the temporary landed on the key's own dead stack image. Leaving
+        // the wipe to the glue is deterministic in every profile;
+        // `cipher_state_scrubs_key_on_drop` pins it.
         self.n = 0;
     }
 }
@@ -392,5 +426,121 @@ mod tests {
         let mut out = [0u8; 4];
         assert_eq!(cs.encrypt_with_ad(&[], b"four", &mut out).unwrap(), 4);
         assert_eq!(&out, b"four");
+    }
+
+    /// `ChaChaPoly` pays nothing in space for the expanded-key trait shape.
+    ///
+    /// 48 bytes is what this state was when `k` was a raw `[u8; 32]`, and
+    /// `Option<ChaChaPolyKey>` is the same 33 bytes padded to 40, plus the
+    /// `u64` counter. The pin is here because the *other* cipher does pay:
+    /// `CipherState<AesGcm>` is 528 bytes on `aarch64` and 992 on the
+    /// portable path, so "which ciphers cost what" should not be something a
+    /// refactor can move quietly.
+    #[test]
+    fn chachapoly_state_size_unchanged() {
+        assert_eq!(
+            size_of::<CipherState<ChaChaPoly>>(),
+            48,
+            "the ChaChaPoly cipher state must stay 48 bytes"
+        );
+    }
+
+    /// A keyed [`CipherState`] leaves no copy of its key behind when it
+    /// drops. The state does not scrub key bytes itself — it owns a
+    /// [`Cipher::Key`] and lets dropping that do the work — so this pins the
+    /// outcome end to end.
+    ///
+    /// The probe builds the state inside a `MaybeUninit`, drops it in place,
+    /// and reads the bytes back. It looks at **only** the `k` field —
+    /// `size_of::<Option<ChaChaPolyKey>>()` bytes, every one of which
+    /// `from_key` initialises (the `Some` discriminant plus the 32 key
+    /// bytes) — and not the whole 48-byte state, whose seven padding bytes
+    /// between `k` and `n` are uninitialised and must not be read as `u8`.
+    ///
+    /// It is also what caught the `self.k = None` that used to open
+    /// [`Drop`](CipherState::drop): see that impl for why the assignment
+    /// un-scrubbed the key in a debug build.
+    ///
+    /// Like the two `Cipher::Key` probes in `cipher::tests`, this pins the
+    /// **contract**, not the volatile pass: reading the storage back is
+    /// itself a use of those bytes, so it keeps even ordinary, elidable
+    /// zeroing stores alive — in every profile, not just debug. The evidence
+    /// that hiss's wipe survives optimisation is the disassembly; what this
+    /// test catches is a key that stops scrubbing at all.
+    #[test]
+    fn cipher_state_scrubs_key_on_drop() {
+        use crate::noise::cipher::ChaChaPolyKey;
+        use core::mem::MaybeUninit;
+
+        const PATTERN: [u8; 32] = [0xA5; 32];
+
+        /// The bytes of the `k` field, read back volatile.
+        ///
+        /// # Safety
+        ///
+        /// `slot`'s storage must have been initialised by `from_key` and
+        /// only written to since, so that every byte of `k` is initialised.
+        unsafe fn key_bytes(slot: &mut MaybeUninit<CipherState<ChaChaPoly>>) -> Vec<u8> {
+            // SAFETY: the storage holds a `CipherState<ChaChaPoly>` place, so
+            // projecting to its `k` field is in bounds; `&raw mut` takes the
+            // address without forming a reference or reading anything.
+            let k = unsafe { (&raw mut (*slot.as_mut_ptr()).k).cast::<u8>() };
+            (0..size_of::<Option<ChaChaPolyKey>>())
+                // SAFETY: `from_key` writes every byte of `k` — the `Some`
+                // discriminant and all 32 key bytes — and nothing since has
+                // deinitialised them, so each byte is initialised and within
+                // the field. Volatile, so the reads cannot be folded against
+                // the stores the destructor made.
+                .map(|i| unsafe { k.add(i).read_volatile() })
+                .collect()
+        }
+
+        let mut slot = MaybeUninit::new(CipherState::<ChaChaPoly>::from_key(PATTERN));
+
+        // SAFETY: `slot` was initialised by `from_key` on the line above.
+        let before = unsafe { key_bytes(&mut slot) };
+        assert!(
+            before.windows(PATTERN.len()).any(|w| w == PATTERN),
+            "the probe must see the live key first"
+        );
+
+        // SAFETY: initialised above and dropped exactly once, here; nothing
+        // reads it as a `CipherState` afterwards.
+        unsafe { slot.assume_init_drop() };
+
+        // SAFETY: the storage is still ours and still allocated, and the drop
+        // wrote every payload byte of `k` in place (`ChaChaPolyKey::drop`),
+        // so the field is still initialised throughout.
+        let after = unsafe { key_bytes(&mut slot) };
+        assert!(
+            !after.contains(&PATTERN[0]),
+            "no byte of the key may survive the drop, got {after:02x?}"
+        );
+        // The `Option` discriminant is the one byte drop glue does not
+        // rewrite, which is why this is "no key byte survives" rather than
+        // "all 33 bytes are zero" — and why it is `<= 1`, not `== 1`: a
+        // niche-optimised `Option` for some other `Cipher::Key` would have no
+        // discriminant byte at all.
+        assert!(
+            after.iter().filter(|&&b| b != 0).count() <= 1,
+            "only the Option discriminant may remain, got {after:02x?}"
+        );
+    }
+
+    /// `take_key` moves the key out and leaves plaintext mode behind — the
+    /// hand-off the datagram ratchet is built on. A second call finds
+    /// nothing, and the emptied state really does pass bytes through.
+    #[test]
+    fn take_key_leaves_state_unkeyed() {
+        let mut cs = Cs::from_key([0x11u8; 32]);
+        assert!(cs.has_key());
+
+        assert!(cs.take_key().is_some(), "a keyed state hands its key over");
+        assert!(!cs.has_key(), "and is left unkeyed");
+        assert!(cs.take_key().is_none(), "a second take finds nothing");
+
+        let mut out = [0u8; 4];
+        assert_eq!(cs.encrypt_with_ad(&[], b"four", &mut out).unwrap(), 4);
+        assert_eq!(&out, b"four", "the emptied state is in plaintext mode");
     }
 }

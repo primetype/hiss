@@ -49,10 +49,10 @@ Noise matrix. The security claims below apply only to this surface:
 
 | Component | Supported |
 |-----------|-----------|
-| Handshake patterns | `N`, `K`, `Kpsk0`, `IKpsk1`, `IK`, `NK`, `IX`, `XK`, `NN`, `XX`, `X`, `NX`, `XN`, `KN`, `KK`, `KX`, `IN` — **all fifteen** of the specification's fundamental patterns plus two PSK variants |
+| Handshake patterns | `N`, `K`, `Kpsk0`, `IKpsk1`, `IK`, `NK`, `IX`, `XK`, `NN`, `XX`, `X`, `NX`, `XN`, `KN`, `KK`, `KX`, `IN`, `NNpsk0`, `NNpsk2`, `XXpsk3` — **all fifteen** of the specification's fundamental patterns plus five PSK variants, one for every position a `pskN` modifier can name |
 | Noise DH curves | NIST **P-256** (the Noise DH curve), **X25519** (the Noise `25519` curve, Curve25519 / RFC 7748), and **X448** (the Noise `448` curve, RFC 7748) |
 | Signing curve | **Ed25519** (standalone signing; not a Noise DH curve — and as of this release not a `DhCurve` at all, so the type system enforces it) |
-| AEAD cipher | **ChaCha20-Poly1305** |
+| AEAD cipher | **ChaCha20-Poly1305** and **AES-256-GCM** — the Noise specification's two (§12.3 `ChaChaPoly`, §12.4 `AESGCM`) |
 | Hash | **BLAKE2b-512**, **SHA-512**, **SHA-256**, **BLAKE2s** — the Noise specification's four (§12.5 SHA256, §12.6 SHA512, §12.7 BLAKE2s, §12.8 BLAKE2b) |
 | Backends | **Software** (default, all platforms incl. WASM) and **Apple Secure Enclave** (macOS/iOS, opt-in) |
 
@@ -322,11 +322,12 @@ in-tree tests:
 |-------|---------------|-----------------|
 | Wycheproof ECDSA (secp256r1, SHA-256) | **484** vectors | Project Wycheproof, DER/ASN.1; every vector decoded and verified |
 | Wycheproof ECDH (secp256r1) | **355** vectors | Project Wycheproof, `ecpoint` encoding |
+| Wycheproof AES-GCM (AES-256, 96-bit nonce, 128-bit tag) | **66** vectors (39 valid, 27 invalid) | Project Wycheproof `aes_gcm_test.json`, the subset matching Noise §12.4's parameters, run against the primitive; ciphertext **and** tag pinned on every valid vector, every invalid one rejected. No truncated-tag vectors exist at the pin — truncation and single-bit tag flips are covered by bespoke tests in `src/noise/cipher.rs` |
 | RFC 6979 deterministic ECDSA | Appendix A.2.5 (P-256/SHA-256) KAT | RFC 6979; raw `(r, s)` pinned for `"sample"` and `"test"` |
 | NIST ECC CDH | P-256 `Count=0` | NIST CAVP ECDH vector |
 | Noise handshake KATs (**P-256 / BLAKE2b**) | all **seventeen** patterns | frozen, replayed byte-for-byte (handshake ciphertexts + handshake hash + transport) |
 | Noise handshake KATs (**P-256 / SHA-256**) | patterns `N` / `IKpsk1` / `XX` | frozen, replayed byte-for-byte |
-| Noise handshake KATs, **third-party** (`cacophony`) | 17 patterns × {`25519`, `448`} × ChaChaPoly × {BLAKE2b, BLAKE2s, SHA256, SHA512} — **136** vectors | frozen, replayed byte-for-byte (handshake ciphertexts + recovered payloads + revealed statics + handshake hash + every transport message); **every pattern additionally replayed in the responder role** on all eight suites — 136 initiator + 136 responder = **272** tests. The thirteen interactive patterns pin responder-written bytes; the four one-way patterns have no responder write, so theirs pin the recipient read path and its transport receives. See `tests/vectors/cacophony/PROVENANCE.md` |
+| Noise handshake KATs, **third-party** (`cacophony`) | 20 patterns (the seventeen shipped plus `NNpsk0`/`NNpsk2`/`XXpsk3`) × {`25519`, `448`} × {ChaChaPoly, AESGCM} × {BLAKE2b, BLAKE2s, SHA256, SHA512} — **320** vectors | frozen, replayed byte-for-byte (handshake ciphertexts + recovered payloads + revealed statics + handshake hash + every transport message); **every pattern additionally replayed in the responder role** on all sixteen suites — 320 initiator + 320 responder replays, plus the staged `IK` responder read per suite = **656** tests. The thirteen interactive patterns pin responder-written bytes; the four one-way patterns have no responder write, so theirs pin the recipient read path and its transport receives. For `AESGCM` the transport replays are what pin the §12.4 big-endian nonce, which first differs from a little-endian one at transport message 2 (one-way patterns; message 4 for interactive ones, whose senders alternate). See `tests/vectors/cacophony/PROVENANCE.md` |
 | FIPS 180-4 SHA-256 digests | `""`, `"abc"`, the 448-bit message | NIST, pinned as hex |
 | RFC 4231 HMAC-SHA-256 | cases 1, 2, 3, 6 | RFC 4231 §4, pinned as hex |
 | FIPS 180-4 SHA-512 digests | `""`, `"abc"`, the 896-bit message | NIST, pinned as hex |
@@ -334,6 +335,7 @@ in-tree tests:
 | RFC 7693 BLAKE2s digest | `"abc"` | RFC 7693 Appendix B, pinned as hex |
 | HMAC-BLAKE2s | RFC 4231 inputs 1, 2, 3, 6 | **not** standards-body vectors — none exist for HMAC-BLAKE2; cross-generated and agreed by two implementations independent of `cryptoxide` |
 | Noise interop, **X25519** | patterns `N` / `IK` / `XX` | byte-for-byte agreement with `snow`, live (unfrozen). Runs in **`hiss-interop`** — a weekly cron plus `workflow_dispatch` — **not** under `cargo test` and not a release gate |
+| Noise interop, **X25519 × AESGCM** | patterns `N` / `NN` / `XX` / `IK` / `Kpsk0` × all four hashes × both role assignments | byte-for-byte agreement with `snow`'s RustCrypto AES-GCM, live (unfrozen), four transport messages per direction so the nonce counter passes 0 in every pattern shape. Same `hiss-interop` schedule — not a release gate |
 | Noise round-trip, **X448** | pattern `XX` | hiss↔hiss self round-trip; `snow` has no `448` resolver, so no live interop is possible |
 | Negative / boundary sweeps | per-pattern, deterministic | every-byte tamper, every-prefix truncation, over-length, ciphertext bit-flip, replay, out-of-order, wrong-PSK → all rejected |
 
@@ -353,8 +355,8 @@ first, so the tests are non-vacuous).
 > `hiss-interop`; the procedure, and the additions-only discipline that governs
 > the resulting diff, are in `hiss-interop/README.md`.
 >
-> The **`cacophony`** corpus is third-party: 136 frozen vectors over `25519` and
-> `448`, from a community corpus neither `hiss` nor `snow` produced, acquired from
+> The **`cacophony`** corpus is third-party: 320 frozen vectors over `25519` and
+> `448`, both ciphers, from a community corpus neither `hiss` nor `snow` produced, acquired from
 > `snow`'s package and verified byte-identical to the copy in the Cacophony Haskell
 > implementation's own repository. The assertions are stricter than `snow`'s own
 > harness, which does not even deserialize the `handshake_hash` field. For **X448**
@@ -422,19 +424,41 @@ best-effort compiler fence:
 - P-256 and Ed25519 private keys
 - `Psk`
 - `SharedSecret`
-- `CipherState` (AEAD key + nonce)
+- `CipherState` (AEAD key + nonce) — including the cipher's **expanded** key, which
+  `Cipher::Key` requires each implementation to scrub on drop
 - `SymmetricState` (chaining key; handshake mix/`split` intermediates are wiped inline)
+- The datagram receive ratchet's current and previous epoch keys
+
+**The live AES-GCM key schedule is wiped by `hiss`, not left to `cryptoxide`.** Since
+0.4.0 the `Cipher` trait holds an expanded key for the life of a session, so for
+`AesGcm` the AES-256 round keys and the GHASH subkey are a long-lived struct field
+rather than a per-call stack value — and the first two AES-256 round keys *are* the
+Noise key verbatim. `cryptoxide` does zero them in its own `Drop` impls, but with
+ordinary stores: built under fat LTO, every one of those stores is absent from the
+disassembly, because the compiler is entitled to drop a write to storage that is about
+to be released. `AesGcmKey`'s destructor therefore runs `cryptoxide`'s and then wipes
+the bytes itself with the same volatile-write-plus-fence loop as everything else above.
 
 **Honest limits:**
 
 - **The fence is best-effort.** It defeats dead-store elimination of the wipe, but it
   is not a hardware memory barrier and gives no guarantee against secret copies that
   the compiler placed in CPU registers or spilled to the stack.
+- **Transient copies of the expanded key are not wiped.** A move in Rust copies the
+  value's bytes and does not erase the source, so every move of a key-bearing value can
+  leave a dead image that nothing scrubs: `AesGcm256::new` returns its value and it is
+  then moved into the wrapper, into an `Option`, and into a struct field; and
+  `Transport::into_datagram_with_epoch` moves the receive key out of its `CipherState`
+  into the epoch ratchet, leaving the moved-from slot's key bytes as dead stack of that
+  function (the source state is unkeyed afterwards, so its drop wipes nothing). This is
+  the same class as the point above — once per key or once per session, rather than once
+  per message as before 0.4.0.
 - **Library-owned intermediates are not zeroized.** Secret values materialized inside
   the underlying libraries — `eccoxide` `Scalar`/`Point` values created during DH,
-  signing, and key generation, and `cryptoxide`-internal expansion buffers — are
-  **not** wiped, because `hiss` cannot reach inside those library-owned types. This is
-  a known, accepted limitation that depends on upstream support to close.
+  signing, and key generation, and `cryptoxide`-internal scratch buffers other than the
+  AEAD key schedule described above — are **not** wiped, because `hiss` cannot reach
+  inside those library-owned types. This is a known, accepted limitation that depends
+  on upstream support to close.
 - **`seed()` exposes raw secret bytes.** `SoftwareEd25519PrivateKey::seed()` returns
   the raw 32-byte seed (needed to persist/seal the key). The owning key zeroizes on
   drop, but any bytes a caller copies out are the caller's responsibility.
@@ -443,7 +467,7 @@ best-effort compiler fence:
 
 - **Not audited; pre-1.0.** No external cryptographic audit has been performed; the
   API and posture may change before 1.0.
-- **Curated surface.** Only the patterns, curves, cipher, and hash in [Scope](#scope)
+- **Curated surface.** Only the patterns, curves, ciphers, and hashes in [Scope](#scope)
   are implemented — not the full Noise matrix.
 - **No `fallback` / compound protocols.** The Noise `fallback` modifier (`XXfallback`,
   Noise Pipes / 0-RTT-with-retry) is intentionally not implemented. It is optional in the

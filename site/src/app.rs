@@ -682,7 +682,7 @@ fn ProofStrip() -> impl IntoView {
             </a>
             <span class="text-silver-faint">"·"</span>
             <a class="text-silver-dim hover:text-cyan" href=TESTED>
-                "Wycheproof 484 + 355 ✓"
+                "Wycheproof 484 + 355 + 66 ✓"
             </a>
             <span class="text-silver-faint">"·"</span>
             <a class="text-silver-dim hover:text-cyan" href=TESTED>

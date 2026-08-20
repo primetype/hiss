@@ -13,8 +13,8 @@ it is fixed, not deferred to "the next patch."
 | Lints | `cargo clippy --all-features --all-targets -- -D warnings` | zero warnings |
 | Docs | `cargo doc --no-deps` and `--all-features`, `RUSTDOCFLAGS=-D warnings` | no broken intra-doc links |
 | Tests | `cargo test` **and** `cargo test --all-features` | all pass |
-| KAT | `cargo test --all-features --test noise_kat --test noise_cacophony` (Noise known-answer vectors: snow-generated P-256 + third-party cacophony) | all pass |
-| Wycheproof | P-256 / X25519 Wycheproof vectors — lib unit tests, run under `cargo test --all-features` | all pass |
+| KAT | `cargo test --all-features --test noise_kat --test noise_cacophony` (Noise known-answer vectors: snow-generated P-256 + third-party cacophony over both ciphers) | all pass |
+| Wycheproof | P-256 ECDSA/ECDH and AES-GCM Wycheproof vectors — lib unit tests, run under `cargo test --all-features` | all pass |
 | MSRV | `cargo +<MSRV> check --all-features --all-targets` | passes on the declared MSRV |
 | Coverage | `cargo llvm-cov` (gated total — see `.github/workflows/coverage.yml`) | ≥ 80% lines / 75% regions |
 | Benchmarks | `cargo bench` | builds and runs clean |
@@ -92,14 +92,6 @@ Interop workflow before cutting a release**; it is not a gate and does not
 block, but a red run means the comparison harness — usually a moved `snow` —
 needs attention before the next vector regeneration.
 
-`hiss-aesgcm-lab/` (out-of-workspace, unpublished, own committed lockfile)
-validates Noise AESGCM against an unreleased, `rev`-pinned cryptoxide before
-hiss commits to shipping it. Its workflow (`aesgcm-lab.yml`: weekly cron,
-manual dispatch, no push trigger — the pinned rev cannot move) runs a
-`{ubuntu-latest, macos-latest}` matrix to reach both of cryptoxide's AES
-backends. No gate depends on it, and it is **temporary**: it dissolves into
-hiss when cryptoxide releases AES-GCM. See `hiss-aesgcm-lab/README.md`.
-
 ### MSRV policy
 
 The MSRV is declared in `Cargo.toml` (`rust-version`) and pinned by the `msrv`
@@ -110,5 +102,27 @@ moving once stable advances past **1.99**.
 
 ## Releasing
 
-Cut releases with the `release` skill (`.claude/skills/release/SKILL.md`): it
-runs the gates above, updates the changelog, and publishes with `cargo release`.
+Two crates publish from this repository, with `cargo release` (no config file:
+its defaults produce the `chore: Release` commits and the `v<x.y.z>` /
+`hiss-macros-v<x.y.z>` tags in the history). **`hiss-macros` goes first**
+whenever it changed — in particular whenever `HISS_SUITE_TYPES` gained a
+name, since a consumer's `# Usage` doctests are emitted by whichever macro
+version it resolves, and hiss over a stale `hiss-macros` documents the new
+suite type as an uncompiled sketch.
+
+1. Every gate above green on the release commit, `cargo bench` included.
+   Dispatch the Interop workflow (not a gate; see above).
+2. `CHANGELOG.md`: retitle `[Unreleased]` as `## [x.y.z] - YYYY-MM-DD`, leave
+   a fresh empty `## [Unreleased]` above it, and commit. `cargo release`
+   refuses a dirty tree — dry run included — so nothing below runs before
+   this commit exists.
+3. `cargo release <level> -p hiss-macros`, read the plan, then add
+   `--execute`. The default `dependent-version = "upgrade"` rewrites hiss's
+   `hiss-macros = { version = "…" }` line in the same release commit, so
+   hiss cannot be published against the old macro crate by accident.
+4. `cargo release <level> -p hiss`, read the plan, then `--execute`.
+5. Both steps commit, tag, publish and push (`push = true` default).
+   `site/Cargo.lock` and `hiss-interop/Cargo.lock` still name the previous
+   path versions afterwards; the next build in either directory rewrites
+   them (neither is built `--locked`), and that refresh goes in with the
+   next ordinary commit.

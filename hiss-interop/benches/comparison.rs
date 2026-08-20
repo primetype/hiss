@@ -34,6 +34,11 @@
 //! `Init(GetDhImpl)`. X448 is therefore hiss-only: there is no snow row to
 //! compare against.
 //!
+//! Transport throughput is measured separately, over **both ciphers** —
+//! `ChaChaPoly` and `AESGCM`, hiss against snow — as a round trip and split
+//! into encrypt-only and decrypt-only groups. See the transport section for
+//! which AES backend each host actually measures.
+//!
 //! # One caveat on the hiss-vs-snow comparison
 //!
 //! * **RNG strategy.** hiss draws ephemeral randomness from a `StdRng`
@@ -336,18 +341,53 @@ fn handshakes_xx(c: &mut Criterion) {
     g.finish();
 }
 
-// ── Bulk transport throughput (curve-independent: ChaCha20-Poly1305) ───
+// ── Bulk transport throughput (curve-independent; one arm per cipher) ──
 //
 // Both sides encrypt/decrypt into flat slices — no I/O abstraction on either —
-// so this is an apples-to-apples symmetric-crypto comparison.
+// so this is an apples-to-apples symmetric-crypto comparison, and the only
+// variable across the four arms is the AEAD: hiss and snow, each over
+// ChaChaPoly and AESGCM. The handshake (N over P256) runs once per arm,
+// outside every measured region.
+//
+// `transport_1KiB` is the round trip — send and receive per iteration — and
+// the group with the longest history; keep its shape. The `_encrypt` and
+// `_decrypt` groups split it, because a fused round trip cannot tell you
+// which side an AEAD is fast on. It was these groups that made AES-GCM's
+// per-message key schedule visible before hiss 0.4.0 hoisted it into
+// `Cipher::Key` — `AesGcm256::new` re-expanded the round keys and the GHASH
+// subkey for every message, ~117 ns against ~160 ns for the rest of a 1 KiB
+// seal on Apple Silicon — which is exactly the kind of fixed cost that hides
+// in a sum. The schedule now runs once per key, at `MixKey`/`Split`/`Rekey`.
+//
+// Which AES-GCM you are measuring depends on the host, on BOTH arms:
+//
+//   * hiss (cryptoxide): ARMv8 AES + `pmull` GHASH only on `aarch64` with the
+//     `aes` target feature — on by default for `aarch64-apple-darwin`, not
+//     for Linux aarch64 — and a portable fixsliced AES + portable GHASH
+//     everywhere else, x86-64 included (cryptoxide has no AES-NI/CLMUL path).
+//   * snow (RustCrypto `aes-gcm`): AES-NI + CLMUL are runtime-detected on
+//     x86-64; on aarch64 the hardware paths are compile-time opt-in behind
+//     `--cfg aes_armv8` / `--cfg polyval_armv8`, which this crate's
+//     `.cargo/config.toml` sets so the snow arms are measured at their best.
+//     A `RUSTFLAGS` environment variable REPLACES those config rustflags —
+//     carry the two cfgs along if you must set one.
+//
+// So on a Mac both stacks are hardware AES + hardware carry-less multiply; on
+// CI's x86 runner hiss is fully portable while snow is hardware. Never compare
+// a figure from one host against a figure from the other, and state the host
+// next to any number. CI only compiles this (`--no-run`).
 
-fn transport(c: &mut Criterion) {
-    // hiss: set up a completed N/P256 handshake, then measure transport only.
-    let (mut h_send, mut h_recv) = {
+/// Drive a complete `N` handshake over `$cipher` and hand back hiss's two
+/// transports. A macro because each expansion needs its own `noise!`
+/// invocation: the generated `N` types are distinct per cipher, and the
+/// identifier must stay `N` since it *is* the protocol name mixed into the
+/// handshake hash.
+macro_rules! hiss_pair {
+    ($cipher:ident) => {{
         let mut p = provider();
         let r_static = p.generate::<P256>().unwrap();
         let r_pub = p.public(&r_static).unwrap();
-        hiss::noise! { pub N<P256, ChaChaPoly, Blake2b> { <- s ... -> e, es } }
+        hiss::noise! { pub N<P256, $cipher, Blake2b> { <- s ... -> e, es } }
         let (msg1, i_t) = N::initiator(provider(), &[], r_pub)
             .write_message_1()
             .unwrap();
@@ -356,53 +396,184 @@ fn transport(c: &mut Criterion) {
             .read_message_1(&msg1)
             .unwrap();
         (i_t, r_t)
-    };
+    }};
+}
 
-    // snow equivalent.
-    let (mut s_send, mut s_recv) = {
-        let protocol: snow::params::NoiseParams =
-            "Noise_N_P256_ChaChaPoly_BLAKE2b".parse().unwrap();
-        let r_kp = snow::Builder::new(protocol.clone())
-            .generate_keypair()
-            .unwrap();
-        let mut initiator = snow::Builder::new(protocol.clone())
-            .remote_public_key(&r_kp.public)
-            .unwrap()
-            .build_initiator()
-            .unwrap();
-        let mut msg = [0u8; 256];
-        let n = initiator.write_message(&[], &mut msg).unwrap();
-        let mut responder = snow::Builder::new(protocol.clone())
-            .local_private_key(&r_kp.private)
-            .unwrap()
-            .build_responder()
-            .unwrap();
-        let mut buf = [0u8; 256];
-        responder.read_message(&msg[..n], &mut buf).unwrap();
-        (
-            initiator.into_transport_mode().unwrap(),
-            responder.into_transport_mode().unwrap(),
-        )
-    };
+/// The `snow` equivalent of [`hiss_pair`], same pattern and suite.
+fn snow_pair(suite: &str) -> (snow::TransportState, snow::TransportState) {
+    let protocol: snow::params::NoiseParams = suite.parse().unwrap();
+    let r_kp = snow::Builder::new(protocol.clone())
+        .generate_keypair()
+        .unwrap();
+    let mut initiator = snow::Builder::new(protocol.clone())
+        .remote_public_key(&r_kp.public)
+        .unwrap()
+        .build_initiator()
+        .unwrap();
+    let mut msg = [0u8; 256];
+    let n = initiator.write_message(&[], &mut msg).unwrap();
+    let mut responder = snow::Builder::new(protocol)
+        .local_private_key(&r_kp.private)
+        .unwrap()
+        .build_responder()
+        .unwrap();
+    let mut buf = [0u8; 256];
+    responder.read_message(&msg[..n], &mut buf).unwrap();
+    (
+        initiator.into_transport_mode().unwrap(),
+        responder.into_transport_mode().unwrap(),
+    )
+}
 
-    let plaintext = [0x42u8; 1024];
-    let mut ct = [0u8; 1056]; // 1024 + 16 tag + headroom
+const SNOW_CHACHAPOLY: &str = "Noise_N_P256_ChaChaPoly_BLAKE2b";
+const SNOW_AESGCM: &str = "Noise_N_P256_AESGCM_BLAKE2b";
+
+/// One kibibyte of plaintext; the ciphertext buffer adds the tag and headroom.
+const PLAINTEXT: [u8; 1024] = [0x42u8; 1024];
+const CT_LEN: usize = 1056; // 1024 + 16 tag + headroom
+
+fn transport_round_trip(c: &mut Criterion) {
+    let (mut hc_send, mut hc_recv) = hiss_pair!(ChaChaPoly);
+    let (mut ha_send, mut ha_recv) = hiss_pair!(AesGcm);
+    let (mut sc_send, mut sc_recv) = snow_pair(SNOW_CHACHAPOLY);
+    let (mut sa_send, mut sa_recv) = snow_pair(SNOW_AESGCM);
+
+    let mut ct = [0u8; CT_LEN];
     let mut pt = [0u8; 1024];
 
     let mut g = c.benchmark_group("transport_1KiB");
     g.bench_function(BenchmarkId::new("hiss", "ChaChaPoly"), |b| {
         b.iter(|| {
-            let n = h_send.send(&plaintext, &mut ct).unwrap();
-            let m = h_recv.receive(&ct[..n], &mut pt).unwrap();
+            let n = hc_send.send(&PLAINTEXT, &mut ct).unwrap();
+            let m = hc_recv.receive(&ct[..n], &mut pt).unwrap();
             black_box(m)
         });
     });
     g.bench_function(BenchmarkId::new("snow", "ChaChaPoly"), |b| {
         b.iter(|| {
-            let n = s_send.write_message(&plaintext, &mut ct).unwrap();
-            let m = s_recv.read_message(&ct[..n], &mut pt).unwrap();
+            let n = sc_send.write_message(&PLAINTEXT, &mut ct).unwrap();
+            let m = sc_recv.read_message(&ct[..n], &mut pt).unwrap();
             black_box(m)
         });
+    });
+    g.bench_function(BenchmarkId::new("hiss", "AESGCM"), |b| {
+        b.iter(|| {
+            let n = ha_send.send(&PLAINTEXT, &mut ct).unwrap();
+            let m = ha_recv.receive(&ct[..n], &mut pt).unwrap();
+            black_box(m)
+        });
+    });
+    g.bench_function(BenchmarkId::new("snow", "AESGCM"), |b| {
+        b.iter(|| {
+            let n = sa_send.write_message(&PLAINTEXT, &mut ct).unwrap();
+            let m = sa_recv.read_message(&ct[..n], &mut pt).unwrap();
+            black_box(m)
+        });
+    });
+    g.finish();
+}
+
+fn transport_encrypt(c: &mut Criterion) {
+    // Fresh pairs: the groups must not share transports, or one group's
+    // unmatched sends would desynchronise another group's nonce counters.
+    let (mut hc_send, _) = hiss_pair!(ChaChaPoly);
+    let (mut ha_send, _) = hiss_pair!(AesGcm);
+    let (mut sc_send, _) = snow_pair(SNOW_CHACHAPOLY);
+    let (mut sa_send, _) = snow_pair(SNOW_AESGCM);
+
+    let mut ct = [0u8; CT_LEN];
+
+    let mut g = c.benchmark_group("transport_1KiB_encrypt");
+    g.bench_function(BenchmarkId::new("hiss", "ChaChaPoly"), |b| {
+        b.iter(|| black_box(hc_send.send(&PLAINTEXT, &mut ct).unwrap()));
+    });
+    g.bench_function(BenchmarkId::new("snow", "ChaChaPoly"), |b| {
+        b.iter(|| black_box(sc_send.write_message(&PLAINTEXT, &mut ct).unwrap()));
+    });
+    g.bench_function(BenchmarkId::new("hiss", "AESGCM"), |b| {
+        b.iter(|| black_box(ha_send.send(&PLAINTEXT, &mut ct).unwrap()));
+    });
+    g.bench_function(BenchmarkId::new("snow", "AESGCM"), |b| {
+        b.iter(|| black_box(sa_send.write_message(&PLAINTEXT, &mut ct).unwrap()));
+    });
+    g.finish();
+}
+
+fn transport_decrypt(c: &mut Criterion) {
+    let (mut hc_send, mut hc_recv) = hiss_pair!(ChaChaPoly);
+    let (mut ha_send, mut ha_recv) = hiss_pair!(AesGcm);
+    let (mut sc_send, mut sc_recv) = snow_pair(SNOW_CHACHAPOLY);
+    let (mut sa_send, mut sa_recv) = snow_pair(SNOW_AESGCM);
+
+    let mut g = c.benchmark_group("transport_1KiB_decrypt");
+
+    // `iter_batched`: the setup encrypts (unmeasured) and the routine
+    // decrypts. Doing it per-iteration rather than once is not optional — a
+    // Noise transport advances its nonce on every message, so the same
+    // ciphertext cannot be decrypted twice, and the sender's counter and the
+    // receiver's stay in lockstep precisely because setup and routine run
+    // one-for-one. The setup returns an owned `Vec` rather than writing into
+    // a shared buffer because the two closures would otherwise both need
+    // `&mut` to it; the allocation is in the unmeasured half.
+    g.bench_function(BenchmarkId::new("hiss", "ChaChaPoly"), |b| {
+        b.iter_batched(
+            || {
+                let mut ct = vec![0u8; CT_LEN];
+                let n = hc_send.send(&PLAINTEXT, &mut ct).unwrap();
+                ct.truncate(n);
+                ct
+            },
+            |ct| {
+                let mut pt = [0u8; 1024];
+                black_box(hc_recv.receive(&ct, &mut pt).unwrap())
+            },
+            BatchSize::SmallInput,
+        );
+    });
+    g.bench_function(BenchmarkId::new("snow", "ChaChaPoly"), |b| {
+        b.iter_batched(
+            || {
+                let mut ct = vec![0u8; CT_LEN];
+                let n = sc_send.write_message(&PLAINTEXT, &mut ct).unwrap();
+                ct.truncate(n);
+                ct
+            },
+            |ct| {
+                let mut pt = [0u8; 1024];
+                black_box(sc_recv.read_message(&ct, &mut pt).unwrap())
+            },
+            BatchSize::SmallInput,
+        );
+    });
+    g.bench_function(BenchmarkId::new("hiss", "AESGCM"), |b| {
+        b.iter_batched(
+            || {
+                let mut ct = vec![0u8; CT_LEN];
+                let n = ha_send.send(&PLAINTEXT, &mut ct).unwrap();
+                ct.truncate(n);
+                ct
+            },
+            |ct| {
+                let mut pt = [0u8; 1024];
+                black_box(ha_recv.receive(&ct, &mut pt).unwrap())
+            },
+            BatchSize::SmallInput,
+        );
+    });
+    g.bench_function(BenchmarkId::new("snow", "AESGCM"), |b| {
+        b.iter_batched(
+            || {
+                let mut ct = vec![0u8; CT_LEN];
+                let n = sa_send.write_message(&PLAINTEXT, &mut ct).unwrap();
+                ct.truncate(n);
+                ct
+            },
+            |ct| {
+                let mut pt = [0u8; 1024];
+                black_box(sa_recv.read_message(&ct, &mut pt).unwrap())
+            },
+            BatchSize::SmallInput,
+        );
     });
     g.finish();
 }
@@ -412,6 +583,8 @@ criterion_group!(
     handshakes_n,
     handshakes_ik,
     handshakes_xx,
-    transport
+    transport_round_trip,
+    transport_encrypt,
+    transport_decrypt
 );
 criterion_main!(benches);

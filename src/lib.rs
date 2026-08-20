@@ -208,7 +208,16 @@
 //! with no state machine and no wire-size constants. Every usable
 //! declaration names all three.
 //!
-//! [`ChaChaPoly`](noise::ChaChaPoly) is the only cipher implemented. For
+//! Both of the specification's ciphers ship. [`ChaChaPoly`](noise::ChaChaPoly)
+//! is what the Quickstart uses and what every frozen P-256 vector was
+//! generated over; [`AesGcm`](noise::AesGcm) (§12.4) is pinned by the same
+//! third-party `cacophony` corpus over `25519` and `448`, and is over five
+//! times as fast on Apple Silicon, where `cryptoxide` reaches the ARMv8 AES
+//! and `pmull` instructions — on every other target its AES-GCM is portable
+//! software, and `ChaChaPoly` stays the performance default. The speed has a
+//! price in space: [`Cipher`](noise::Cipher) holds each cipher's *expanded*
+//! key, so an AES-GCM `CipherState` is 528 bytes on `aarch64` (992 on the
+//! portable path) where a `ChaChaPoly` one is 48. For
 //! the curve, reach for [`X25519`](noise::X25519) — what the Quickstart
 //! uses — unless you need the Apple Secure Enclave, which speaks
 //! [`P256`](noise::P256) and nothing else, or want [`X448`](noise::X448)'s

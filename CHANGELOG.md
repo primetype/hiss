@@ -7,6 +7,124 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-20
+
+### Added
+
+- **`hiss::noise::AesGcm`**, the Noise specification's second cipher — §12.4
+  `AESGCM`: AES-256-GCM, a 96-bit nonce of four zero bytes and the
+  **big**-endian counter, a 128-bit tag appended. `NAME = "AESGCM"`,
+  `TAG_SIZE = 16`, so a `noise!` declaration can name it and speak
+  `Noise_<pattern>_<curve>_AESGCM_<hash>`. Purely additive: no existing
+  protocol name, wire size or handshake hash moves, and `ChaChaPoly` remains
+  what the Quickstart, the examples and `seal.rs` use. Backed by
+  `cryptoxide::aes_gcm`, released in cryptoxide 0.6.3, which becomes the
+  floor. No hiss feature gates it: the crate's rule that no feature turns API
+  on or off stands, cryptoxide has no dependencies of its own to save, and a
+  suite type that only sometimes exists would be the first name in the
+  macro's respelling list that could make an emitted `# Usage` doctest fail
+  to compile in a consumer.
+
+  What stands behind it, three legs. The third-party `cacophony` corpus: the
+  160 `AESGCM` vectors that mirror the 160 `ChaChaPoly` ones — all twenty
+  patterns over `{25519, 448} × {BLAKE2b, BLAKE2s, SHA256, SHA512}` — replayed
+  in **both roles** by the same harness (`tests/noise_cacophony.rs`, now 656
+  tests from a 320-vector corpus). The 66 Wycheproof AES-GCM vectors matching
+  §12.4's parameters, run against the primitive as a library unit test,
+  ciphertext *and* tag pinned on every valid vector and every invalid one
+  rejected. And 40 live `snow` interop handshakes in `hiss-interop` — `N`,
+  `NN`, `XX`, `IK`, `Kpsk0` × all four hashes × both role assignments —
+  against RustCrypto's independently written AES-GCM, four transport messages
+  per direction. The corpus's six-message vectors are what pin the nonce byte
+  order: counter 0 encodes identically little- and big-endian, so a
+  wrong-endian `AESGCM` agrees with everyone through the handshake and first
+  diverges at transport message 2 (one-way patterns; 4 for interactive
+  ones). Bespoke tests cover what no corpus reaches: every single-bit tag
+  flip, truncation, AD and counter binding, and the failure-path zeroing.
+
+  One thing worth knowing. cryptoxide's AES-GCM **verifies the tag before
+  writing any plaintext** — pinned by a test — which is the opposite of
+  `ChaChaPoly`'s decrypt-then-verify, so `AesGcm` zeroes `output` on failure
+  not to scrub unverified plaintext but so a reused buffer cannot hand a
+  caller the *previous* message; `Cipher::decrypt`'s documented contract now
+  states the mechanism-neutral rule both ciphers meet.
+
+- **`hiss-macros`: `AesGcm` joins `HISS_SUITE_TYPES`**, so a `noise!`
+  declaration naming it gets a compiled `# Usage` doctest rather than an
+  uncompiled sketch. Shipped as `hiss-macros` 0.3.2, which hiss 0.4.0
+  requires — a hiss carrying `AesGcm` over an older macro crate would
+  document it as a sketch. `scripts/downstream-build.sh`'s `IKpsk0` arm now
+  spells `AesGcm`, so every suite type stays covered by the sketch-degrade
+  guard.
+
+- **Benchmarks.** `benches/noise.rs` measures `transport_1KiB` over both
+  ciphers; `hiss-interop/benches/comparison.rs` gains `AESGCM` arms for hiss
+  and `snow`, plus encrypt-only and decrypt-only groups, and
+  `hiss-interop/.cargo/config.toml` pins the snow arms to RustCrypto's
+  opt-in aarch64 hardware paths so the comparison is against its best. A
+  second interop bench, `suite_25519_aesgcm_sha256`, fixes one suite end to
+  end — `Noise_*_25519_AESGCM_SHA256`, `N`/`IK`/`XX` handshakes and transport
+  at 64 B, 1 KiB, 16 KiB and 65519 B — hiss against snow, with throughput.
+
+### Changed
+
+- **Breaking: `hiss::noise::Cipher` takes an expanded key.** The trait gains an
+  associated `type Key: Send + Sync + 'static` and a
+  `fn key(&[u8; 32]) -> Self::Key`, and `encrypt`/`decrypt` now take
+  `key: &Self::Key` where they took `&[u8; 32]`. The AEAD's key schedule
+  therefore runs where a Noise key is *created* — each `MixKey` and
+  `MixKeyAndHash`, the `Split`, every `Rekey()` — instead of once per message.
+  Two opaque public types come with it, `ChaChaPolyKey` and `AesGcmKey`. What
+  breaks: an out-of-tree `Cipher` implementation, and any direct call to
+  `ChaChaPoly::encrypt(&[u8; 32], …)`. Nothing else — `hiss-macros` reaches
+  `Cipher` only through `TAG_SIZE` and is unaffected, so it stays at 0.3.2.
+
+  Why: `AesGcm` re-expanded the AES-256 round keys and derived the GHASH
+  subkey for every single message. On an M-series Mac that is ~117 ns against
+  ~160 ns for the rest of a 1 KiB seal. Hoisting it took `benches/noise.rs`'s
+  `transport_1KiB` round trip from 594 ns to 365 ns, and in `hiss-interop`'s
+  one-suite bench the 64-byte round trip from 314 ns to 84 ns and the 1 KiB one
+  from 611 ns to 372 ns. `ChaChaPoly` has no schedule to hoist and does not
+  move (1.96 µs against 2.03 µs, inside the noise); its `CipherState` is still
+  exactly 48 bytes, pinned by a test.
+
+  It is a scrubbing fix as much as a speed one. cryptoxide zeroes the round
+  keys and `H` in its own `Drop` impls, but with ordinary stores — built under
+  fat LTO, every one of those stores is gone from the disassembly, which means
+  the pre-0.4.0 per-message schedule was scrubbed by nothing at all in an LTO
+  build. `Cipher::Key` now *contracts* that a key scrubs itself on drop, and
+  `AesGcmKey` meets it by running cryptoxide's destructor and then wiping the
+  bytes itself with volatile writes.
+
+  The price is memory, and it is not small: a `CipherState<AesGcm>` is 528
+  bytes on `aarch64` and 992 on the portable fixsliced path, against 48 for
+  `ChaChaPoly`. On a `P256`/`AESGCM`/`SHA256` `IK`, a `Transport` measures
+  1280 / 2200 bytes against 312 over `ChaChaPoly`, and a ratcheting
+  `DatagramRecv` — which retains two epoch keys — 1040 / 1992 against 104.
+
+  Nothing on the wire moves: protocol names, message sizes, handshake hashes
+  and ciphertexts are untouched, and every frozen vector, all 656 cacophony
+  replays and the live `snow` interop pass byte-for-byte unchanged. That is
+  the equivalence proof for the change.
+
+- **cryptoxide requirement `>=0.6.0, <0.7` → `>=0.6.3, <0.7`**, for
+  `aes_gcm`. 0.6.3 is inside the previous range, so no consumer is cut off.
+
+- **`tests/vectors/cacophony/cacophony.json` grows from 160 to 320 vectors** —
+  the `AESGCM` half of the corpus under the same pins and the same filter
+  extended to both ciphers. Every vendored vector is replayed, and a new
+  coverage test asserts the corpus is exactly the instantiated
+  pattern × suite matrix, so a vector nothing replays cannot sit in the KAT
+  directory unnoticed.
+
+### Removed
+
+- **`hiss-aesgcm-lab/`** and its workflow — the temporary, out-of-workspace
+  crate that validated AES-GCM against a `rev`-pinned unreleased cryptoxide.
+  Its exit condition fired with cryptoxide 0.6.3; its `Cipher` impl, vectors,
+  tests and bench arms moved into hiss and `hiss-interop` as described above.
+  Repository infrastructure only — nothing a consumer of the crate resolved.
+
 ## [0.3.2] - 2026-08-14
 
 ### Added

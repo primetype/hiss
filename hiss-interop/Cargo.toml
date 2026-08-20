@@ -22,9 +22,10 @@ hiss = { path = "..", default-features = false }
 # byte-for-byte. That proof is hiss's own and runs on every commit — the
 # RFC 7748 known-answer tests in `src/curve/x25519.rs` carry no feature gate,
 # so each leg pins whichever ladder it compiled to the RFC's fixed bytes, and
-# `tests/noise_cacophony.rs` has no feature gates either, so its 136 X25519
-# replays run full handshakes on the eccoxide ladder under
-# `--no-default-features`. This passthrough is about interop completeness.
+# `tests/noise_cacophony.rs` has no feature gates either, so its 328 X25519
+# replays (eight suites × forty-one) run full handshakes on the eccoxide
+# ladder under `--no-default-features`. This passthrough is about interop
+# completeness.
 #
 # `--all-features` on hiss is today identical to default, so there is no third
 # leg to run.
@@ -34,11 +35,15 @@ x25519-cryptoxide = ["hiss/x25519-cryptoxide"]
 [dev-dependencies]
 # The comparison target. Feature list mirrors what hiss's dev-dependency
 # carried before this crate existed: `use-p256` is what makes every P-256 test
-# resolve at all, and `use-blake2`/`use-sha2` cover the four hashes. `use-sha2`
-# is transitively enabled via `default -> default-resolver-crypto`, but stays
-# spelled out per the house rule that every requirement is explicit rather than
-# hostage to an upstream default set.
-snow = { version = "0.10.0", features = ["default-resolver", "use-p256", "use-chacha20poly1305", "use-blake2", "use-sha2"] }
+# resolve at all, and `use-blake2`/`use-sha2` cover the four hashes.
+# `use-aes-gcm` is what makes snow's resolver hand back a `CipherAesGcm`
+# (RustCrypto `aes_gcm::Aes256Gcm`) for `tests/snow_aesgcm.rs` and the
+# AESGCM bench arms — an AES-GCM genuinely independent of cryptoxide's.
+# `use-sha2` and `use-aes-gcm` are transitively enabled via `default ->
+# default-resolver-crypto`, but stay spelled out per the house rule that
+# every requirement is explicit rather than hostage to an upstream default
+# set.
+snow = { version = "0.10.0", features = ["default-resolver", "use-p256", "use-chacha20poly1305", "use-aes-gcm", "use-blake2", "use-sha2"] }
 
 criterion = { version = "0.8.2", features = ["html_reports"] }
 # `tests/snow_diag.rs` reaches for these two directly: it derives a P-256
@@ -47,12 +52,13 @@ criterion = { version = "0.8.2", features = ["html_reports"] }
 # are hiss's own dependencies, so a test inside hiss could name them without
 # declaring anything; from out here they need spelling. Requirements mirror
 # hiss's exactly so this crate cannot resolve a different version than the
-# code under test. That mirror now tracks cryptoxide 0.6: hiss moved its floor
-# to 0.6.0 when the `mac` module and the generic `Hmac<D: Digest>` were
-# deleted, and this crate follows even though its own use — the one-shot
-# `ChaCha20Poly1305` in `tests/snow_diag.rs` — is unchanged across that break.
+# code under test. That mirror now tracks cryptoxide 0.6.3: hiss moved its
+# floor to 0.6.0 when the `mac` module and the generic `Hmac<D: Digest>` were
+# deleted, then to 0.6.3 for the `aes_gcm` module behind `AesGcm`, and this
+# crate follows each time even though its own use — the one-shot
+# `ChaCha20Poly1305` in `tests/snow_diag.rs` — is unchanged across both.
 eccoxide = { version = ">=0.4.3, <0.5", default-features = false, features = ["p256r1", "table"] }
-cryptoxide = { version = ">=0.6.0, <0.7", default-features = false, features = ["chacha", "poly1305"] }
+cryptoxide = { version = ">=0.6.3, <0.7", default-features = false, features = ["chacha", "poly1305"] }
 hex = "0.4"
 rand = "0.10"
 # Vector-schema derives and the pretty-printed writes in the generator.
@@ -64,6 +70,14 @@ tokio = { version = "1.50", features = ["macros", "rt"] }
 
 [[bench]]
 name = "comparison"
+harness = false
+
+# One suite end to end — `Noise_*_25519_AESGCM_SHA256`, handshakes and
+# transport at four message sizes, hiss vs snow. The HTML report is on
+# (criterion's `html_reports` feature above): every run writes
+# `target/criterion/report/index.html`.
+[[bench]]
+name = "suite_25519_aesgcm_sha256"
 harness = false
 
 # Stand alone: do NOT get absorbed into (or absorb) the parent hiss package.

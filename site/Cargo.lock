@@ -274,9 +274,9 @@ dependencies = [
 
 [[package]]
 name = "cryptoxide"
-version = "0.6.2"
+version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "93f80e26fec88f5ae9450cd5f4e59f5c6421abafc919ea68a3edd521f9580c9b"
+checksum = "81e3722ab6261a15a2340553e7a84e3b488155f81ab27e84f47a92679908bf92"
 
 [[package]]
 name = "derive-where"
@@ -544,7 +544,7 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "hiss"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "core-foundation",
  "cryptoxide",
@@ -560,7 +560,7 @@ dependencies = [
 
 [[package]]
 name = "hiss-macros"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "proc-macro2",
  "quote",
