@@ -1,6 +1,6 @@
 [package]
 name = "hiss-macros"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2024"
 # Keep in lockstep with the `hiss` crate's MSRV policy (see ../Cargo.toml).
 rust-version = "1.96"
