@@ -47,13 +47,16 @@
 //! deployments that select a per-peer PSK (or reject unknown peers)
 //! from the just-revealed identity.
 //!
-//! A first message whose token sequence ends `…, s, ss` (IK's shape)
-//! additionally gets a **staged** read: `read_message_1_intro` stops
-//! after the revealed static — exactly the DH work up to that point —
-//! and suspends into an owned mid-state whose `complete()` pays the
-//! rest. The synchronous styles above decide *inside* the read; the
-//! staged pair returns control to the caller at the identity boundary,
-//! for decisions held across event-loop turns. See [`gen_split_read`].
+//! A first message whose token sequence ends `…, s, ss` — optionally
+//! followed by a `psk` (IK's shape and IKpsk1's) — additionally gets a
+//! **staged** read: `read_message_1_intro` stops after the revealed
+//! static — exactly the DH work up to that point — and suspends into an
+//! owned mid-state whose `complete()` pays the rest. The synchronous
+//! styles above decide *inside* the read; the staged pair returns
+//! control to the caller at the identity boundary, for decisions held
+//! across event-loop turns. On the trailing-`psk` shape `complete()`
+//! takes the PSK, so the key can be chosen from the identity the
+//! suspension put in hand. See [`gen_split_read`].
 
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
@@ -307,6 +310,13 @@ fn gen_main_struct(ctx: &Ctx<'_>) -> TokenStream {
     // neither can — see `usage_doctest`. A pattern with a staged msg1
     // read gets a third walkthrough, from whichever role *reads* msg1.
     let staged_reader = ctx.staged_msg1().map(reader_of);
+    // What the suspension actually defers, for the section heading: on a
+    // trailing-`psk` msg1 the PSK is deferred alongside the proving DH,
+    // which is the whole reason that shape stages.
+    let staged_gate = match ctx.staged_msg1() {
+        Some(line) if psk_at_complete(line) => "the proving DH or choosing the PSK",
+        _ => "the proving DH",
+    };
     let usage = match (
         usage_doctest(ctx, Role::Initiator, false),
         usage_doctest(ctx, Role::Responder, false),
@@ -321,8 +331,8 @@ fn gen_main_struct(ctx: &Ctx<'_>) -> TokenStream {
             {
                 out.push_str(&format!(
                     "\n\nAs the {}, **staged** — suspend on the claimed \
-                     identity and decide across turns before paying the \
-                     proving DH:\n\n```\n{staged}```",
+                     identity and decide across turns before paying \
+                     {staged_gate}:\n\n```\n{staged}```",
                     role.name().to_lowercase(),
                 ));
             }
@@ -1047,25 +1057,66 @@ fn verify_on_read(line: &Line) -> bool {
 }
 
 /// Whether a *received* message gets the staged `intro`/`complete` read
-/// pair: the first message, with its token sequence ending `…, s, ss` (a
-/// declared payload may follow). At that boundary the claimed static has
-/// just been revealed, and everything still unpaid — the proving `ss`
-/// and the tail — needs no further input bytes, so the read can suspend
+/// pair: the first message, with its token sequence ending `…, s, ss`,
+/// optionally followed by a `psk` (a declared payload may follow
+/// either). At that boundary the claimed static has just been revealed,
+/// and everything still unpaid — the proving `ss`, a trailing `psk`, and
+/// the tail — needs no further *message* bytes, so the read can suspend
 /// into a self-contained mid-state and resume later.
 ///
-/// Deliberately narrower than the mechanism could carry:
+/// The two admitted shapes are IK's and IKpsk1's, and the second is what
+/// the predicate is really for. A PSK-gated msg1's only per-peer surface
+/// was `read_message_1_with`, whose lookup closure is emitted at the
+/// `psk` token — *after* the proving `ss` — so rejecting a stranger
+/// there costs 2 DH. Staged, the claimed identity arrives after 1 DH and
+/// the PSK is supplied to `complete()` only on acceptance: 1-DH
+/// rejection with the identity in hand and the PSK as the gate.
 ///
-/// * a msg1 with a **trailing `psk`** (IKpsk1's shape) is excluded — its
-///   `complete()` would need the PSK re-supplied mid-read, breaking the
-///   mid-state's "nothing re-supplied later" contract, and the `_with`
-///   lookup closure already serves per-peer PSK selection there;
-/// * later messages, and shapes with non-DH tokens after the last `s`,
-///   are excluded until something needs them. The split point itself is
-///   derived, not enumerated — everything after the *last* `s` (see
-///   [`gen_split_read`]) — so widening this predicate is a policy
-///   decision, not a rewrite.
+/// That is a trade, and the mid-state's doc states it: the PSK *is*
+/// supplied after the suspension. What still holds is the part the
+/// mechanism depends on — no bytes of `message` are re-supplied, so the
+/// mid-state stays self-contained and the input buffer is never
+/// borrowed.
+///
+/// Still deliberately narrower than the mechanism could carry: later
+/// messages, and shapes with any other non-DH token after the last `s`,
+/// are excluded until something needs them. The split point itself is
+/// derived, not enumerated — everything after the *last* `s` (see
+/// [`intro_split`]) — so widening this predicate further is a policy
+/// decision, not a rewrite.
 fn split_read_on(msg: usize, line: &Line) -> bool {
-    msg == 0 && matches!(line.tokens.as_slice(), [.., (Tok::S, _), (Tok::Ss, _)])
+    msg == 0
+        && matches!(
+            line.tokens.as_slice(),
+            [.., (Tok::S, _), (Tok::Ss, _)] | [.., (Tok::S, _), (Tok::Ss, _), (Tok::Psk, _)]
+        )
+}
+
+/// The staged read's split point on a qualifying line: the number of
+/// leading tokens `intro` pays, everything from there on being
+/// `complete`'s. Derived from the token list rather than assumed from
+/// [`split_read_on`]'s current shape, so widening that predicate cannot
+/// desynchronise the split — and shared with the generated walkthrough,
+/// so the emitted code and the documented call sequence cannot disagree
+/// about which side a `psk` falls on.
+///
+/// Only meaningful on a line [`split_read_on`] admits; panics otherwise.
+fn intro_split(line: &Line) -> usize {
+    line.tokens
+        .iter()
+        .rposition(|(t, _)| *t == Tok::S)
+        .expect("split_read_on guarantees an `s`")
+        + 1
+}
+
+/// Whether a staged line's `psk` falls on `complete()`'s side of the
+/// split — IKpsk1's shape, where the key is chosen after the claimed
+/// identity is in hand, as opposed to a psk0-style msg1 whose `psk`
+/// precedes the `s` and so rides `intro`.
+fn psk_at_complete(line: &Line) -> bool {
+    line.tokens[intro_split(line)..]
+        .iter()
+        .any(|(t, _)| *t == Tok::Psk)
 }
 
 fn gen_read_message(ctx: &Ctx<'_>, role: Role, msg: usize) -> TokenStream {
@@ -1204,11 +1255,16 @@ fn gen_read_method(ctx: &Ctx<'_>, role: Role, msg: usize, style: ReadStyle) -> T
     // synchronous styles at it.
     if split_read_on(msg, line) {
         let intro = intro_ident(msg);
+        let and_psk = if psk_at_complete(line) {
+            " — and select the PSK — "
+        } else {
+            " "
+        };
         doc.push_str(&format!(
             "\n\nTo hold the trust decision **across event-loop turns** \
              instead of inside this call — inspect the claimed identity, \
-             suspend, and pay the remaining DH only on acceptance — use \
-             [`{intro}`](Self::{intro})."
+             suspend, and pay the remaining DH{and_psk}only on acceptance \
+             — use [`{intro}`](Self::{intro})."
         ));
     }
 
@@ -1304,7 +1360,10 @@ fn read_token_stmts(
                 // A `psk` in a Verify message precedes the `s` (else the
                 // lookup variant would have been generated), so it is a
                 // plain parameter; token order keeps it ahead of `verify`
-                // in the signature.
+                // in the signature. Under `Plain` it is a plain parameter
+                // wherever it sits — including on the staged `complete()`,
+                // which is handed only the tokens after the split and so
+                // owns the trailing `psk` of an IKpsk1-shaped msg1.
                 ReadStyle::Plain | ReadStyle::Verify => {
                     args.extend(quote!(, psk: &::hiss::psk::Psk));
                     stmts.extend(quote! {
@@ -1391,19 +1450,25 @@ fn gen_split_read(ctx: &Ctx<'_>, role: Role, msg: usize) -> TokenStream {
     let next = next_state(ctx, role, msg);
 
     // Split point: everything through the *last* `s` is intro's; the
-    // trailing DH token(s) and the tail are `complete`'s. Derived from
-    // the token list rather than assumed from the predicate's current
-    // shape, so widening `split_read_on` cannot desynchronise it.
-    let split = line
-        .tokens
-        .iter()
-        .rposition(|(t, _)| *t == Tok::S)
-        .expect("split_read_on guarantees an `s`")
-        + 1;
+    // trailing DH token(s), a trailing `psk`, and the tail are
+    // `complete`'s. See [`intro_split`] for why it is derived rather
+    // than read off the predicate's current shape.
+    let split = intro_split(line);
     let prefix = &line.tokens[..split];
     let (intro_args, intro_stmts) = read_token_stmts(ctx, role, ReadStyle::Plain, prefix, true);
-    let (_, complete_stmts) =
+    // The completion half's parameters are `complete()`'s: on IKpsk1's
+    // shape that is the trailing `psk`, generated by the same engine
+    // that gives the one-shot read its own PSK parameter.
+    let (complete_args, complete_stmts) =
         read_token_stmts(ctx, role, ReadStyle::Plain, &line.tokens[split..], false);
+    let psk_late = psk_at_complete(line);
+    // What `complete()` still owes, named rather than assumed: the
+    // predicate admits `[ss]` and `[ss, psk]` after the split.
+    let unpaid_list = if psk_late {
+        "the proving `ss`, the pattern's `psk`, and the message's tail"
+    } else {
+        "the proving `ss` and the message's tail"
+    };
 
     let intro_dhs = prefix
         .iter()
@@ -1435,29 +1500,50 @@ fn gen_split_read(ctx: &Ctx<'_>, role: Role, msg: usize) -> TokenStream {
         }
     }
     intro_doc.push_str(&format!(
-        "\n\nThat is exactly {dh_ops}; the proving `ss` and the message's \
-         tail wait in the returned [`{mid}`]. Nothing of `message` is \
-         borrowed — the un-read tail is copied into the mid-state, so it \
-         is a plain owned value to park across event-loop turns while the \
-         identity is judged. Continue with [`complete`]({mid}::complete), \
-         or drop the mid-state to reject the peer: rejection costs only \
-         the DH work above.\n\nAt this point the identity is **claimed, \
-         not yet proven** — ownership of the key is only established by \
-         the tokens `complete()` pays — so rejecting is always safe, but \
-         nothing may treat the key as authenticated until `complete()` \
-         succeeds."
+        "\n\nThat is exactly {dh_ops}; {unpaid_list} wait in the returned \
+         [`{mid}`]. Nothing of `message` is borrowed — the un-read tail is \
+         copied into the mid-state, so it is a plain owned value to park \
+         across event-loop turns while the identity is judged. Continue \
+         with [`complete`]({mid}::complete), or drop the mid-state to \
+         reject the peer: rejection costs only the DH work above.\n\nAt \
+         this point the identity is **claimed, not yet proven** — \
+         ownership of the key is only established by the tokens \
+         `complete()` pays — so rejecting is always safe, but nothing may \
+         treat the key as authenticated until `complete()` succeeds."
     ));
+    if psk_late {
+        intro_doc.push_str(&format!(
+            "\n\nThis pattern's `psk` trails the `s`, so it is \
+             [`complete`]({mid}::complete)'s argument, not this call's: \
+             the key is chosen once the claimed identity is in hand, and a \
+             peer you hold no PSK for is rejected by dropping the \
+             mid-state — for one DH, against the two \
+             [`{with_method}`](Self::{with_method}) spends before its \
+             lookup closure is reached."
+        ));
+    }
 
+    // The mid-state's contract, stated exactly: "no bytes re-supplied"
+    // stays literally true on both shapes — nothing of `message` comes
+    // back — but on IKpsk1's shape `complete()` does take the pattern's
+    // PSK, and that is the thing being traded for the 1-DH rejection.
+    // Say so rather than quietly dropping the sentence.
+    let resupply = if psk_late {
+        "no bytes of `message` re-supplied at `complete()` — which takes \
+         one thing this value deliberately does not carry: the pattern's \
+         trailing `psk`, chosen once `claimed_static()` has named the peer"
+    } else {
+        "nothing re-supplied at `complete()`"
+    };
     let mid_doc = format!(
         "**{name}** {} — suspended inside message 1 (`{}`), after its \
          revealed `s` and before the rest: created by \
          [`{intro_method}`]({state}::{intro_method}), finished by \
          [`complete`](Self::complete).\n\nThe peer's **claimed** static is \
-         revealed ([`claimed_static`](Self::claimed_static)); the proving \
-         `ss` and the message's tail are unpaid. A self-contained owned \
-         value: the handshake state plus the message's remaining \
-         [`{name}::{tail_const}`] bytes — no borrow of the input buffer, \
-         and no bytes re-supplied at `complete()`. Park it and decide at \
+         revealed ([`claimed_static`](Self::claimed_static)); {unpaid_list} \
+         are unpaid. A self-contained owned value: the handshake state \
+         plus the message's remaining [`{name}::{tail_const}`] bytes — no \
+         borrow of the input buffer, and {resupply}. Park it and decide at \
          leisure; dropping it abandons the handshake with no further \
          work. Key material is scrubbed on drop by the handshake state's \
          own `Drop` implementations — this type holds none outside types \
@@ -1487,15 +1573,34 @@ fn gen_split_read(ctx: &Ctx<'_>, role: Role, msg: usize) -> TokenStream {
     // construct the mid-state: accessors never need DH, and the
     // convention stays uniform across the generated surface.
 
-    let complete_doc = format!(
-        "Finish reading message 1: pays the remaining `ss` DH, then \
-         {payload_sentence}.\n\nOn success this returns exactly what the \
-         one-shot [`{read_method}`]({state}::{read_method}) would have — \
-         transcript byte-identical, so the handshake proceeds as if the \
-         read had never been suspended. On failure it returns the error \
-         and yields **neither** payload nor state: `complete` consumes \
-         the mid-state, so a failed read cannot be retried."
+    let pays = if psk_late {
+        "pays the remaining `ss` DH, mixes the supplied `psk` into the key \
+         schedule, then "
+    } else {
+        "pays the remaining `ss` DH, then "
+    };
+    let mut complete_doc = format!(
+        "Finish reading message 1: {pays}{payload_sentence}.\n\nOn success \
+         this returns exactly what the one-shot \
+         [`{read_method}`]({state}::{read_method}) would have — transcript \
+         byte-identical, so the handshake proceeds as if the read had \
+         never been suspended. On failure it returns the error and yields \
+         **neither** payload nor state: `complete` consumes the \
+         mid-state, so a failed read cannot be retried."
     );
+    if psk_late {
+        complete_doc.push_str(&format!(
+            "\n\nThe PSK is the one input the mid-state does not already \
+             carry, and it arrives here rather than at \
+             [`{intro_method}`]({state}::{intro_method}) on purpose: by now \
+             [`claimed_static`](Self::claimed_static) has named the peer, \
+             so a per-peer key can be selected — the same selection \
+             [`{with_method}`]({state}::{with_method})'s closure makes, \
+             except the decision is held outside the read and the `ss` \
+             stays unpaid until it is made. A mismatched PSK fails this \
+             call's tag, exactly as it fails the one-shot read."
+        ));
+    }
 
     quote! {
         impl<CP> #state<CP>
@@ -1554,6 +1659,7 @@ fn gen_split_read(ctx: &Ctx<'_>, role: Role, msg: usize) -> TokenStream {
             #[doc = #complete_doc]
             pub fn complete(
                 mut self
+                #complete_args
             ) -> ::core::result::Result<#ret_ty, ::hiss::noise::HandshakeError>
             {
                 #complete_stmts
@@ -1701,7 +1807,11 @@ fn usage_doctest(ctx: &Ctx<'_>, role: Role, staged: bool) -> Option<String> {
             // otherwise. At most one per role — re-sending `s` is not a
             // well-formed pattern.
             if has_tok(line, Tok::S) {
-                let (arg, ret) = if psk_after_s(line) {
+                // The staged walkthrough replaces the lookup closure with
+                // a plain accept/reject: the PSK it would have returned is
+                // handed to `complete()` instead, after the decision.
+                let staged_here = staged && split_read_on(i, line);
+                let (arg, ret) = if psk_after_s(line) && !staged_here {
                     ("psk_for_peer", "::hiss::psk::Psk")
                 } else {
                     ("accept_peer", "()")
@@ -1773,11 +1883,21 @@ fn usage_snippet(ctx: &Ctx<'_>, role: Role, staged: bool) -> String {
             ));
         } else if staged && split_read_on(i, line) {
             // The staged read: intro, the trust decision in the open, then
-            // complete. A pre-`s` psk rides intro; the payload arrives at
-            // complete. `accept_peer` plays the decision the reader would
-            // otherwise make inside the `_with` closure.
+            // complete. The pattern's `psk` rides whichever half its token
+            // falls in — `intro` for a psk0-style msg1, `complete()` for a
+            // trailing one — decided by the same `intro_split` the codegen
+            // uses, so the shown call sequence cannot drift from the
+            // generated signatures. The payload arrives at complete.
+            // `accept_peer` plays the decision the reader would otherwise
+            // make inside the `_with` closure.
+            let split = intro_split(line);
+            let late_psk = psk_at_complete(line);
             let mut args = format!("&msg{}", i + 1);
-            if has_tok(line, Tok::Psk) {
+            // Which half a `psk` rides is read off the split, not off
+            // `has_tok`: `read_token_stmts` emits the parameter for
+            // whichever side the token lands on, and the snippet must
+            // agree with it token for token.
+            if line.tokens[..split].iter().any(|(t, _)| *t == Tok::Psk) {
                 args.push_str(", &psk");
             }
             let binding = if line.payload.is_some() {
@@ -1785,17 +1905,24 @@ fn usage_snippet(ctx: &Ctx<'_>, role: Role, staged: bool) -> String {
             } else {
                 state.to_string()
             };
-            out.push_str(
+            out.push_str(if late_psk {
+                "// The claimed identity arrives with the proving DH and the `psk` still\n\
+                 // unpaid — hold `mid` across turns while deciding; dropping it rejects\n\
+                 // an unenrolled peer for one DH, and picks the PSK by the name in hand.\n"
+            } else {
                 "// The claimed identity arrives with the proving DH still unpaid —\n\
-                 // hold `mid` across turns while deciding; dropping it rejects.\n",
-            );
+                 // hold `mid` across turns while deciding; dropping it rejects.\n"
+            });
             out.push_str(&format!(
                 "let (claimed, mid) = hs.read_message_{}_intro({args})?; // {}\n",
                 i + 1,
                 line.render(),
             ));
             out.push_str("accept_peer(&claimed)?;\n");
-            out.push_str(&format!("let {binding} = mid.complete()?;\n"));
+            out.push_str(&format!(
+                "let {binding} = mid.complete({})?;\n",
+                if late_psk { "&psk" } else { "" },
+            ));
         } else {
             // A read that reveals the peer's static is shown in its
             // `_with` form. Completing a Noise pattern proves the peer

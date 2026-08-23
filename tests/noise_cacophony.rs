@@ -1211,6 +1211,50 @@ macro_rules! cacophony_suite {
                 replay_transport(&mut transport, v, 2, false, Side::Responder);
             }
 
+            /// `IKpsk1` from the other side, read **staged**. Msg1 ends
+            /// `…, s, ss, psk`, so the split still falls after the `s`:
+            /// intro reveals the claimed initiator static for one `es`,
+            /// and `complete()` pays `ss`, mixes the PSK it is handed,
+            /// and recovers the payload. Every byte the previously
+            /// suspended responder then writes matches the corpus — a
+            /// third-party oracle that deferring the PSK to `complete()`
+            /// puts it in the key schedule at exactly the reference
+            /// implementation's point.
+            #[test]
+            fn cacophony_ikpsk1_responder_staged() {
+                let file = load();
+                let v = load_vector(&file, concat!("Noise_IKpsk1_", $suite));
+
+                let hs = IKpsk1::responder(resp_provider(v), &prologue(v), resp_static(v)).unwrap();
+
+                let msg1 = frozen(&v.messages[0].ciphertext);
+                let (claimed, mid) = hs.read_message_1_intro(&msg1).unwrap();
+                assert_eq!(
+                    claimed.as_bytes(),
+                    init_static(v).public_key().as_bytes(),
+                    concat!("IKpsk1/", $suite, " claimed initiator static at intro")
+                );
+                // The PSK is chosen here, with the peer already named.
+                let (got, hs) = mid.complete(&psk(v)).unwrap();
+                assert_eq!(
+                    got,
+                    payload::<16>(&v.messages[0].payload),
+                    concat!("IKpsk1/", $suite, " staged msg1 payload")
+                );
+
+                let (msg2, mut transport) = hs
+                    .write_message_2(&payload(&v.messages[1].payload))
+                    .unwrap();
+                assert_wire(
+                    &msg2,
+                    &v.messages[1].ciphertext,
+                    concat!("IKpsk1/", $suite, " staged responder msg2"),
+                );
+
+                assert_session_id(&transport, v);
+                replay_transport(&mut transport, v, 2, false, Side::Responder);
+            }
+
             /// `NK` from the other side. Msg1 carries no `s`, so nothing is
             /// revealed — the initiator stays anonymous throughout.
             #[test]

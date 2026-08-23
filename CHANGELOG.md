@@ -7,6 +7,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-08-23
+
+### Added
+
+- **The staged msg1 read now admits a trailing `psk` — IKpsk1 gains
+  `read_message_1_intro`.** `split_read_on` previously required msg1's token
+  sequence to end exactly `…, s, ss`, excluding IKpsk1's `…, s, ss, psk` on
+  the grounds that its `complete()` would need the PSK supplied after the
+  suspension. That exclusion is now lifted, and `complete()` takes the PSK
+  as an argument.
+
+  Why: a PSK-gated handshake's only per-peer surface was
+  `read_message_1_with`, whose lookup closure is emitted *at* the `psk`
+  token — after the proving `ss` — so rejecting an unenrolled stranger there
+  costs **2 DH**. Staged, the claimed identity arrives after **1 DH** and
+  the PSK is chosen only if the identity survives: 1-DH rejection with the
+  peer named and the PSK as the gate, which is strictly better than either
+  surface hiss offered. That is what slither's admission gate climbs.
+
+  What is traded, stated rather than dropped: the mid-state's "nothing
+  re-supplied later" contract becomes "no bytes of `message` re-supplied" —
+  the part the mechanism depends on, since it is what keeps the mid-state
+  self-contained and the input buffer unborrowed — plus the pattern's `psk`,
+  which `complete()` now takes. The generated docs say so on the mid-state,
+  on `complete()`, and on `read_message_1_intro`.
+
+  Shipped as **`hiss-macros` 0.3.3**, which hiss 0.4.1 requires: the staged
+  surface is emitted by the macro crate, so hiss over a stale `hiss-macros`
+  would document an argument-less `complete()` that the pattern no longer
+  has.
+
+  Purely additive. Not a wire change: identical bytes, a second way to read
+  the same message. `read_message_1` and `read_message_1_with` are
+  untouched, and IK's staged pair is unchanged — its `complete()` still
+  takes no argument. Exactly one shipped pattern newly qualifies, `IKpsk1`;
+  `Kpsk0` still does not, its `s` tokens being pre-messages. The split point
+  was already derived (`rposition(s) + 1`, now `intro_split`) rather than
+  enumerated, so it followed the widened predicate on its own, as did
+  `MSG1_INTRO_TAIL` (derived by subtraction; a `psk` puts no bytes on the
+  wire, so the tail is unchanged) and the generated doc's "exactly 1 DH
+  operation".
+
+  What stands behind it: no new runtime crypto — the completion half is the
+  same `support` call sequence the one-shot read emits for those tokens — plus
+  a seed-twin equivalence test (byte-identical msg2 and session id against the
+  one-shot `read_message_1(&msg1, &psk)`), a DH-cost pin through a counting
+  provider that measures **both** surfaces on the same message (staged
+  reject-by-drop = 1; rejecting inside the lookup closure = 2, asserted at the
+  closure itself), a wrong-PSK-at-`complete()` test proving the key is really
+  mixed there, the `MSG1_INTRO_TAIL` const, and the Cacophony `IKpsk1` corpus
+  replayed **through the split path** on all sixteen suites — a third-party
+  oracle that deferring the PSK to `complete()` puts it in the key schedule at
+  exactly the reference implementation's point (the cacophony harness goes
+  from 656 replays to 672). IKpsk1's emitted `# Usage` docs gain the staged
+  walkthrough, compiled downstream by the existing `IKpsk1` arm of
+  `scripts/downstream-build.sh` — a sixth walkthrough shape, and the only one
+  whose mid-state takes an argument.
+
 ## [0.4.0] - 2026-08-20
 
 ### Added

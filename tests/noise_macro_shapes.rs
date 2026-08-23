@@ -29,6 +29,14 @@
 //! message carries a plain `psk` ahead of the revealed static:
 //! `(message, psk, verify)`.
 //!
+//! `IKpsk1` pins the staged read on a **trailing `psk`**: msg1 ends
+//! `…, s, ss, psk`, so `read_message_1_intro` reveals the claimed static
+//! for one `es`, and the PSK — the pattern's admission gate — is handed
+//! to `complete()` only if the identity survives. The comparison that
+//! motivates it is pinned here too: `read_message_1_with`'s lookup
+//! closure is emitted at the `psk` token, i.e. after `ss`, so rejecting
+//! an unenrolled peer there costs 2 DH against the staged read's 1.
+//!
 //! Three further patterns pin the `[N]` **application-payload** suffix and
 //! the *non-final* verification hook (slither's IK-with-timestamp shape):
 //!
@@ -74,6 +82,10 @@ hiss::noise! { pub Kpsk0<X25519, ChaChaPoly, Blake2b> { -> s <- s ... -> psk, e,
 hiss::noise! { pub IX<X25519, ChaChaPoly, Blake2b>    { -> e, s <- e, ee, se, s, es } }
 hiss::noise! { pub X<X25519, ChaChaPoly, Blake2b>     { <- s ... -> e, es, s, ss } }
 hiss::noise! { pub Xpsk0<X25519, ChaChaPoly, Blake2b> { <- s ... -> psk, e, es, s, ss } }
+
+// The trailing-`psk` staged shape: msg1 ends `…, s, ss, psk`, so the
+// PSK is `complete()`'s argument rather than `intro`'s.
+hiss::noise! { pub IKpsk1<X25519, ChaChaPoly, Blake2b> { <- s ... -> e, es, s, ss, psk <- e, ee, se } }
 
 // The `[N]` application-payload suffix and its plain twin (see the module
 // docs): IK carrying a 12-byte payload in msg1's keyed tail, and NN
@@ -849,6 +861,10 @@ fn staged_mid_state_owns_the_tail_not_the_message() {
     // declared payload plus the AEAD tag (DH tokens are zero-width).
     assert_eq!(IKPayload::MSG1_INTRO_TAIL, 12 + 16);
     assert_eq!(IK::MSG1_INTRO_TAIL, 16);
+    // A trailing `psk` puts nothing on the wire, so IKpsk1's tail is
+    // IK's: the bare tag. The const is derived by subtracting the token
+    // bytes from the message size, which is what makes that automatic.
+    assert_eq!(IKpsk1::MSG1_INTRO_TAIL, 16);
 
     // And the mid-state stores those 28 un-read bytes, not the 108-byte
     // message: its size sits strictly below "state + message", with
@@ -859,6 +875,171 @@ fn staged_mid_state_owns_the_tail_not_the_message() {
         std::mem::size_of::<Mid>() < std::mem::size_of::<State>() + IKPayload::MSG1_SIZE,
         "the mid-state must carry the tail, not the whole message",
     );
+}
+
+// ── the staged read on a trailing `psk` (IKpsk1) ──────────────────
+//
+// Msg1 ends `…, s, ss, psk`: the split still falls after the last `s`,
+// so `intro` pays `es` alone and `complete()` pays `ss` *and* mixes the
+// PSK it is handed. That ordering is the point — the claimed identity is
+// in hand before the admission key is chosen, and an unenrolled peer is
+// rejected by dropping the mid-state for one DH.
+
+const IKPSK1_PSK: [u8; 32] = [0x5A; 32];
+
+#[test]
+fn staged_psk_read_equals_the_one_shot_read() {
+    // Same seeds, same PSK, one read one-shot and one staged: identical
+    // msg2 bytes and session id, so mixing the PSK at `complete()` puts
+    // it in the schedule at exactly the point the one-shot read does.
+    let run = |staged: bool| {
+        let mut ip = provider(901);
+        let i_static = ip.generate::<X25519>().unwrap();
+        let i_pub = ip.public(&i_static).unwrap();
+        let mut rp = provider(902);
+        let r_static = rp.generate::<X25519>().unwrap();
+        let r_pub = rp.public(&r_static).unwrap();
+        let psk = Psk::from_bytes(IKPSK1_PSK);
+
+        let (msg1, i_hs) = IKpsk1::initiator(ip, PROLOGUE, r_pub)
+            .write_message_1(i_static, &psk)
+            .unwrap();
+
+        let dhs = Rc::new(Cell::new(0usize));
+        let counting = CountingDh {
+            inner: rp,
+            dhs: dhs.clone(),
+        };
+        let hs = IKpsk1::responder(counting, PROLOGUE, r_static).unwrap();
+        let hs = if staged {
+            let (claimed, mid) = hs.read_message_1_intro(&msg1).unwrap();
+            assert_eq!(
+                claimed.as_ref(),
+                i_pub.as_ref(),
+                "the claimed identity, by value",
+            );
+            assert_eq!(
+                mid.claimed_static().as_ref(),
+                i_pub.as_ref(),
+                "…and via the mid-state's accessor",
+            );
+            assert_eq!(
+                dhs.get(),
+                1,
+                "intro pays exactly the one `es` DH — the `psk` token is \
+                 still unpaid, and so is `ss`",
+            );
+            // The PSK is chosen *here*, with the peer already named.
+            mid.complete(&psk).unwrap()
+        } else {
+            hs.read_message_1(&msg1, &psk).unwrap()
+        };
+        assert_eq!(dhs.get(), 2, "the completed read ran both `es` and `ss`");
+
+        let (msg2, r_t) = hs.write_message_2().unwrap();
+        let i_t = i_hs.read_message_2(&msg2).unwrap();
+        assert_eq!(i_t.session_id(), r_t.session_id());
+        (msg2, i_t.session_id().as_ref().to_vec())
+    };
+
+    let (plain_msg2, plain_sid) = run(false);
+    let (staged_msg2, staged_sid) = run(true);
+    assert_eq!(
+        plain_msg2, staged_msg2,
+        "byte-identical msg2 — the transcript never diverged",
+    );
+    assert_eq!(plain_sid, staged_sid);
+}
+
+#[test]
+fn staged_psk_reject_by_drop_costs_one_dh_the_lookup_costs_two() {
+    // The whole reason the predicate was widened: both surfaces reject an
+    // unenrolled peer with the claimed identity in hand, but the lookup
+    // closure is emitted at the `psk` token — after `ss` — so it can only
+    // say no once the proving DH is already spent.
+    let cost = |staged: bool| {
+        let mut ip = provider(911);
+        let i_static = ip.generate::<X25519>().unwrap();
+        let i_pub = ip.public(&i_static).unwrap();
+        let mut rp = provider(912);
+        let r_static = rp.generate::<X25519>().unwrap();
+        let r_pub = rp.public(&r_static).unwrap();
+        let psk = Psk::from_bytes(IKPSK1_PSK);
+
+        let (msg1, _i_hs) = IKpsk1::initiator(ip, PROLOGUE, r_pub)
+            .write_message_1(i_static, &psk)
+            .unwrap();
+
+        let dhs = Rc::new(Cell::new(0usize));
+        let counting = CountingDh {
+            inner: rp,
+            dhs: dhs.clone(),
+        };
+        let hs = IKpsk1::responder(counting, PROLOGUE, r_static).unwrap();
+        if staged {
+            let (claimed, mid) = hs.read_message_1_intro(&msg1).unwrap();
+            assert_eq!(claimed.as_ref(), i_pub.as_ref());
+            // The rejection: no closure, no further call — the mid-state
+            // is simply dropped, however many event-loop turns later.
+            drop(mid);
+        } else {
+            let seen = Rc::new(Cell::new(0usize));
+            let at_closure = seen.clone();
+            let counted = dhs.clone();
+            let outcome = hs.read_message_1_with(&msg1, |unknown| {
+                assert_eq!(unknown.as_ref(), i_pub.as_ref());
+                at_closure.set(counted.get());
+                Err(HandshakeError::PeerRejected {
+                    reason: "no PSK enrolled".into(),
+                })
+            });
+            assert!(matches!(outcome, Err(HandshakeError::PeerRejected { .. })));
+            assert_eq!(
+                seen.get(),
+                2,
+                "the lookup closure only runs once `ss` has been paid",
+            );
+        }
+        dhs.get()
+    };
+
+    assert_eq!(
+        cost(true),
+        1,
+        "a dropped mid-state spent exactly the one `es` DH — `ss` never ran",
+    );
+    assert_eq!(
+        cost(false),
+        2,
+        "rejecting inside the lookup closure has already spent `es` and `ss`",
+    );
+}
+
+#[test]
+fn staged_psk_wrong_key_fails_at_complete_and_consumes_the_mid_state() {
+    // `complete()` genuinely mixes the PSK it is handed: a key the
+    // initiator did not use fails msg1's tag, and the mid-state is gone.
+    let mut ip = provider(921);
+    let i_static = ip.generate::<X25519>().unwrap();
+    let i_pub = ip.public(&i_static).unwrap();
+    let mut rp = provider(922);
+    let r_static = rp.generate::<X25519>().unwrap();
+    let r_pub = rp.public(&r_static).unwrap();
+
+    let (msg1, _i_hs) = IKpsk1::initiator(ip, PROLOGUE, r_pub)
+        .write_message_1(i_static, &Psk::from_bytes(IKPSK1_PSK))
+        .unwrap();
+
+    // Intro knows nothing of the PSK, so it succeeds regardless…
+    let (claimed, mid) = IKpsk1::responder(rp, PROLOGUE, r_static)
+        .unwrap()
+        .read_message_1_intro(&msg1)
+        .unwrap();
+    assert_eq!(claimed.as_ref(), i_pub.as_ref());
+
+    // …and the wrong key surfaces at the tag `complete()` verifies.
+    let outcome = mid.complete(&Psk::from_bytes([0xA5; 32]));
+    assert!(matches!(outcome, Err(HandshakeError::DecryptionFailed)));
 }
 
 // ── T2: byte-level interop against the classic io_sync driver ─────

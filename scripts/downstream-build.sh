@@ -138,19 +138,22 @@ main_rs="$work/main.rs"
 # generates, as a doctest — and the shape of that walkthrough varies with the
 # pattern: pre-message keys, a PSK (plain, or a per-peer lookup), declared
 # payloads, an identity hook on a read that reveals `s`, a role that only
-# writes — and, on a msg1 ending `…, s, ss`, the staged third walkthrough
-# (`read_message_1_intro` → `complete`). The README's `XX` reaches none of
-# those arms, so on its own this gate would let a walkthrough that does not
-# compile ship to every consumer of every other pattern. These five cover
-# the generator:
+# writes — and, on a msg1 ending `…, s, ss` (optionally with a trailing
+# `psk`), the staged third walkthrough (`read_message_1_intro` →
+# `complete`). The README's `XX` reaches none of those arms, so on its own
+# this gate would let a walkthrough that does not compile ship to every
+# consumer of every other pattern. These five cover the generator:
 #
 #   XX      (from the README) — verify hook, no pre-messages, no PSK.
 #             X25519 / ChaChaPoly / Blake2b
 #   IKpsk1  — pre-messages, `s` ahead of `psk` (per-peer lookup), payloads
-#             on both a sent and a received message. P256 / ChaChaPoly / Sha512
+#             on both a sent and a received message; msg1 ends
+#             `…, s, ss, psk`, so its staged walkthrough carries the
+#             psk-at-`complete()` arm — the one shape where the mid-state
+#             takes an argument. P256 / ChaChaPoly / Sha512
 #   IKpsk0  — `psk` ahead of `s`: a read taking a plain PSK *and* a
 #             verification closure; msg1 ends `…, s, ss`, so its staged
-#             walkthrough carries the intro-with-psk arm.
+#             walkthrough carries the other psk arm, intro-with-psk.
 #             X448 / AesGcm / Sha256
 #   K       — one-way: a role that only writes, a role that only reads, and
 #             a local static in both constructors (the fallible arm).

@@ -59,7 +59,9 @@ So what the gate adds, concretely:
    per-peer lookup, declared payloads on a sent and a received message,
    the identity hook on a read that reveals `s`, a one-way role that
    only writes, and the staged intro/complete walkthrough on a msg1
-   ending `…, s, ss` (with a payload on one arm and a psk on another). Nothing else compiles them: doctests do not run for
+   ending `…, s, ss` (with a payload on one arm, a psk ahead of the `s`
+   on another, and a trailing psk — which `complete()` takes as an
+   argument — on a third). Nothing else compiles them: doctests do not run for
    binaries, and hiss's own `noise!` invocations are marker-mode, which
    emits no walkthrough. Sabotage one arm and every other gate stays
    green while this one goes red — which is the point. The arms also

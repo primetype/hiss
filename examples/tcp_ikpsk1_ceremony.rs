@@ -178,6 +178,15 @@ fn server_side(
     // with a single pre-agreed PSK would use `read_message_1(&msg1,
     // &psk)` instead; the identity stays observable either way via
     // `hs.remote_static()`.)
+    //
+    // A third surface exists for this shape and is worth knowing about
+    // even though this example does not need it: `read_message_1_intro`
+    // stops after the device's *claimed* static — one DH, `es` — and
+    // hands back an owned mid-state, so the lookup above can be an async
+    // database round trip held across event-loop turns. Its `complete()`
+    // takes the PSK. Rejecting an unenrolled device by dropping the
+    // mid-state costs one DH; rejecting inside the closure below costs
+    // two, because the closure runs at the `psk` token, after `ss`.
     let hs = hs.read_message_1_with(&msg1, |device| {
         if device.as_ref() == expected_device.as_ref() {
             Ok(psk.clone())
