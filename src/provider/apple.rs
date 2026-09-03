@@ -33,13 +33,11 @@
 //!   Apple's technote TN3137 requires it: a key held in the Secure
 //!   Enclave must use that keychain, and a `SecItem` call targets the
 //!   older file-based keychain unless `kSecUseDataProtectionKeychain`
-//!   or `kSecAttrSynchronizable` is set. The generate path sets it; the
-//!   load path does not — it pins `kSecAttrTokenIDSecureEnclave`, so a
-//!   software key can never be substituted for the hardware one, but it
-//!   sets no data-protection selector, leaving the query targeting the
-//!   file-based keychain. No test covers the persistent path — it needs
-//!   the entitlement below and real hardware — so its behaviour on
-//!   device is unverified.
+//!   or `kSecAttrSynchronizable` is set. Generation, lookup, and deletion
+//!   all select the Data Protection Keychain explicitly. Lookup also pins
+//!   `kSecAttrTokenIDSecureEnclave`, so a software key can never be
+//!   substituted for the hardware one; deletion uses the exact `SecKey`
+//!   reference returned by that lookup rather than its non-unique label.
 //! * **On macOS, reaching that keychain needs an entitlement.** The
 //!   binary must carry a team-prefixed `keychain-access-groups`
 //!   entitlement, authorised by a provisioning profile embedded in the
@@ -63,7 +61,13 @@ use crate::provider::{
     CryptoKeyProvider, CryptoKeyProviderAsync, DhProvider, DhProviderAsync, SigningProvider,
     SigningProviderAsync,
 };
-use core_foundation::{base::TCFType as _, data::CFData, dictionary::CFDictionary};
+use core_foundation::{
+    base::{CFType, TCFType as _},
+    boolean::CFBoolean,
+    data::CFData,
+    dictionary::CFDictionary,
+    string::CFString,
+};
 use security_framework::{
     access_control::{ProtectionMode, SecAccessControl},
     item::Location,
@@ -93,9 +97,9 @@ const ED25519_SEED_ACCOUNT: &str = "device-identity";
 /// [`sign`](Self::sign)) runs inside the enclave; for the software-backed
 /// ephemeral variant ([`generate_ephemeral`](Self::generate_ephemeral))
 /// the scalar lives in a software `SecKey` and never crosses the FFI
-/// boundary either. `deletable` records whether the key was persisted to
-/// the Keychain and so is removable by [`delete`](Self::delete);
-/// non-persisted (ephemeral) keys are not.
+/// boundary either. `deletable` records whether the key was persisted to the
+/// Keychain and so is removable by [`delete`](Self::delete); non-persisted
+/// (ephemeral) keys are not.
 //
 // `Clone` here is a CoreFoundation retain of the `SecKey` handle — no
 // secret material is copied (the key stays in the keychain / Secure
@@ -105,6 +109,89 @@ const ED25519_SEED_ACCOUNT: &str = "device-identity";
 pub struct P256r1PrivateKey {
     key: SecKey,
     deletable: bool,
+}
+
+/// Finish an Apple keychain query by selecting the Data Protection Keychain.
+///
+/// Persistent Secure Enclave keys cannot live in macOS's legacy file-based
+/// keychain. Routing every P-256 query through this constructor makes the
+/// required selector common to lookup and exact-reference deletion.
+fn data_protection_keychain_query(
+    mut selectors: Vec<(CFString, CFType)>,
+) -> CFDictionary<CFString, CFType> {
+    use security_framework_sys::item::kSecUseDataProtectionKeychain;
+
+    // SAFETY: every `kSec*` value is a process-lifetime Core Foundation
+    // constant obtained under the Get rule. The dictionary retains the key
+    // and boolean after construction.
+    unsafe {
+        selectors.push((
+            CFString::wrap_under_get_rule(kSecUseDataProtectionKeychain),
+            CFBoolean::true_value().as_CFType(),
+        ));
+    }
+    CFDictionary::from_CFType_pairs(&selectors)
+}
+
+/// Build the complete selector for loading one persisted P-256 identity.
+fn persistent_p256_load_query(label: &str) -> CFDictionary<CFString, CFType> {
+    use security_framework_sys::item::{
+        kSecAttrKeyClass, kSecAttrKeyClassPrivate, kSecAttrKeyType,
+        kSecAttrKeyTypeECSECPrimeRandom, kSecAttrLabel, kSecAttrTokenID,
+        kSecAttrTokenIDSecureEnclave, kSecClass, kSecClassKey, kSecReturnRef,
+    };
+
+    let label = CFString::new(label);
+    // SAFETY: every `kSec*` value is a process-lifetime Core Foundation
+    // constant obtained under the Get rule. `label` and the boolean are live
+    // for construction, and `CFDictionary` retains every inserted key/value.
+    unsafe {
+        data_protection_keychain_query(vec![
+            (
+                CFString::wrap_under_get_rule(kSecClass),
+                CFString::wrap_under_get_rule(kSecClassKey).as_CFType(),
+            ),
+            (
+                CFString::wrap_under_get_rule(kSecAttrKeyType),
+                CFString::wrap_under_get_rule(kSecAttrKeyTypeECSECPrimeRandom).as_CFType(),
+            ),
+            (
+                CFString::wrap_under_get_rule(kSecAttrKeyClass),
+                CFString::wrap_under_get_rule(kSecAttrKeyClassPrivate).as_CFType(),
+            ),
+            (
+                CFString::wrap_under_get_rule(kSecAttrLabel),
+                label.as_CFType(),
+            ),
+            (
+                CFString::wrap_under_get_rule(kSecAttrTokenID),
+                CFString::wrap_under_get_rule(kSecAttrTokenIDSecureEnclave).as_CFType(),
+            ),
+            (
+                CFString::wrap_under_get_rule(kSecReturnRef),
+                CFBoolean::true_value().as_CFType(),
+            ),
+        ])
+    }
+}
+
+/// Build an exact-object deletion query for a persisted P-256 identity.
+///
+/// A label is not a unique keychain identifier and `SecItemDelete` removes all
+/// matches, so deletion deliberately retains the `SecKey` reference semantics
+/// rather than broadening authority to the key's label.
+fn persistent_p256_delete_query(key: &SecKey) -> CFDictionary<CFString, CFType> {
+    use security_framework_sys::item::kSecValueRef;
+
+    // SAFETY: `kSecValueRef` is a process-lifetime Core Foundation constant
+    // obtained under the Get rule. `key` is live for construction, and the
+    // dictionary retains the reference for the subsequent delete call.
+    unsafe {
+        data_protection_keychain_query(vec![(
+            CFString::wrap_under_get_rule(kSecValueRef),
+            key.as_CFType(),
+        )])
+    }
 }
 
 impl P256r1PublicKey {
@@ -237,28 +324,14 @@ impl P256r1PrivateKey {
     /// [`generate_secure_enclave`](Self::generate_secure_enclave)). Returns `None`
     /// if no key is found.
     ///
-    /// The query pins `kSecAttrTokenIDSecureEnclave`, so a software key
-    /// can never be returned in place of the hardware one. Unlike
-    /// [`generate_secure_enclave`](Self::generate_secure_enclave) it
-    /// sets no `kSecUseDataProtectionKeychain` selector, and by Apple's
-    /// TN3137 a `SecItem` call without one targets the file-based
-    /// keychain rather than the Data Protection Keychain the key was
-    /// written to. No test covers this path — it needs real hardware
-    /// plus the entitlement described under "What a persistent enclave
-    /// key requires" in the [module documentation](self) — so its
-    /// behaviour on device is unverified.
+    /// The query uses the same Data Protection Keychain selector as
+    /// [`generate_secure_enclave`](Self::generate_secure_enclave) and pins
+    /// `kSecAttrTokenIDSecureEnclave`, so a file-keychain or software key can
+    /// never be returned in place of the persisted hardware identity.
     pub fn load_from_keychain(label: &str) -> Result<Option<Self>, Error> {
-        use core_foundation::base::TCFType as _;
-        use core_foundation::boolean::CFBoolean;
-        use core_foundation::string::CFString;
-        use security_framework_sys::item::{
-            kSecAttrKeyClass, kSecAttrKeyClassPrivate, kSecAttrKeyType,
-            kSecAttrKeyTypeECSECPrimeRandom, kSecAttrLabel, kSecAttrTokenID,
-            kSecAttrTokenIDSecureEnclave, kSecClass, kSecClassKey, kSecReturnRef,
-        };
         use security_framework_sys::keychain_item::SecItemCopyMatching;
 
-        let label = CFString::new(label);
+        let query = persistent_p256_load_query(label);
 
         // SAFETY: every key/value in `query` is wrapped under the Get rule from
         // a static `kSec*` constant (or an owned `CFString`/`CFBoolean`), so the
@@ -271,33 +344,6 @@ impl P256r1PrivateKey {
         // not-found and error status paths return before touching `result`,
         // which is left null.
         unsafe {
-            let query = CFDictionary::from_CFType_pairs(&[
-                (
-                    CFString::wrap_under_get_rule(kSecClass),
-                    CFString::wrap_under_get_rule(kSecClassKey).as_CFType(),
-                ),
-                (
-                    CFString::wrap_under_get_rule(kSecAttrKeyType),
-                    CFString::wrap_under_get_rule(kSecAttrKeyTypeECSECPrimeRandom).as_CFType(),
-                ),
-                (
-                    CFString::wrap_under_get_rule(kSecAttrKeyClass),
-                    CFString::wrap_under_get_rule(kSecAttrKeyClassPrivate).as_CFType(),
-                ),
-                (
-                    CFString::wrap_under_get_rule(kSecAttrLabel),
-                    label.as_CFType(),
-                ),
-                (
-                    CFString::wrap_under_get_rule(kSecAttrTokenID),
-                    CFString::wrap_under_get_rule(kSecAttrTokenIDSecureEnclave).as_CFType(),
-                ),
-                (
-                    CFString::wrap_under_get_rule(kSecReturnRef),
-                    CFBoolean::true_value().as_CFType(),
-                ),
-            ]);
-
             let mut result: core_foundation::base::CFTypeRef = std::ptr::null();
             let status = SecItemCopyMatching(query.as_concrete_TypeRef(), &mut result);
 
@@ -419,14 +465,27 @@ impl P256r1PrivateKey {
     ///
     /// Only deletes keys that were persisted (created via
     /// [`generate_secure_enclave`](Self::generate_secure_enclave)).
-    /// Ephemeral keys are silently ignored.
+    /// Ephemeral keys are silently ignored. Deletion targets this exact
+    /// `SecKey` reference in the Data Protection Keychain rather than its
+    /// non-unique label, and is idempotent if the item was already removed.
     pub fn delete(self) -> Result<(), Error> {
-        if self.deletable {
-            self.key
-                .delete()
-                .map_err(|e| Error::Platform(format!("failed to delete key: {e}")))
-        } else {
-            Ok(())
+        use security_framework_sys::keychain_item::SecItemDelete;
+
+        if !self.deletable {
+            return Ok(());
+        }
+        let query = persistent_p256_delete_query(&self.key);
+
+        // SAFETY: `query` owns live Core Foundation keys and values for the
+        // entire call. `SecItemDelete` only reads the dictionary and returns an
+        // OSStatus; it transfers no object ownership.
+        let status = unsafe { SecItemDelete(query.as_concrete_TypeRef()) };
+        match status {
+            security_framework_sys::base::errSecSuccess
+            | security_framework_sys::base::errSecItemNotFound => Ok(()),
+            status => Err(Error::Platform(format!(
+                "failed to delete keychain identity with status {status}"
+            ))),
         }
     }
 }
@@ -862,6 +921,97 @@ mod tests {
     use super::*;
     use crate::curve::p256::P256r1PrivateKey as SoftwareP256r1PrivateKey;
     use crate::provider::ProviderExt;
+    use core_foundation::string::CFStringRef;
+
+    fn query_string(query: &CFDictionary<CFString, CFType>, key: CFStringRef) -> String {
+        // SAFETY: callers pass process-lifetime `kSec*` string constants.
+        let key = unsafe { CFString::wrap_under_get_rule(key) };
+        query
+            .get(&key)
+            .downcast::<CFString>()
+            .expect("query value is a CFString")
+            .to_string()
+    }
+
+    fn query_bool(query: &CFDictionary<CFString, CFType>, key: CFStringRef) -> bool {
+        // SAFETY: callers pass process-lifetime `kSec*` string constants.
+        let key = unsafe { CFString::wrap_under_get_rule(key) };
+        bool::from(
+            query
+                .get(&key)
+                .downcast::<CFBoolean>()
+                .expect("query value is a CFBoolean"),
+        )
+    }
+
+    fn query_contains(query: &CFDictionary<CFString, CFType>, key: CFStringRef) -> bool {
+        // SAFETY: callers pass process-lifetime `kSec*` string constants.
+        let key = unsafe { CFString::wrap_under_get_rule(key) };
+        query.contains_key(&key)
+    }
+
+    fn static_string(value: CFStringRef) -> String {
+        // SAFETY: callers pass process-lifetime `kSec*` string constants.
+        unsafe { CFString::wrap_under_get_rule(value) }.to_string()
+    }
+
+    fn query_value_ref(
+        query: &CFDictionary<CFString, CFType>,
+        key: CFStringRef,
+    ) -> core_foundation::base::CFTypeRef {
+        // SAFETY: callers pass process-lifetime `kSec*` string constants.
+        let key = unsafe { CFString::wrap_under_get_rule(key) };
+        query.get(&key).as_CFTypeRef()
+    }
+
+    #[test]
+    fn persistent_p256_queries_pin_the_same_data_protection_slot() {
+        use security_framework_sys::item::{
+            kSecAttrKeyClass, kSecAttrKeyClassPrivate, kSecAttrKeyType,
+            kSecAttrKeyTypeECSECPrimeRandom, kSecAttrLabel, kSecAttrTokenID,
+            kSecAttrTokenIDSecureEnclave, kSecClass, kSecClassKey, kSecReturnRef,
+            kSecUseDataProtectionKeychain, kSecValueRef,
+        };
+
+        const LABEL: &str = "uk.co.example.hiss-query-test.p256";
+        let load = persistent_p256_load_query(LABEL);
+        let key = P256r1PrivateKey::generate_ephemeral().unwrap();
+        let delete = persistent_p256_delete_query(&key.key);
+
+        // SAFETY: these are process-lifetime Security-framework constants.
+        unsafe {
+            assert_eq!(query_string(&load, kSecClass), static_string(kSecClassKey));
+            assert_eq!(
+                query_string(&load, kSecAttrKeyType),
+                static_string(kSecAttrKeyTypeECSECPrimeRandom)
+            );
+            assert_eq!(
+                query_string(&load, kSecAttrKeyClass),
+                static_string(kSecAttrKeyClassPrivate)
+            );
+            assert_eq!(query_string(&load, kSecAttrLabel), LABEL);
+            assert_eq!(
+                query_string(&load, kSecAttrTokenID),
+                static_string(kSecAttrTokenIDSecureEnclave)
+            );
+            assert!(query_bool(&load, kSecUseDataProtectionKeychain));
+            assert!(query_bool(&load, kSecReturnRef));
+
+            assert!(query_bool(&delete, kSecUseDataProtectionKeychain));
+            assert_eq!(
+                query_value_ref(&delete, kSecValueRef),
+                key.key.as_CFTypeRef()
+            );
+            assert!(!query_contains(&delete, kSecClass));
+            assert!(!query_contains(&delete, kSecAttrKeyType));
+            assert!(!query_contains(&delete, kSecAttrKeyClass));
+            assert!(!query_contains(&delete, kSecAttrLabel));
+            assert!(!query_contains(&delete, kSecAttrTokenID));
+            assert!(!query_contains(&delete, kSecReturnRef));
+        }
+        assert_eq!(load.len(), 7);
+        assert_eq!(delete.len(), 2);
+    }
 
     #[test]
     fn generate_signature_ephemeral() {
@@ -956,6 +1106,50 @@ mod tests {
 
         sk1.delete().unwrap();
         sk2.delete().unwrap();
+    }
+
+    /// Generate a persistent P-256 identity in the Data Protection Keychain,
+    /// release every original handle, recover the same identity through a fresh
+    /// provider, use it, then delete it and prove a third provider sees no item.
+    /// Ignored: needs a codesigned binary with the keychain-access-groups
+    /// entitlement and Secure Enclave hardware.
+    #[test]
+    #[ignore = "requires codesigned test binary + Secure Enclave hardware"]
+    fn persistent_p256_keychain_round_trip() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time after Unix epoch")
+            .as_nanos();
+        let namespace = format!(
+            "uk.co.example.hiss-test.p256-{}-{unique}",
+            std::process::id()
+        );
+
+        let expected_public = {
+            let mut creating = AppleSecureEnclave::new(&namespace);
+            let generated = creating.generate::<P256>().unwrap();
+            creating.public(&generated).unwrap()
+        };
+
+        let loading = AppleSecureEnclave::new(&namespace);
+        let loaded = loading
+            .load_identity()
+            .unwrap()
+            .expect("persistent identity present through a fresh provider");
+        let loaded_public = loading.public(&loaded).unwrap();
+        assert_eq!(loaded_public, expected_public);
+
+        const MESSAGE: &[u8] = b"persistent Secure Enclave identity";
+        let signature = loaded.sign(MESSAGE).unwrap();
+        assert!(loaded_public.verify(signature, MESSAGE));
+        drop(loaded);
+
+        loading.delete_identity().unwrap();
+        // The provider-level deletion contract is idempotent.
+        loading.delete_identity().unwrap();
+
+        let after_delete = AppleSecureEnclave::new(namespace);
+        assert!(after_delete.load_identity().unwrap().is_none());
     }
 
     /// Establish an SE identity, seal + store the Ed25519 seed to the
