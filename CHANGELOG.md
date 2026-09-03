@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Persistent Apple Secure Enclave P-256 keys now stay in one Keychain
+  domain for their complete lifecycle.** Lookup explicitly selects the Data
+  Protection Keychain used at generation, so a fresh provider can recover the
+  persisted identity on macOS instead of querying the legacy file-based
+  keychain. Deletion selects that same domain while retaining exact
+  `SecKey`-reference authority—never the non-unique label—and treats an
+  already-absent item as success.
+
 ## [0.4.1] - 2026-08-23
 
 ### Added
