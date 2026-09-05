@@ -461,6 +461,48 @@ where
     process::recv_payload(inner, &mut buffer, payload_out)
 }
 
+/// Close a trailing-PSK staged message against two candidate PSKs.
+///
+/// Each candidate is derived from the same post-DH symmetric state. A failed
+/// authentication is discarded without changing that base; only the first
+/// successful branch is installed into `inner`. The returned index is
+/// therefore `0` when both candidates are equal (or otherwise both happen to
+/// authenticate). If neither authenticates, this returns the same undetailed
+/// [`HandshakeError::DecryptionFailed`] as an ordinary read and zeroes the
+/// caller's output before returning.
+#[doc(hidden)]
+pub fn recv_tail_with_psk_candidates<Cu, Ci, H, CP>(
+    inner: &mut HandshakeInner<Cu, Ci, H, CP>,
+    input: &[u8],
+    payload_out: &mut [u8],
+    psk_candidates: [&crate::psk::Psk; 2],
+) -> Result<usize, HandshakeError>
+where
+    Cu: Curve,
+    Ci: Cipher,
+    H: Hash,
+    CP: CryptoKeyProvider<Cu>,
+{
+    for (index, psk) in psk_candidates.into_iter().enumerate() {
+        match inner.symmetric.trial_psk_tail(psk, input, payload_out) {
+            Ok(candidate) => {
+                inner.symmetric = candidate;
+                return Ok(index);
+            }
+            Err(HandshakeError::DecryptionFailed) => {
+                crate::zeroize::zeroize_bytes(payload_out);
+            }
+            Err(error) => {
+                crate::zeroize::zeroize_bytes(payload_out);
+                return Err(error);
+            }
+        }
+    }
+
+    crate::zeroize::zeroize_bytes(payload_out);
+    Err(HandshakeError::DecryptionFailed)
+}
+
 /// Split the completed handshake into the post-handshake [`Transport`].
 #[doc(hidden)]
 pub fn into_transport<Proto, R, CP>(

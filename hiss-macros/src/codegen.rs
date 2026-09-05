@@ -56,7 +56,10 @@
 //! control to the caller at the identity boundary, for decisions held
 //! across event-loop turns. On the trailing-`psk` shape `complete()`
 //! takes the PSK, so the key can be chosen from the identity the
-//! suspension put in hand. See [`gen_split_read`].
+//! suspension put in hand. That shape also gets
+//! `complete_with_psk_candidates([&Psk; 2])`, which pays the remaining DH
+//! once and authenticates the stored tail against two isolated PSK
+//! branches, committing only the first match. See [`gen_split_read`].
 
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
@@ -1446,6 +1449,7 @@ fn gen_split_read(ctx: &Ctx<'_>, role: Role, msg: usize) -> TokenStream {
     let read_method = method_ident(false, msg);
     let intro_method = intro_ident(msg);
     let with_method = with_ident(msg);
+    let candidates_method = format_ident!("complete_with_psk_candidates");
     let tail_const = format_ident!("MSG{}_INTRO_TAIL", msg + 1);
     let next = next_state(ctx, role, msg);
 
@@ -1480,6 +1484,21 @@ fn gen_split_read(ctx: &Ctx<'_>, role: Role, msg: usize) -> TokenStream {
         format!("{intro_dhs} DH operations")
     };
 
+    let finish_instruction = if psk_late {
+        format!(
+            "Continue with [`complete`]({mid}::complete) for one PSK or \
+             [`{candidates_method}`]({mid}::{candidates_method}) for two \
+             candidates"
+        )
+    } else {
+        format!("Continue with [`complete`]({mid}::complete)")
+    };
+    let proof_methods = if psk_late {
+        "`complete()` or `complete_with_psk_candidates()`"
+    } else {
+        "`complete()`"
+    };
+
     let mut intro_doc = format!(
         "Begin reading handshake message 1 (`{}`) in two stages — the \
          suspending sibling of [`{with_method}`](Self::{with_method}): \
@@ -1503,13 +1522,14 @@ fn gen_split_read(ctx: &Ctx<'_>, role: Role, msg: usize) -> TokenStream {
         "\n\nThat is exactly {dh_ops}; {unpaid_list} wait in the returned \
          [`{mid}`]. Nothing of `message` is borrowed — the un-read tail is \
          copied into the mid-state, so it is a plain owned value to park \
-         across event-loop turns while the identity is judged. Continue \
-         with [`complete`]({mid}::complete), or drop the mid-state to \
+         across event-loop turns while the identity is judged. \
+         {finish_instruction}, or drop the mid-state to \
          reject the peer: rejection costs only the DH work above.\n\nAt \
          this point the identity is **claimed, not yet proven** — \
          ownership of the key is only established by the tokens \
-         `complete()` pays — so rejecting is always safe, but nothing may \
-         treat the key as authenticated until `complete()` succeeds."
+         the completion method pays — so rejecting is always safe, but \
+         nothing may treat the key as authenticated until {proof_methods} \
+         succeeds."
     ));
     if psk_late {
         intro_doc.push_str(&format!(
@@ -1519,7 +1539,10 @@ fn gen_split_read(ctx: &Ctx<'_>, role: Role, msg: usize) -> TokenStream {
              peer you hold no PSK for is rejected by dropping the \
              mid-state — for one DH, against the two \
              [`{with_method}`](Self::{with_method}) spends before its \
-             lookup closure is reached."
+             lookup closure is reached. When a credential transition leaves \
+             exactly two possible keys, \
+             [`{candidates_method}`]({mid}::{candidates_method}) tests both \
+             without repeating that remaining DH."
         ));
     }
 
@@ -1529,17 +1552,26 @@ fn gen_split_read(ctx: &Ctx<'_>, role: Role, msg: usize) -> TokenStream {
     // PSK, and that is the thing being traded for the 1-DH rejection.
     // Say so rather than quietly dropping the sentence.
     let resupply = if psk_late {
-        "no bytes of `message` re-supplied at `complete()` — which takes \
-         one thing this value deliberately does not carry: the pattern's \
-         trailing `psk`, chosen once `claimed_static()` has named the peer"
+        "no bytes of `message` re-supplied at completion — the ordinary \
+         `complete()` takes one trailing `psk`, while \
+         `complete_with_psk_candidates()` takes exactly two; either input is \
+         chosen once `claimed_static()` has named the peer"
     } else {
         "nothing re-supplied at `complete()`"
+    };
+    let finishers = if psk_late {
+        format!(
+            "[`complete`](Self::complete) or \
+             [`{candidates_method}`](Self::{candidates_method})"
+        )
+    } else {
+        "[`complete`](Self::complete)".to_string()
     };
     let mid_doc = format!(
         "**{name}** {} — suspended inside message 1 (`{}`), after its \
          revealed `s` and before the rest: created by \
          [`{intro_method}`]({state}::{intro_method}), finished by \
-         [`complete`](Self::complete).\n\nThe peer's **claimed** static is \
+         {finishers}.\n\nThe peer's **claimed** static is \
          revealed ([`claimed_static`](Self::claimed_static)); {unpaid_list} \
          are unpaid. A self-contained owned value: the handshake state \
          plus the message's remaining [`{name}::{tail_const}`] bytes — no \
@@ -1552,11 +1584,20 @@ fn gen_split_read(ctx: &Ctx<'_>, role: Role, msg: usize) -> TokenStream {
         line.render(),
     );
 
-    let claimed_doc = "The peer's **claimed** static public key, as revealed by \
-         message 1's `s` token — decrypted, but not yet proven: ownership \
-         of the key is only established when [`complete`](Self::complete) \
-         succeeds. Judge it against your trust store; side effects must \
-         not treat it as authenticated.";
+    let proven_by = if psk_late {
+        format!(
+            "[`complete`](Self::complete) or \
+             [`{candidates_method}`](Self::{candidates_method})"
+        )
+    } else {
+        "[`complete`](Self::complete)".to_string()
+    };
+    let claimed_doc = format!(
+        "The peer's **claimed** static public key, as revealed by message \
+         1's `s` token — decrypted, but not yet proven: ownership of the key \
+         is only established when {proven_by} succeeds. Judge it against \
+         your trust store; side effects must not treat it as authenticated."
+    );
 
     let (ret_ty, tail_stmts, ok_expr) = recv_tail_arm(line, &next, quote!(&self.tail));
     let payload_sentence = match line.payload {
@@ -1598,9 +1639,79 @@ fn gen_split_read(ctx: &Ctx<'_>, role: Role, msg: usize) -> TokenStream {
              [`{with_method}`]({state}::{with_method})'s closure makes, \
              except the decision is held outside the read and the `ss` \
              stays unpaid until it is made. A mismatched PSK fails this \
-             call's tag, exactly as it fails the one-shot read."
+             call's tag, exactly as it fails the one-shot read. To accept \
+             either of two candidate credentials while paying `ss` only \
+             once, use \
+             [`{candidates_method}`](Self::{candidates_method})."
         ));
     }
+
+    let candidate_completion = if psk_late {
+        debug_assert!(matches!(line.tokens.last(), Some((Tok::Psk, _))));
+        let candidate_tokens = &line.tokens[split..line.tokens.len() - 1];
+        debug_assert!(
+            candidate_tokens
+                .iter()
+                .all(|(tok, _)| matches!(tok, Tok::Ee | Tok::Es | Tok::Se | Tok::Ss))
+        );
+        let (candidate_args, candidate_dh_stmts) =
+            read_token_stmts(ctx, role, ReadStyle::Plain, candidate_tokens, false);
+        debug_assert!(candidate_args.is_empty());
+        let (payload_init, payload_out) = match line.payload {
+            Some(payload) => {
+                let n = payload.len;
+                (quote!(let mut payload = [0u8; #n];), quote!(&mut payload))
+            }
+            None => (quote!(), quote!(&mut [])),
+        };
+        let candidate_doc = format!(
+            "Finish reading message 1 with exactly two candidate PSKs. \
+             This first pays the remaining `ss` DH **once**, then tries \
+             candidate 0 and candidate 1 in order against the stored \
+             message tail. Each trial starts from the same post-DH \
+             transcript; a failed candidate's derived state and \
+             unauthenticated output are discarded and scrubbed, and only \
+             the first authenticating branch is committed. Candidate 0 \
+             therefore wins if both would authenticate.\n\nOn success the \
+             return is `(index, output)`: `index` is the matching \
+             zero-based candidate index, and `output` is exactly the \
+             ordinary [`complete`](Self::complete) output. The committed \
+             transcript is byte-identical to calling `complete` with \
+             `psk_candidates[index]`; {payload_sentence}. If neither key \
+             authenticates, this consumes the mid-state and returns the \
+             same undetailed `HandshakeError::DecryptionFailed` as the \
+             ordinary read, with neither payload nor next state."
+        );
+
+        quote! {
+            #[doc = #candidate_doc]
+            pub fn #candidates_method(
+                mut self,
+                psk_candidates: [&::hiss::psk::Psk; 2],
+            ) -> ::core::result::Result<(usize, #ret_ty), ::hiss::noise::HandshakeError>
+            {
+                #candidate_dh_stmts
+                #payload_init
+                let psk_index =
+                    ::hiss::noise::support::recv_tail_with_psk_candidates(
+                        &mut self.inner,
+                        &self.tail,
+                        #payload_out,
+                        psk_candidates,
+                    )?;
+                Ok((psk_index, #ok_expr))
+            }
+        }
+    } else {
+        TokenStream::new()
+    };
+    let mid_must_use = if psk_late {
+        "dropping this abandons the handshake; call `complete()` or \
+         `complete_with_psk_candidates()` to finish reading message 1"
+    } else {
+        "dropping this abandons the handshake; call `complete()` to finish \
+         reading message 1"
+    };
 
     quote! {
         impl<CP> #state<CP>
@@ -1632,7 +1743,7 @@ fn gen_split_read(ctx: &Ctx<'_>, role: Role, msg: usize) -> TokenStream {
         // code must not warn for an API choice.
         #[allow(dead_code)]
         #[doc = #mid_doc]
-        #[must_use = "dropping this abandons the handshake; call `complete()` to finish reading message 1"]
+        #[must_use = #mid_must_use]
         #vis struct #mid<CP>
         where
             CP: ::hiss::provider::CryptoKeyProvider<#curve>,
@@ -1666,6 +1777,8 @@ fn gen_split_read(ctx: &Ctx<'_>, role: Role, msg: usize) -> TokenStream {
                 #tail_stmts
                 Ok(#ok_expr)
             }
+
+            #candidate_completion
         }
     }
 }

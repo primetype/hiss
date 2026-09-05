@@ -139,6 +139,31 @@ impl<Ci: Cipher, H: Hash> SymmetricState<Ci, H> {
         zeroize_bytes(&mut temp_k);
     }
 
+    /// Trial a trailing PSK and message tail on an isolated transcript branch.
+    ///
+    /// The staged `IKpsk1` read has already paid its remaining DH before it
+    /// reaches this helper. A candidate PSK replaces the current cipher key via
+    /// `MixKeyAndHash`, so branching needs copies only of `ck` and `h`: the
+    /// expanded pre-PSK cipher key is deliberately neither cloned nor exposed.
+    /// The returned state contains the candidate PSK and authenticated tail;
+    /// an error drops and scrubs the branch while leaving `self` untouched.
+    pub(crate) fn trial_psk_tail(
+        &self,
+        psk: &crate::psk::Psk,
+        ciphertext: &[u8],
+        output: &mut [u8],
+    ) -> Result<Self, HandshakeError> {
+        let mut candidate = Self {
+            ck: self.ck.clone(),
+            h: self.h.clone(),
+            cipher_state: CipherState::empty(),
+            _hash: PhantomData,
+        };
+        candidate.mix_key_and_hash(psk.as_bytes());
+        candidate.decrypt_and_hash(ciphertext, output)?;
+        Ok(candidate)
+    }
+
     /// Encrypt `plaintext` under the current cipher key with `h` as
     /// associated data, writing the result into `output`.
     ///

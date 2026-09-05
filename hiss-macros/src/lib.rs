@@ -91,6 +91,16 @@ use syn::parse_macro_input;
 /// identity, for deployments that select a per-peer PSK (or reject
 /// unknown peers) at exactly that point.
 ///
+/// A first message ending `…, s, ss` (optionally `…, s, ss, psk`) also
+/// gets a staged `read_message_1_intro` / `complete` pair, so the caller
+/// can retain the claimed identity across event-loop turns before paying
+/// the proving `ss`. On the trailing-PSK shape the mid-state additionally
+/// exposes `complete_with_psk_candidates([&Psk; 2])`: it pays `ss` once,
+/// verifies the stored tail against two isolated PSK branches in order,
+/// and returns `(matching_index, ordinary_complete_output)`. Only the
+/// successful branch is committed; index 0 wins if both authenticate, and
+/// no match is the ordinary undetailed `DecryptionFailed`.
+///
 /// Every other *received* message that reveals the peer's static gets a
 /// `read_message_N_with` variant whose closure receives the
 /// just-revealed identity and returns `Ok(())` to accept the peer, or
