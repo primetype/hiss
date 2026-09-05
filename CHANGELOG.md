@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A staged trailing-PSK read can authenticate against exactly two ordered
+  candidate PSKs without repeating its deferred DH.** Generated
+  `IKpsk1` mid-states now expose
+  `complete_with_psk_candidates([&Psk; 2])`, returning the matching index
+  together with the ordinary `complete()` output. Each candidate is tried
+  from the same isolated post-DH transcript, candidate 0 wins a tie, and
+  only the successful branch is committed. If neither authenticates, the
+  method consumes the mid-state and returns the same undetailed
+  `DecryptionFailed` as ordinary completion.
+
+  This is an additive credential-rotation primitive. It does not add a
+  wire field, alter an existing completion path, retain candidate keys, or
+  permit an unbounded application-chosen search. Fixed-seed acceptance
+  tests pin byte-identical message 2, session binding and transport output
+  against ordinary completion, while a counting provider proves the
+  remaining `ss` is paid once across both trials.
+
 ### Fixed
 
 - **Persistent Apple Secure Enclave P-256 keys now stay in one Keychain
